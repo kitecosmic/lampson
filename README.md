@@ -49,7 +49,8 @@ lampson --web      # http://127.0.0.1:8080
 
 Re-running the installer updates Lampson in place. `LAMPSON_HOME` changes the install folder.
 Requirements the installer handles for you: `synsema`, `git` (on Windows, Git for Windows also
-provides the bash the tools use — the installer offers to install it with winget).
+provides the bash the tools use — the installer offers to install it with winget). Linux: the
+`synsema` binary needs glibc ≥ 2.39 (Ubuntu 24.04+, Debian 13+, Fedora 40+).
 
 **Docker** (the `bash` tool is then confined by the container too)
 
