@@ -24,29 +24,45 @@ language itself — and every step is visible, in the terminal or in a web UI.
 
 ## Install
 
-Requirements: the `synsema` binary (≥ 0.6.7) on your PATH, `git`, and bash
-(on Windows: [Git for Windows](https://gitforwindows.org)).
-
-```bash
-git clone https://github.com/kitecosmic/lampson.git
-cd lampson
-cp .env.example .env        # set LAMPSON_PROVIDER and LAMPSON_API_KEY
-```
+One line. It installs `synsema` if missing, puts Lampson in `~/lampson`, adds it to your PATH and
+asks for your provider + API key.
 
 **Windows (PowerShell)**
 
 ```powershell
-.\install.ps1               # adds this folder to your user PATH (open a new terminal afterwards)
+irm https://raw.githubusercontent.com/kitecosmic/lampson/main/install.ps1 | iex
 ```
 
 **Linux / macOS**
 
 ```bash
-./install.sh                # symlinks lampson into ~/.local/bin
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/kitecosmic/lampson/main/install.sh)"
 ```
 
-> Status: developed and tested on Windows 11. The Linux/macOS scripts are written but not yet
-> exercised — issues welcome.
+Then, in a new terminal:
+
+```bash
+cd /path/to/your/project
+lampson            # terminal
+lampson --web      # http://127.0.0.1:8080
+```
+
+Re-running the installer updates Lampson in place. `LAMPSON_HOME` changes the install folder.
+Requirements the installer handles for you: `synsema`, `git` (on Windows, Git for Windows also
+provides the bash the tools use — the installer offers to install it with winget).
+
+**Docker** (the `bash` tool is then confined by the container too)
+
+```bash
+docker run --rm -p 8080:8080 -v "$PWD:/lampson/workspace" \
+  -e LAMPSON_PROVIDER=deepseek -e LAMPSON_API_KEY=sk-... ghcr.io/kitecosmic/lampson
+```
+
+Or from a clone: `docker build -t lampson .` and use `lampson` as the image. `docker-compose.yml`
+does the same with persistent sessions and memory.
+
+> Status: developed and tested on Windows 11; the Docker image builds from Debian. The Linux/macOS
+> installer is written but not yet exercised on a real machine — issues welcome.
 
 ## Use
 

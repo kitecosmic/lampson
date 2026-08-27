@@ -1,0 +1,19 @@
+# docker compose up   (from your PROJECT directory, with this file copied there or via -f)
+#   LAMPSON_PROVIDER=deepseek LAMPSON_API_KEY=sk-... docker compose -f /path/to/lampson/docker-compose.yml up
+services:
+  lampson:
+    build: .
+    image: lampson
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${PWD:-.}:/lampson/workspace
+      - lampson-state:/lampson/.lampson
+      - lampson-memory:/lampson/memory
+    environment:
+      LAMPSON_PROVIDER: ${LAMPSON_PROVIDER:-deepseek}
+      LAMPSON_API_KEY: ${LAMPSON_API_KEY:?set LAMPSON_API_KEY}
+      LAMPSON_PERMISSION: ${LAMPSON_PERMISSION:-ask}
+volumes:
+  lampson-state:
+  lampson-memory:
