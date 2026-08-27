@@ -103,6 +103,10 @@
   @keyframes pulse { 0%,100% { opacity:.25 } 50% { opacity:1 } }
   #procs { border-top:1px solid var(--line); max-height:22%; overflow:auto; padding-bottom:6px; }
   #ports { max-height:18%; overflow:auto; padding-bottom:6px; }
+  #memory { max-height:20%; overflow:auto; padding-bottom:6px; }
+  .m { padding:4px 14px; cursor:pointer; color:var(--dim); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .m:hover, .m.active { background:var(--panel2); color:var(--fg); }
+  .m b { color:var(--acc2); font-weight:600; font-family:var(--mono); margin-right:6px; }
   .p .port { color:var(--warn); font-weight:600; }
   .p { display:flex; align-items:center; gap:8px; padding:5px 14px; font: 12.5px var(--mono); color:var(--dim); cursor:pointer; }
   .p:hover, .p.active { background:var(--panel2); color:var(--fg); }
@@ -132,6 +136,8 @@
   <div id="tree"></div>
   <h2>Procesos <span id="procCount" style="color:var(--dimmer)"></span></h2>
   <div id="procs"></div>
+  <h2>Memoria del proyecto</h2>
+  <div id="memory"></div>
   <h2>Puertos abiertos</h2>
   <div id="ports"></div>
   <h2>Sesiones</h2>
@@ -266,6 +272,23 @@ async function openFile(path, row) {
 }
 $('#vclose').onclick = () => { $('#viewer').style.display = 'none'; log.style.display = ''; procOpen = null; clearInterval(procTimer); $('#vbody').className = ''; document.querySelectorAll('.row.active').forEach(x => x.classList.remove('active')); };
 
+// ---- memoria del proyecto ----
+let memOpen = null;
+async function loadMemory() {
+  let r; try { r = await (await fetch('/api/memory')).json(); } catch (e) { return; }
+  const box = $('#memory'); box.innerHTML = '';
+  if (!(r.notes || []).length) { box.innerHTML = '<div class="m" style="cursor:default;color:var(--dimmer)">sin notas — el agente guarda lo que descubre con la tool memory</div>'; return; }
+  for (const n of r.notes) { const d = document.createElement('div'); d.className = 'm' + (memOpen === n.name ? ' active' : ''); d.title = n.title; d.innerHTML = `<b>${esc(n.name)}</b>${esc(n.title)}`; d.onclick = () => openMemory(n.name); box.appendChild(d); }
+}
+async function openMemory(name) {
+  memOpen = name; procOpen = null; clearInterval(procTimer);
+  const r = await (await fetch('/api/memory/note?name=' + encodeURIComponent(name))).json();
+  if (r.error) { add('denied', esc(r.error)); return; }
+  $('#vpath').textContent = 'memoria · ' + name + '.md'; $('#vmeta').textContent = 'notas del agente sobre este proyecto (editables a mano en lampson/memory/)';
+  const pre = $('#vbody'); pre.className = 'log'; pre.textContent = r.content || '(vacía)';
+  log.style.display = 'none'; $('#viewer').style.display = 'block'; $('#stage').scrollTop = 0; loadMemory();
+}
+
 // ---- procesos gestionados ----
 let procOpen = null, procTimer = null;
 async function loadPorts() {
@@ -345,7 +368,7 @@ async function send(message) {
       }
     }
   } catch (e) { add('meta', e.name === 'AbortError' ? '■ detenido por vos (el agente para en el próximo paso; el historial queda guardado hasta ahí)' : '‼ ' + esc(e.message)); }
-  thinking.remove(); aborter = null; setBusy(false); loadSessions(); loadTree(); loadProcs();
+  thinking.remove(); aborter = null; setBusy(false); loadSessions(); loadTree(); loadProcs(); loadMemory();
 }
 let pending = null;
 function handle(chunk, thinking) {
@@ -368,7 +391,7 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if (!t || busy) return; $('#in').value = ''; send(t); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, 10000);
 </script>
 </body>

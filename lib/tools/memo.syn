@@ -1,0 +1,144 @@
+-- lib/tools/memo.syn — memoria por proyecto: notas Markdown que el agente escribe y relee
+--
+-- Dónde: lampson/memory/<slug>/<nombre>.md — <slug> sale de la ruta REAL del workspace
+-- (LAMPSON_WORKSPACE, que fija el launcher): "<carpeta>-<hash8>". Así cada proyecto tiene su carpeta
+-- aunque dos se llamen igual, y las notas viven en lampson (no ensucian el repo del usuario).
+--
+-- El system prompt lleva SOLO el índice (nombre + primera línea de cada nota); el contenido entra al
+-- contexto cuando el agente llama `memory(read)`. Son archivos: el humano los lee/edita a mano y la
+-- UI web los muestra.
+use "./common.syn" as c
+
+export let ROOT be "memory"
+
+task valid_name(name)
+    when name == nothing or name == ""
+        give false
+    give matches(name, "[a-zA-Z0-9_-]{1,60}")
+
+-- slug del proyecto montado
+export task slug()
+    require env("LAMPSON_*")
+    let ws be env("LAMPSON_WORKSPACE", "workspace")
+    let norm be replace_text(lower(ws), "\\", "/")
+    let parts be where(split(norm, "/"), (x) => x != "")
+    let base be when length(parts) > 0 then parts[length(parts) - 1] otherwise "workspace"
+    let runs be find_all(base, "[a-z0-9]+")
+    let clean be when length(runs) == 0 then "project" otherwise join(runs, "-")
+    let h be slice(decode(sha256(norm), "hex"), 0, 8)
+    give clean + "-" + h
+
+export task dir()
+    require env("LAMPSON_*")
+    give ROOT + "/" + slug()
+
+task path(name)
+    give dir() + "/" + name + ".md"
+
+-- [{name, title}] — title = primera línea no vacía (sin '#')
+export task list()
+    require env("LAMPSON_*")
+    require file.read("memory")
+    require file.read("memory/*")
+    let out be []
+    try
+        each e in list_dir(dir())
+            when not e["is_dir"] and c.ends_with(e["name"], ".md")
+                let name be slice(e["name"], 0, length(e["name"]) - 3)
+                let title be ""
+                each line in split(read_file(path(name)), "\n")
+                    when title == "" and trim(line) != ""
+                        set title to trim(replace_text(line, "#", ""))
+                set out to append(out, {"name": name, "title": when length(title) > 120 then slice(title, 0, 120) otherwise title})
+    recover err
+        give []
+    give sort_by(out, (x) => x["name"])
+
+export task read(name)
+    require env("LAMPSON_*")
+    require file.read("memory")
+    require file.read("memory/*")
+    when not valid_name(name)
+        raise("invalid note name")
+    try
+        give read_file(path(name))
+    recover err
+        raise("no such note '" + name + "'. Existing: " + join(apply((x) => x["name"], list()), ", "))
+
+export task write(name, content)
+    require env("LAMPSON_*")
+    require file("memory")
+    require file("memory/*")
+    when not valid_name(name)
+        raise("invalid note name '" + text(name) + "' (letters, digits, - or _)")
+    write_file(path(name), content)
+    give "saved memory/" + slug() + "/" + name + ".md (" + text(length(content)) + " chars)"
+
+export task append(name, content)
+    require env("LAMPSON_*")
+    require file("memory")
+    require file("memory/*")
+    when not valid_name(name)
+        raise("invalid note name")
+    let prev be ""
+    try
+        set prev to read_file(path(name))
+    recover err
+        set prev to ""
+    let joined be when prev == "" then content otherwise prev + "\n\n" + content
+    write_file(path(name), joined)
+    give "appended to " + name + ".md (" + text(length(joined)) + " chars total)"
+
+export task remove(name)
+    require env("LAMPSON_*")
+    require file("memory")
+    require file("memory/*")
+    when not valid_name(name)
+        raise("invalid note name")
+    write_file(path(name), "")
+    give "cleared " + name + ".md (the file stays empty; the user can delete it)"
+
+-- sección del system prompt
+export task prompt_section()
+    require env("LAMPSON_*")
+    require file.read("memory")
+    require file.read("memory/*")
+    let items be list()
+    let head be "\n\n# Project memory (your own notes about THIS project, in memory/" + slug() + "/ — read with memory(read), keep them current with memory(write|append))"
+    when length(items) == 0
+        give head + "\n(empty — when you discover something non-obvious about this project: how to run/test it, gotchas, decisions, where things live — save it with memory(write). Keep notes short and factual.)"
+    let lines be [head]
+    each it in items
+        set lines to append(lines, "- " + it["name"] + ": " + it["title"])
+    give join(lines, "\n")
+
+-- ---------- tool ----------
+
+export task tool(action, name, content)
+    require env("LAMPSON_*")
+    require file("memory")
+    require file("memory/*")
+    when action == "list"
+        let items be list()
+        when length(items) == 0
+            give "no notes yet for this project"
+        give join(apply((x) => x["name"] + ": " + x["title"], items), "\n")
+    when action == "read"
+        give read(name)
+    when action == "write"
+        give write(name, content)
+    when action == "append"
+        give append(name, content)
+    when action == "delete"
+        give remove(name)
+    raise("unknown action '" + text(action) + "' (list | read | write | append | delete)")
+
+export let SPEC be {
+    "name": "memory",
+    "description": "Your persistent notes about THIS project, kept across sessions (Markdown files in Lampson's memory folder, never inside the repo). Use `write` to save non-obvious facts you discovered and will need again: how to run/build/test, environment quirks, architecture decisions, where things live, bugs and their causes, what the user prefers. `append` adds to an existing note, `read` loads one, `list` shows them, `delete` clears one. The system prompt shows the index of notes — read the relevant ones before repeating an investigation. Keep notes short, factual and current: update a note instead of writing a contradictory one.",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["list", "read", "write", "append", "delete"]},
+        "name": {"type": "string", "description": "Note id: letters, digits, - or _ (e.g. how-to-run, db-schema, gotchas)"},
+        "content": {"type": "string", "description": "write/append: Markdown content (first line = title)"}
+    }, "required": ["action"]}
+}

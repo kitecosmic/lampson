@@ -9,6 +9,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
+require file("memory")
+require file("memory/*")
 require file(".lampson")
 require file(".lampson/*")
 require env("LAMPSON_*")
@@ -23,6 +25,7 @@ use "./lib/loop.syn" as loop
 use "./lib/agents.syn" as agents
 use "./lib/skills.syn" as skills
 use "./lib/tools/proc.syn" as proc
+use "./lib/tools/memo.syn" as memo
 
 let REG be tools.registry()
 
@@ -149,6 +152,21 @@ test "procesos gestionados: start → report ve líneas nuevas → halt mata el 
     sleep(1)
     assert_eq(proc.alive("t_demo"), false)
     assert_error(() => proc.start("bad name!", "echo x"))
+
+test "memoria por proyecto: slug estable, write/append/read/list, índice en el prompt"
+    let sl be memo.slug()
+    assert(matches(sl, "[a-z0-9-]+-[0-9a-f]{8}"), sl)
+    assert_eq(memo.slug(), sl)
+    call_tool(REG["memory"], {"action": "write", "name": "t-note", "content": "# Cómo correr\nnpm test"})
+    assert(contains(call_tool(REG["memory"], {"action": "append", "name": "t-note", "content": "extra"}), "appended"))
+    let body be call_tool(REG["memory"], {"action": "read", "name": "t-note"})
+    assert(contains(body, "npm test") and contains(body, "extra"), body)
+    assert(contains(call_tool(REG["memory"], {"action": "list"}), "t-note: Cómo correr"))
+    assert(contains(memo.prompt_section(), "- t-note: Cómo correr"))
+    assert_error(() => call_tool(REG["memory"], {"action": "read", "name": "nope"}))
+    assert_error(() => call_tool(REG["memory"], {"action": "write", "name": "../x", "content": "y"}))
+    call_tool(REG["memory"], {"action": "delete", "name": "t-note"})
+    assert_eq(call_tool(REG["memory"], {"action": "read", "name": "t-note"}), "")
 
 test "delegate rechaza build y agentes desconocidos"
     let reg be agents.registry_for("build")

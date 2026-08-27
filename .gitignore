@@ -5,6 +5,8 @@
 workspace
 # notas internas de investigación (no forman parte del producto)
 notes/
+# memoria por proyecto del agente (local)
+memory/
 # temporales
 tests/*.log
 tests/*.txt

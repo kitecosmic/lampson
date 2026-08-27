@@ -5,6 +5,7 @@
 -- El contexto del proyecto se lee de AGENTS.md / LAMPSON.md si existen (convención habitual de los coding agents).
 
 use "./skills.syn" as skills
+use "./tools/memo.syn" as memo
 
 let CONTEXT_FILES be ["AGENTS.md", "LAMPSON.md"]
 
@@ -25,6 +26,9 @@ export task build(env_info, addendum)
     require file.read("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
     let core be `You are Lampson, a coding agent that works inside a software project through tools. You are precise, honest and economical with words.
 
 # Working rules
@@ -35,6 +39,7 @@ export task build(env_info, addendum)
 - If a command or edit is denied by policy, say so and propose an alternative; never retry the same denied action.
 - Never print or store secrets (.env contents, API keys, tokens).
 - When the task is done, answer with a short summary: what changed (files) and how it was verified. Do not narrate every step.
+- Before investigating, check your project memory (below); after discovering something non-obvious that you will need again, save it with the memory tool.
 
 # Tools
 - read: file contents (with offset/limit for large files). grep/find: locate code. ls: directory entries.
@@ -50,4 +55,4 @@ export task build(env_info, addendum)
 - Date: {env_info["date"]}
 - Model: {env_info["model"]} via {env_info["provider"]}`
     let mode be when addendum == nothing then "" otherwise (when addendum == "" then "" otherwise "\n\n# Mode\n" + addendum)
-    give core + mode + skills.prompt_section(skills.index()) + read_context_files()
+    give core + mode + skills.prompt_section(skills.index()) + memo.prompt_section() + read_context_files()

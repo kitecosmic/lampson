@@ -17,22 +17,22 @@ use "./prompt.syn" as prompt
 
 export let PROFILES be {
     "build": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "skill", "delegate"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "memory", "skill", "delegate"],
         "steps": 40,
         "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context."
     },
     "plan": {
-        "tools": ["read", "ls", "find", "grep", "skill", "delegate"],
+        "tools": ["read", "ls", "find", "grep", "memory", "skill", "delegate"],
         "steps": 30,
         "addendum": "You are in PLAN mode: READ-ONLY. You cannot edit files or run commands (those tools are not available). Investigate the codebase, then answer with a concrete, numbered implementation plan: files to touch, what changes in each, risks, and how to verify. Do not write code beyond short illustrative snippets."
     },
     "review": {
-        "tools": ["read", "ls", "find", "grep", "bash", "process", "skill"],
+        "tools": ["read", "ls", "find", "grep", "bash", "process", "memory", "skill"],
         "steps": 25,
         "addendum": "You are a REVIEWER: read-only on files (no write/edit), but you may run commands (tests, linters, git diff). Find real bugs, missing error handling, security issues and violations of the project's conventions. Report findings as a list with file:line, severity and a suggested fix. Do not modify files."
     },
     "explore": {
-        "tools": ["read", "ls", "find", "grep", "skill"],
+        "tools": ["read", "ls", "find", "grep", "memory", "skill"],
         "steps": 20,
         "addendum": "You are an EXPLORER: read-only. Locate the code relevant to the question (files, functions, line numbers) and report it concisely with paths and short excerpts. Do not propose changes."
     }
@@ -99,6 +99,8 @@ export task delegate(agent, brief, context)
     require file("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
+    require file("memory")
+    require file("memory/*")
     when not contains(PROFILES, agent)
         raise("unknown agent '" + agent + "'; available: plan, review, explore")
     when agent == "build"

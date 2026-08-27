@@ -16,6 +16,9 @@ language itself — and every step is visible, in the terminal or in a web UI.
 - **Managed processes**: the agent starts servers with `process`, and the new log lines of every
   server are appended to each command result — it *sees its own console*. Live logs in the web UI.
 - **Skills**: Markdown procedures the model loads on demand (yours in `workspace/skills/`).
+- **Project memory**: the agent keeps its own notes per project (`memory/<project>/*.md`, outside
+  the repo) — how to run it, gotchas, decisions — and rereads them in the next session. You can read
+  and edit them (web panel, `/memory`).
 - **`!command`**: run something yourself from the chat; the output lands in the agent's context.
 - **Sessions** persisted as JSON, including every tool call, result, error and denial.
 

@@ -43,6 +43,12 @@ in a second terminal, then tell me the URL".
 - `build` (default): all tools. `plan`: read-only, produce a numbered plan. `review`: read + run
   tests, never edit. `explore`: read-only search. The user switches with `/agent <name>`.
 
+## Project memory (persistent notes)
+- `memory(write, name, content)` saves a Markdown note about THIS project in Lampson's `memory/<project>/`
+  folder (outside the repo). The system prompt lists your notes; `memory(read, name)` loads one.
+- Save what you would otherwise rediscover: how to run/test, env quirks, decisions, where things live,
+  root causes of bugs. Update notes instead of contradicting them. The user can read and edit them.
+
 ## Sessions and memory
 - The whole history — including every tool result, error and DENIED message — is persisted in
   `.lampson/sessions/<id>.json` and resent to you each turn, so you know exactly what happened.

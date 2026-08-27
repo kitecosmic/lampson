@@ -21,6 +21,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
+require file("memory")
+require file("memory/*")
 require file(".lampson")
 require file(".lampson/*")
 
@@ -35,6 +37,7 @@ use "./lib/tree.syn" as tree
 use "./lib/skills.syn" as skills
 use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
+use "./lib/tools/memo.syn" as memo
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -134,6 +137,7 @@ let COMMANDS be [
     ["/logs", "<nombre> [n]", "últimas n líneas del log de un proceso gestionado"],
     ["/stop", "<nombre>", "parar un proceso gestionado"],
     ["/kill", "<pid>", "matar un proceso NO gestionado (p.ej. un servidor huérfano que ves en /procs)"],
+    ["/memory", "[nombre]", "notas que el agente guardó sobre ESTE proyecto (memory/<proyecto>/*.md); con nombre, la muestra"],
     ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
     ["/new", "", "empezar una sesión nueva (historial vacío)"],
@@ -332,6 +336,17 @@ while running
         otherwise when starts_with(input, "/stop")
             let nm be trim(slice(input, 5, length(input)))
             print("  " + (when nm == "" then "uso: /stop <nombre>" otherwise proc.halt(nm)))
+        otherwise when starts_with(input, "/memory")
+            let nm be trim(slice(input, 7, length(input)))
+            when nm == ""
+                let items be memo.list()
+                print("  " + dim("memory/" + memo.slug() + "/"))
+                when length(items) == 0
+                    print("  (sin notas todavía — el agente las crea con la tool memory)")
+                each it in items
+                    print("  " + yellow(it["name"]) + "  " + it["title"])
+            otherwise
+                print(memo.read(nm))
         otherwise when input == "/skills"
             print(skills_list())
         otherwise when input == "/tokens"

@@ -30,6 +30,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
+require file("memory")
+require file("memory/*")
 require file(".lampson")
 require file(".lampson/*")
 
@@ -42,6 +44,7 @@ use "./lib/agents.syn" as agents
 use "./lib/tree.syn" as tree
 use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
+use "./lib/tools/memo.syn" as memo
 
 let APPROVAL_TIMEOUT be 180
 
@@ -76,6 +79,14 @@ serve on 8080
 
     route "GET /api/git"
         give git.status()
+
+    route "GET /api/memory"
+        give {"dir": memo.dir(), "notes": memo.list()}
+
+    route "GET /api/memory/note"
+        when not contains(query, "name")
+            give fail(400, "name required")
+        give {"name": query.name, "content": memo.read(query.name)}
 
     route "GET /api/proc"
         give {"processes": proc.list()}
