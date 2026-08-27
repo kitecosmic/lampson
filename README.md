@@ -132,7 +132,7 @@ lib/
   tree.syn · git.syn workspace tree, git status
 skills/              built-in skills: lampson (how the harness works), synsema, debugging
 tests/mock_llm.syn   scripted fake LLM (both wires) for end-to-end runs without an API key
-unit.test.syn        unit tests (`synsema test unit.test.syn`)
+unit.test.syn        unit tests — run them with tests/run.ps1 · tests/run.sh (throwaway workspace)
 ```
 
 ### The loop
@@ -167,8 +167,11 @@ index; the content enters the context when the model calls `skill(name)`. Search
 ```bash
 synsema serve tests/mock_llm.syn
 LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x lampson
-synsema test unit.test.syn
+tests/run.sh          # Windows: .\tests\run.ps1
 ```
+
+The unit tests write into `workspace/`, so the runner mounts a temporary folder for them and
+restores your project afterwards; `unit.test.syn` refuses to run on anything else.
 
 ## Synsema runtime notes (v0.6.7)
 

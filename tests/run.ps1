@@ -1,0 +1,35 @@
+# tests/run.ps1 — corre los tests unitarios sobre un workspace DESCARTABLE.
+#
+#   .\tests\run.ps1
+#
+# Los tests de tools escriben y borran dentro de workspace/. Este script monta una carpeta temporal
+# (con el marcador .lampson-test-workspace que unit.test.syn exige), corre `synsema test` y vuelve a
+# montar el proyecto que estaba antes. Así los tests nunca tocan un proyecto real.
+$ErrorActionPreference = "Stop"
+$here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$mount = Join-Path $here "workspace"
+$tmp = Join-Path ([IO.Path]::GetTempPath()) "lampson-test-workspace"
+
+$previous = $null
+if (Test-Path -LiteralPath $mount) {
+    $item = Get-Item -LiteralPath $mount -Force
+    if ($item.LinkType -ne "Junction") { Write-Error "./workspace existe y no es una junction; movelo antes de correr los tests"; exit 1 }
+    $previous = $item.Target; if ($previous -is [array]) { $previous = $previous[0] }
+    $item.Delete()
+}
+New-Item -ItemType Directory -Force $tmp | Out-Null
+Get-ChildItem -LiteralPath $tmp -Force | Remove-Item -Recurse -Force
+New-Item -ItemType File (Join-Path $tmp ".lampson-test-workspace") | Out-Null
+New-Item -ItemType Junction -Path $mount -Target $tmp | Out-Null
+
+Push-Location $here
+try {
+    $env:LAMPSON_WORKSPACE = $tmp
+    synsema test unit.test.syn
+    $code = $LASTEXITCODE
+} finally {
+    Pop-Location
+    (Get-Item -LiteralPath $mount -Force).Delete()
+    if ($previous -and (Test-Path -LiteralPath $previous)) { New-Item -ItemType Junction -Path $mount -Target $previous | Out-Null }
+}
+exit $code

@@ -29,6 +29,14 @@ use "./lib/tools/memo.syn" as memo
 
 let REG be tools.registry()
 
+-- Guardia: los tests de tools escriben y borran dentro de workspace/, así que SOLO corren sobre un
+-- workspace descartable (tests/run.ps1 y tests/run.sh lo montan y dejan el marcador). Nunca sobre el
+-- proyecto real de un usuario que quedó montado por el último `lampson`.
+try
+    read_file("workspace/.lampson-test-workspace")
+recover err
+    raise("unit.test.syn needs a throwaway workspace: run tests/run.ps1 (or tests/run.sh) instead of `synsema test` directly — workspace/ currently points to a real project")
+
 -- ---------- permission ----------
 
 test "hardline: rm -rf / se deniega en todos los modos"
