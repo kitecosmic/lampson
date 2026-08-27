@@ -346,7 +346,7 @@ while running
                 each it in items
                     print("  " + yellow(it["name"]) + "  " + it["title"])
             otherwise
-                print(memo.read(nm))
+                print(memo.note_read(nm))
         otherwise when input == "/skills"
             print(skills_list())
         otherwise when input == "/tokens"

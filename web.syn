@@ -86,7 +86,7 @@ serve on 8080
     route "GET /api/memory/note"
         when not contains(query, "name")
             give fail(400, "name required")
-        give {"name": query.name, "content": memo.read(query.name)}
+        give {"name": query.name, "content": memo.note_read(query.name)}
 
     route "GET /api/proc"
         give {"processes": proc.list()}

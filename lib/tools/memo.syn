@@ -51,10 +51,12 @@ export task list()
                         set title to trim(replace_text(line, "#", ""))
                 set out to append(out, {"name": name, "title": when length(title) > 120 then slice(title, 0, 120) otherwise title})
     recover err
+        when not contains(err, "not a directory") and not contains(err, "not found") and not contains(err, "No such")
+            raise(err)
         give []
     give sort_by(out, (x) => x["name"])
 
-export task read(name)
+export task note_read(name)
     require env("LAMPSON_*")
     require file.read("memory")
     require file.read("memory/*")
@@ -65,7 +67,7 @@ export task read(name)
     recover err
         raise("no such note '" + name + "'. Existing: " + join(apply((x) => x["name"], list()), ", "))
 
-export task write(name, content)
+export task note_write(name, content)
     require env("LAMPSON_*")
     require file("memory")
     require file("memory/*")
@@ -74,7 +76,7 @@ export task write(name, content)
     write_file(path(name), content)
     give "saved memory/" + slug() + "/" + name + ".md (" + text(length(content)) + " chars)"
 
-export task append(name, content)
+export task note_append(name, content)
     require env("LAMPSON_*")
     require file("memory")
     require file("memory/*")
@@ -89,7 +91,7 @@ export task append(name, content)
     write_file(path(name), joined)
     give "appended to " + name + ".md (" + text(length(joined)) + " chars total)"
 
-export task remove(name)
+export task note_clear(name)
     require env("LAMPSON_*")
     require file("memory")
     require file("memory/*")
@@ -124,13 +126,13 @@ export task tool(action, name, content)
             give "no notes yet for this project"
         give join(apply((x) => x["name"] + ": " + x["title"], items), "\n")
     when action == "read"
-        give read(name)
+        give note_read(name)
     when action == "write"
-        give write(name, content)
+        give note_write(name, content)
     when action == "append"
-        give append(name, content)
+        give note_append(name, content)
     when action == "delete"
-        give remove(name)
+        give note_clear(name)
     raise("unknown action '" + text(action) + "' (list | read | write | append | delete)")
 
 export let SPEC be {
