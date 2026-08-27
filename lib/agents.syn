@@ -1,0 +1,127 @@
+-- lib/agents.syn — perfiles de agente + la tool `delegate` (subagentes)
+--
+-- Un "modo" (plan, review…) NO es un estado del runtime: es un agente con un allow-list de tools
+-- restringido y un addendum al system prompt. Cambiar de modo = cambiar de perfil.
+-- `delegate` corre un sub-loop con el perfil pedido, historial propio (no contamina el del padre)
+-- y devuelve solo su informe final.
+--
+-- Least-privilege en dos capas:
+--   1. el perfil recorta el ALLOW-LIST (plan no tiene write/edit/bash → el modelo ni las ve);
+--   2. cada tool sigue corriendo con call_tool (sus `require` ∩ programa).
+-- Los subagentes NO tienen `delegate` → sin recursión.
+
+use "./tools.syn" as tools
+use "./loop.syn" as loop
+use "./provider.syn" as provider
+use "./prompt.syn" as prompt
+
+export let PROFILES be {
+    "build": {
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "skill", "delegate"],
+        "steps": 40,
+        "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context."
+    },
+    "plan": {
+        "tools": ["read", "ls", "find", "grep", "skill", "delegate"],
+        "steps": 30,
+        "addendum": "You are in PLAN mode: READ-ONLY. You cannot edit files or run commands (those tools are not available). Investigate the codebase, then answer with a concrete, numbered implementation plan: files to touch, what changes in each, risks, and how to verify. Do not write code beyond short illustrative snippets."
+    },
+    "review": {
+        "tools": ["read", "ls", "find", "grep", "bash", "process", "skill"],
+        "steps": 25,
+        "addendum": "You are a REVIEWER: read-only on files (no write/edit), but you may run commands (tests, linters, git diff). Find real bugs, missing error handling, security issues and violations of the project's conventions. Report findings as a list with file:line, severity and a suggested fix. Do not modify files."
+    },
+    "explore": {
+        "tools": ["read", "ls", "find", "grep", "skill"],
+        "steps": 20,
+        "addendum": "You are an EXPLORER: read-only. Locate the code relevant to the question (files, functions, line numbers) and report it concisely with paths and short excerpts. Do not propose changes."
+    }
+}
+
+export task names()
+    give keys(PROFILES)
+
+export task profile(name)
+    when contains(PROFILES, name)
+        give PROFILES[name]
+    give PROFILES["build"]
+
+-- pasos por turno: LAMPSON_MAX_STEPS (si está definido) gana; si no, el del perfil
+export task steps_for(name)
+    require env("LAMPSON_*")
+    let e be env("LAMPSON_MAX_STEPS", "")
+    when e != ""
+        give floor(number(e))
+    give profile(name)["steps"]
+
+export task addendum_for(name)
+    give profile(name)["addendum"]
+
+export task registry_for(name)
+    let p be profile(name)
+    let reg be tools.registry_subset(p["tools"])
+    when contains(p["tools"], "delegate")
+        set reg["delegate"] to delegate
+    give reg
+
+export task catalog_for(name)
+    let p be profile(name)
+    let cat be tools.catalog_subset(p["tools"])
+    when contains(p["tools"], "delegate")
+        set cat to append(cat, DELEGATE_SPEC)
+    give cat
+
+-- Info de entorno para el system prompt (compartida por chat.syn / web.syn / delegate)
+export task env_info(cfg)
+    require env("LAMPSON_*")
+    require env("OS")
+    require time
+    let sc be tools.shell_config()
+    give {
+        "cwd": env("LAMPSON_WORKSPACE", "./workspace"),
+        "os": env("OS", "unix"),
+        "shell": sc["shell"],
+        "date": format_time(now(), "%Y-%m-%d"),
+        "model": cfg["model"],
+        "provider": cfg["provider"]
+    }
+
+-- ---------- delegate (tool) ----------
+
+export task delegate(agent, brief, context)
+    require net
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_API_KEY")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    when not contains(PROFILES, agent)
+        raise("unknown agent '" + agent + "'; available: plan, review, explore")
+    when agent == "build"
+        raise("cannot delegate to 'build' (only read-only or review agents can be delegated): plan, review, explore")
+    let cfg be provider.config()
+    let p be PROFILES[agent]
+    let system be {"role": "system", "content": prompt.build(env_info(cfg), p["addendum"])}
+    let full_brief be when context == nothing then brief otherwise brief + "\n\nContext from the delegating agent:\n" + context
+    let messages be [system, {"role": "user", "content": full_brief}]
+    let opts be loop.default_opts(tools.registry_subset(p["tools"]), tools.catalog_subset(p["tools"]), nothing)
+    set opts to loop.with_steps(opts, p["steps"])
+    let result be loop.run_turn(cfg, messages, opts, nothing)
+    let head be "[" + agent + " agent · " + text(result["steps"]) + " steps · " + result["stopped"] + " · " + text(result["usage"]["input"] + result["usage"]["output"]) + " tokens]\n"
+    when result["text"] == ""
+        give head + "(the agent produced no final text)"
+    give head + result["text"]
+
+export let DELEGATE_SPEC be {
+    "name": "delegate",
+    "description": "Run a sub-agent with its own fresh context and a restricted toolset, and get back only its final report. Agents: `explore` (read-only; find where things are), `plan` (read-only; produce an implementation plan), `review` (read-only files + can run tests/commands; find bugs). Use it to keep your own context small: e.g. delegate a broad codebase search to `explore` and then act on its report. Give a self-contained task description; the sub-agent does not see your conversation.",
+    "parameters": {"type": "object", "properties": {
+        "agent": {"type": "string", "enum": ["explore", "plan", "review"]},
+        "brief": {"type": "string", "description": "Self-contained instructions for the sub-agent"},
+        "context": {"type": "string", "description": "Optional extra context (relevant paths, findings so far)"}
+    }, "required": ["agent", "brief"]}
+}

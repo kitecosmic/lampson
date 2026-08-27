@@ -1,0 +1,29 @@
+-- lib/tools/grep.syn — buscar contenido (builtin grep: streaming por línea, literal o regex)
+use "./common.syn" as c
+
+export task tool(pattern, path, glob, regex)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let rx be when regex == nothing then true otherwise regex
+    let opts be when glob == nothing then {"regex": rx, "max_results": 200} otherwise {"regex": rx, "max_results": 200, "glob": glob}
+    let r be grep(c.ws(path), pattern, opts)
+    let lines be []
+    each m in r["matches"]
+        set lines to append(lines, c.unws(replace_text(m["file"], "\\", "/")) + ":" + text(m["line"]) + ": " + trim(m["text"]))
+    when length(lines) == 0
+        give "no matches"
+    let out be join(lines, "\n")
+    when r["truncated"]
+        set out to out + "\n[truncated at 200 results]"
+    give c.truncate(out, c.MAX_OUTPUT)
+
+export let SPEC be {
+    "name": "grep",
+    "description": "Search file contents (regex by default; set regex=false for a literal). Returns 'file:line: text' lines, max 200. Use glob to filter filenames (e.g. '*.syn').",
+    "parameters": {"type": "object", "properties": {
+        "pattern": {"type": "string"},
+        "path": {"type": "string", "description": "File or directory (default: workspace root)"},
+        "glob": {"type": "string"},
+        "regex": {"type": "boolean"}
+    }, "required": ["pattern"]}
+}

@@ -1,0 +1,18 @@
+-- lib/tools/ls.syn — listar un directorio (no recursivo)
+use "./common.syn" as c
+
+export task tool(path)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let lines be []
+    each e in list_dir(c.ws(path))
+        set lines to append(lines, e["name"] + (when e["is_dir"] then "/" otherwise ""))
+    when length(lines) == 0
+        give "(empty directory)"
+    give join(lines, "\n")
+
+export let SPEC be {
+    "name": "ls",
+    "description": "List the entries of a directory (non-recursive). Directories end with a slash. Defaults to the workspace root.",
+    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []}
+}

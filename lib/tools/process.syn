@@ -1,0 +1,46 @@
+-- lib/tools/process.syn — tool `process`: servidores y watchers gestionados (start / logs / stop / list)
+use "./proc.syn" as proc
+
+export task tool(action, name, command, tail)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    when action == "start"
+        when command == nothing or command == ""
+            raise("start needs a command")
+        give proc.start(name, command)
+    when action == "logs"
+        give proc.logs(name, tail)
+    when action == "stop"
+        give proc.halt(name)
+    when action == "ports"
+        let ls be proc.listeners()
+        when length(ls) == 0
+            give "no TCP ports listening (>=1024)"
+        let lines be []
+        each l in ls
+            set lines to append(lines, "port " + text(l["port"]) + "  pid " + text(l["pid"]) + "  " + l["name"])
+        give join(lines, "\n")
+    when action == "list"
+        let items be proc.list()
+        when length(items) == 0
+            give "no managed processes"
+        let lines be []
+        each p in items
+            set lines to append(lines, p["name"] + "  " + (when p["running"] then "running" otherwise "exited") + "  $ " + p["command"])
+        give join(lines, "\n")
+    raise("unknown action '" + text(action) + "' (start | logs | stop | list | ports)")
+
+export let SPEC be {
+    "name": "process",
+    "description": "Manage long-running processes (dev servers, watchers, APIs) so you can SEE their output. start: launches `command` detached with a `name`; its stdout/stderr go to a log you can read any time. After every bash call you automatically receive the NEW log lines of every managed process, so errors in a server you started reach you without asking. logs: last `tail` lines (default 60). stop: kills the process and its children. list: what is running. ports: every TCP port listening on the machine with its pid and program — use it when a port is busy (EADDRINUSE) or to check whether something is already up. Always use this instead of `cmd &` in bash, and stop what you started when the task is done.",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["start", "logs", "stop", "list", "ports"]},
+        "name": {"type": "string", "description": "Short id: letters, digits, - or _ (e.g. web, api, dev)"},
+        "command": {"type": "string", "description": "start only: the shell command (runs with cwd = workspace root)"},
+        "tail": {"type": "integer", "description": "logs only: number of lines (default 60)"}
+    }, "required": ["action"]}
+}

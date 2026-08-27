@@ -1,0 +1,386 @@
+-- chat.syn — Lampson por terminal (REPL)
+--
+--   synsema run chat.syn                 -- sesión nueva
+--   LAMPSON_SESSION=<id> synsema run chat.syn   -- reanudar
+--
+-- Comandos: /help /new /sessions /resume <id> /tokens /yolo /ask /strict /agent <build|plan|review|explore> /exit
+--
+-- El ENTRY otorga el superset de capacidades; cada tool declara las suyas y call_tool intersecta.
+-- El proyecto objetivo se monta como ./workspace (ver lampson.ps1 / lampson.sh y lib/tools/common.syn).
+
+intent: "Coding agent REPL: the model picks tools from an allow-list, each runs least-privilege in the workspace"
+
+require net
+require time
+require stdin
+require exec
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_API_KEY")
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file(".lampson")
+require file(".lampson/*")
+
+use "./lib/provider.syn" as provider
+use "./lib/tools.syn" as tools
+use "./lib/prompt.syn" as prompt
+use "./lib/loop.syn" as loop
+use "./lib/session.syn" as session
+use "./lib/permission.syn" as permission
+use "./lib/agents.syn" as agents
+use "./lib/tree.syn" as tree
+use "./lib/skills.syn" as skills
+use "./lib/git.syn" as git
+use "./lib/tools/proc.syn" as proc
+
+-- ---------- UI de terminal ----------
+-- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
+
+let ESC be decode(bytes("1b", "hex"))
+let COLOR be env("LAMPSON_NO_COLOR", "") == ""
+
+task c(code, s)
+    when not COLOR
+        give s
+    give ESC + "[" + code + "m" + s + ESC + "[0m"
+
+task cyan(s)
+    give c("36;1", s)
+task dim(s)
+    give c("2", s)
+task yellow(s)
+    give c("33", s)
+task green(s)
+    give c("32", s)
+task red(s)
+    give c("31", s)
+
+task first_line(s, max)
+    let f be split(s, "\n")[0]
+    when length(f) > max
+        give slice(f, 0, max) + "…"
+    give f
+
+task fmt_tokens(n)
+    when n >= 1000
+        give text(floor(n / 100) / 10) + "k"
+    give text(n)
+
+-- resumen de UNA línea del resultado de una tool, según la tool
+task summarize(name, out)
+    let lines be split(out, "\n")
+    when starts_with(out, "ERROR") or starts_with(out, "DENIED")
+        give first_line(out, 140)
+    when name == "read"
+        give text(length(lines)) + " líneas"
+    when name == "ls" or name == "find" or name == "grep"
+        give text(length(lines)) + " resultados · " + first_line(out, 90)
+    when name == "bash"
+        -- hasta 5 líneas del output, el resto colapsado
+        let shown be []
+        each e in enumerate(lines)
+            when e["index"] < 5
+                when trim(e["item"]) != ""
+                    set shown to append(shown, slice(e["item"], 0, 140))
+        let extra be when length(lines) > 5 then dim("  (+" + text(length(lines) - 5) + " líneas)") otherwise ""
+        give join(shown, "\n      ") + extra
+    give first_line(out, 120)
+
+task on_event(kind, data)
+    when kind == "assistant"
+        print("")
+        print(data)
+        print("")
+    otherwise when kind == "tool_call"
+        print("  " + yellow("⚙ " + permission.describe_call(data["name"], data["args"])))
+    otherwise when kind == "tool_result"
+        let out be data["output"]
+        let bad be starts_with(out, "ERROR") or starts_with(out, "DENIED")
+        let mark be when bad then red("✗") otherwise green("✓")
+        print("    " + mark + " " + (when bad then red(summarize(data["call"]["name"], out)) otherwise dim(summarize(data["call"]["name"], out))))
+    otherwise when kind == "tool_denied"
+        set data to data
+    otherwise when kind == "error"
+        print("  " + red("‼ " + text(data)))
+    otherwise when kind == "compact"
+        print("  " + dim("⧗ compactando contexto (~" + text(data["before"]) + " tokens)"))
+    flush()
+
+-- Human in the loop con el `approve` nativo de Synsema: prompt [approve] … (y/n) en TTY; sin TTY deniega
+-- (fail-closed, un agente no puede auto-aprobarse); `within` acota la espera.
+task ask_user(name, args, why)
+    print("")
+    print("  " + yellow("⚠ requiere tu aprobación · " + why))
+    print("    " + permission.describe_call(name, args))
+    flush()
+    let ok be approve "  ¿permitir?" within 10m
+    give ok
+
+let LINE be "  ────────────────────────────────────────────────────────────────────────"
+
+-- catálogo de comandos del REPL: [comando, argumentos, descripción]. Es la fuente de /help, de `/` y de las sugerencias.
+let COMMANDS be [
+    ["/agent", "<build|plan|review|explore>", "cambiar de agente (qué tools ve): build edita · plan solo lee y propone · review revisa y corre tests · explore busca"],
+    ["/ask", "", "permisos: PREGUNTAR antes de un comando peligroso (rm -rf, git push --force, sudo…)"],
+    ["/yolo", "", "permisos: PERMITIR comandos peligrosos sin preguntar (los destructivos del sistema siguen bloqueados)"],
+    ["/strict", "", "permisos: DENEGAR comandos peligrosos"],
+    ["/model", "<nombre>", "cambiar el modelo para esta sesión (mismo proveedor y key)"],
+    ["/config", "", "ver la configuración vigente (proveedor, modelo, límites, workspace)"],
+    ["/files", "", "árbol completo del workspace"],
+    ["/procs", "", "procesos que el agente dejó corriendo (servidores) y su estado"],
+    ["/logs", "<nombre> [n]", "últimas n líneas del log de un proceso gestionado"],
+    ["/stop", "<nombre>", "parar un proceso gestionado"],
+    ["/kill", "<pid>", "matar un proceso NO gestionado (p.ej. un servidor huérfano que ves en /procs)"],
+    ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
+    ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
+    ["/new", "", "empezar una sesión nueva (historial vacío)"],
+    ["/sessions", "", "listar sesiones guardadas"],
+    ["/resume", "<id>", "reanudar una sesión guardada"],
+    ["/flags", "", "flags de arranque: lampson --web --agent --yolo --workspace …"],
+    ["!<comando>", "", "correr un comando de shell VOS (sin pedir permiso); la salida queda en el contexto del agente"],
+    ["/help", "", "esta ayuda"],
+    ["/exit", "", "salir (la sesión queda guardada)"]
+]
+
+task pad(s, n)
+    let out be s
+    while length(out) < n
+        set out to out + " "
+    give out
+
+task help()
+    print("")
+    print("  Escribí lo que querés hacer en el proyecto. El agente lee, busca, edita y corre comandos con tools")
+    print("  acotadas al workspace; cada paso queda a la vista. Los comandos empiezan con /:")
+    print("")
+    each c in COMMANDS
+        print("  " + pad(c[0] + " " + c[1], 38) + c[2])
+    print("")
+
+task flags()
+    print("")
+    print("  Flags de arranque (desde cualquier carpeta; el directorio actual es el workspace):")
+    print("")
+    print("  lampson                          REPL por terminal sobre el proyecto actual")
+    print("  lampson --web                    interfaz web en http://127.0.0.1:8080")
+    print("  lampson --workspace C:\\ruta      elegir el proyecto sin hacer cd")
+    print("  lampson --agent plan             perfil inicial: build | plan | review | explore")
+    print("  lampson --yolo | --strict | --ask   permisos (--dangerously-skip-permissions = --yolo)")
+    print("  lampson --help                   ayuda del launcher")
+    print("")
+    print("  Configuración persistente (opcional): lampson\\.env → LAMPSON_PROVIDER, LAMPSON_API_KEY, LAMPSON_MODEL…")
+    print("")
+
+task show_config(cfg, ws, profile, mode, opts)
+    print("")
+    print("  proveedor   " + cfg["provider"] + " (" + cfg["wire"] + " → " + cfg["base_url"] + ")")
+    print("  modelo      " + cfg["model"] + "   max_tokens " + text(cfg["max_tokens"]) + "   timeout " + text(floor(cfg["timeout"])) + "s")
+    print("  agente      " + profile + "   tools: " + join(agents.profile(profile)["tools"], ", "))
+    print("  permisos    " + mode)
+    print("  límites     " + text(opts["max_steps"]) + " pasos/turno · " + text(floor(opts["budget_tokens"])) + " tokens/turno · compacta a " + text(floor(opts["compact_at_tokens"])))
+    print("  workspace   " + ws)
+    print("")
+
+-- sugerencias para un comando desconocido: por prefijo
+task suggest(input)
+    let word be split(input, " ")[0]
+    let hits be []
+    each c in COMMANDS
+        when starts_with(c[0], word)
+            set hits to append(hits, c[0])
+    when length(hits) == 0
+        give "comando desconocido: " + word + " · escribí / para ver la lista"
+    give "¿quisiste decir " + join(hits, " · ") + "?"
+
+task banner(ws, cfg, profile, mode, sid)
+    print("")
+    print("  ██   █████  ███  ███ ██████  ███████  ██████  ███   ██")
+    print("  ██  ██   ██ ████████ ██   ██ ██      ██    ██ ████  ██")
+    print("  ██  ███████ ██ ██ ██ ██████  ███████ ██    ██ ██ ██ ██")
+    print("  ██  ██   ██ ██    ██ ██           ██ ██    ██ ██  ████")
+    print("  ██████   ██ ██    ██ ██      ███████  ██████  ██   ███")
+    print("  harness de agente en Synsema")
+    print(LINE)
+    print("  workspace   " + ws)
+    print("  agente      " + profile + "        permisos  " + mode + "        modelo  " + cfg["model"])
+    print("  sesión      " + sid + "        " + git.summary())
+    print(LINE)
+    print(tree.render(0, 22))
+    print(LINE)
+    print("  Escribí un pedido, " + cyan("/") + " para los comandos, " + cyan("!") + "comando para correr algo vos.")
+
+task skills_list()
+    let idx be skills.index()
+    let out be []
+    each n in sort_by(keys(idx), (x) => x)
+        set out to append(out, "  " + n + " (" + idx[n]["source"] + "): " + idx[n]["description"])
+    when length(out) == 0
+        give "  (sin skills)"
+    give join(out, "\n")
+
+-- ---------- boot ----------
+
+let cfg be provider.config()
+let env_info be agents.env_info(cfg)
+let profile be lower(env("LAMPSON_AGENT", "build"))
+task system_for(p)
+    give {"role": "system", "content": prompt.build(env_info, agents.addendum_for(p))}
+task opts_for(p, mode)
+    let o be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_user)
+    set o to loop.with_steps(o, agents.steps_for(p))
+    give loop.with_mode(o, mode)
+let registry_bash be agents.registry_for("build")["bash"]
+
+-- salida de un !comando: hasta 60 líneas, el resto colapsado
+task shell_out(out)
+    let lines be split(out, "\n")
+    let shown be []
+    each e in enumerate(lines)
+        when e["index"] < 60
+            set shown to append(shown, "    " + e["item"])
+    when length(lines) > 60
+        set shown to append(shown, dim("    … +" + text(length(lines) - 60) + " líneas"))
+    give join(shown, "\n")
+
+let system_msg be system_for(profile)
+let opts be opts_for(profile, lower(env("LAMPSON_PERMISSION", "ask")))
+
+let sid be env("LAMPSON_SESSION", "")
+let messages be [system_msg]
+when sid != ""
+    when session.exists(sid)
+        let doc be session.load(sid)
+        set messages to doc["messages"]
+        print("reanudando sesión " + sid + " (" + text(length(messages)) + " mensajes)")
+    otherwise
+        print("sesión " + sid + " no existe; creando una nueva")
+        set sid to ""
+when sid == ""
+    set sid to session.new_id()
+
+banner(env_info["cwd"], cfg, profile, opts["permission_mode"], sid)
+flush()
+
+let total_usage be {"input": 0, "output": 0}
+let mode be opts["permission_mode"]
+let running be true
+while running
+    let line be read_line("\n" + cyan("❯ "))
+    when line == nothing
+        set running to false
+    otherwise
+        let input be trim(line)
+        when input == ""
+            set running to running
+        otherwise when input == "/exit" or input == "/quit"
+            set running to false
+        otherwise when input == "/help" or input == "/"
+            help()
+        otherwise when input == "/flags"
+            flags()
+        otherwise when input == "/config"
+            show_config(cfg, env_info["cwd"], profile, mode, opts)
+        otherwise when starts_with(input, "/model")
+            let want be trim(slice(input, 6, length(input)))
+            when want == ""
+                print("modelo actual: " + cfg["model"] + " · uso: /model <nombre>")
+            otherwise
+                set cfg["model"] to want
+                print("modelo=" + want + " (solo esta sesión; para fijarlo: LAMPSON_MODEL en lampson\\.env)")
+        otherwise when input == "/new"
+            set sid to session.new_id()
+            set messages to [system_msg]
+            print("nueva sesión " + sid)
+        otherwise when input == "/sessions"
+            each s in session.list()
+                print("  " + s["id"] + "  " + s["title"])
+        otherwise when starts_with(input, "/resume ")
+            let id be trim(slice(input, 8, length(input)))
+            when session.exists(id)
+                set sid to id
+                set messages to session.load(id)["messages"]
+                print("reanudada " + id + " (" + text(length(messages)) + " mensajes)")
+            otherwise
+                print("no existe " + id)
+        otherwise when input == "/files"
+            print(tree.render(2, 200))
+        otherwise when input == "/procs"
+            let items be proc.list()
+            when length(items) == 0
+                print("  (ningún proceso gestionado)")
+            each p in items
+                print("  " + (when p["running"] then green("● running") otherwise red("○ exited ")) + "  " + p["name"] + "  $ " + p["command"])
+            let ports be proc.listeners()
+            when length(ports) > 0
+                print("")
+                print("  " + dim("puertos en escucha (cualquier proceso; /kill <pid> para matar uno huérfano):"))
+                each l in ports
+                    print("  " + yellow(":" + text(l["port"])) + "  pid " + text(l["pid"]) + "  " + l["name"])
+        otherwise when starts_with(input, "/logs")
+            let args be split(trim(slice(input, 5, length(input))), " ")
+            when args[0] == ""
+                print("  uso: /logs <nombre> [líneas]")
+            otherwise
+                let n be when length(args) > 1 then number(args[1]) otherwise 60
+                print(proc.logs(args[0], n))
+        otherwise when starts_with(input, "/kill")
+            let pid be trim(slice(input, 5, length(input)))
+            print("  " + (when pid == "" then "uso: /kill <pid>  (ver /procs)" otherwise proc.kill_pid(number(pid))))
+        otherwise when starts_with(input, "/stop")
+            let nm be trim(slice(input, 5, length(input)))
+            print("  " + (when nm == "" then "uso: /stop <nombre>" otherwise proc.halt(nm)))
+        otherwise when input == "/skills"
+            print(skills_list())
+        otherwise when input == "/tokens"
+            print("contexto≈" + text(loop.estimate_tokens(messages)) + " tokens · gastado in=" + text(total_usage["input"]) + " out=" + text(total_usage["output"]))
+        otherwise when input == "/yolo" or input == "/ask" or input == "/strict"
+            set mode to slice(input, 1, length(input))
+            set opts to opts_for(profile, mode)
+            print("permisos=" + opts["permission_mode"])
+        otherwise when starts_with(input, "/agent")
+            let want be trim(slice(input, 6, length(input)))
+            when want == ""
+                print("agente=" + profile + " · disponibles: " + join(agents.names(), ", "))
+            otherwise when contains(agents.PROFILES, want)
+                set profile to want
+                set system_msg to system_for(profile)
+                set opts to opts_for(profile, mode)
+                -- el system prompt cambia con el perfil; el historial se conserva (cambiar de agente no borra la conversación)
+                set messages to [system_msg] + slice(messages, 1, length(messages))
+                print("agente=" + profile + " · tools: " + join(agents.profile(profile)["tools"], ", "))
+            otherwise
+                print("no existe el agente " + want + " · disponibles: " + join(agents.names(), ", "))
+        otherwise when starts_with(input, "/")
+            print("  " + suggest(input))
+        otherwise when starts_with(input, "!")
+            -- comando del USUARIO: corre sin política de permisos (lo escribiste vos), salida al contexto
+            let cmd be trim(slice(input, 1, length(input)))
+            when cmd == ""
+                print("  uso: !<comando>   p.ej. !git status · !npm test · !cat .env")
+            otherwise
+                print("  " + yellow("$ " + cmd))
+                let out be call_tool(registry_bash, {"command": cmd, "timeout": 600})
+                print(shell_out(out))
+                set messages to append(messages, {"role": "user", "content": "[The user ran this command in the shell themselves]\n$ " + cmd + "\n" + tools.truncate(out, 6000)})
+                session.save(sid, messages, {"title": session.title_of(messages)})
+        otherwise
+            set messages to append(messages, {"role": "user", "content": input})
+            let result be loop.run_turn(cfg, messages, opts, on_event)
+            set messages to result["messages"]
+            set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}
+            let summary be text(result["steps"]) + (when result["steps"] == 1 then " paso" otherwise " pasos") + " · " + fmt_tokens(result["usage"]["input"] + result["usage"]["output"]) + " tokens"
+            when result["stopped"] == "max_steps"
+                set summary to summary + " · " + red("límite de " + text(opts["max_steps"]) + " pasos por turno")
+                print(dim("  ─── " + summary))
+                print("  " + yellow("El agente paró por el límite de pasos, no porque terminó. Escribí «seguí» para que continúe donde quedó, o subí LAMPSON_MAX_STEPS."))
+            otherwise when result["stopped"] != "done"
+                set summary to summary + " · " + red("detenido: " + result["stopped"])
+                print(dim("  ─── " + summary))
+            otherwise
+                print(dim("  ─── " + summary))
+            session.save(sid, messages, {"title": session.title_of(messages)})
+    flush()
+print("bye · sesión " + sid)

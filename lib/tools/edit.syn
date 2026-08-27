@@ -1,0 +1,30 @@
+-- lib/tools/edit.syn — reemplazo exacto y único (sin fuzzy replacers: exactitud antes que magia)
+use "./common.syn" as c
+
+export task tool(path, old_string, new_string, replace_all)
+    require file("workspace")
+    require file("workspace/*")
+    let real be c.ws(path)
+    let shown be c.unws(real)
+    let content be read_file(real)
+    let parts be split(content, old_string)
+    let n be length(parts) - 1
+    when n == 0
+        raise("old_string not found in " + shown + " — read the file and copy the exact text (whitespace included)")
+    let all be when replace_all == nothing then false otherwise replace_all
+    when n > 1
+        when not all
+            raise(`old_string appears {text(n)} times in {shown}; include more surrounding context to make it unique, or pass replace_all=true`)
+    write_file(real, join(parts, new_string))
+    give `edited {shown}: {text(n)} replacement(s)`
+
+export let SPEC be {
+    "name": "edit",
+    "description": "Replace an exact string in a file. old_string must match EXACTLY (including whitespace and indentation) and be unique in the file, otherwise the call fails — include more surrounding lines to disambiguate, or set replace_all=true to replace every occurrence. Read the file first.",
+    "parameters": {"type": "object", "properties": {
+        "path": {"type": "string"},
+        "old_string": {"type": "string"},
+        "new_string": {"type": "string"},
+        "replace_all": {"type": "boolean"}
+    }, "required": ["path", "old_string", "new_string"]}
+}

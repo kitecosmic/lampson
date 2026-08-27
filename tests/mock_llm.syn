@@ -1,0 +1,128 @@
+-- tests/mock_llm.syn — LLM falso con guion, OpenAI-compatible, para probar el harness sin API key
+--
+--   synsema serve tests/mock_llm.syn        (puerto 8765)
+--   LAMPSON_PROVIDER=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run chat.syn
+--
+-- Guion: mira el ÚLTIMO mensaje de usuario y responde con tool calls deterministas:
+--   "ls"           → tool ls(".") → luego texto final con el resultado
+--   "escribe X"    → write("scratch_mock.txt", X) → edit → read → final
+--   "peligro"      → bash("rm -rf /tmp/x") (debe pedir aprobación / denegarse) → final
+--   "alucina"      → tool inexistente "hack" → final
+--   otro           → texto final directo
+-- Cada respuesta también refleja cuántos mensajes recibió (útil para asertar el historial).
+
+require serve(8765)
+
+task last_user(msgs)
+    let out be ""
+    each m in msgs
+        when m["role"] == "user"
+            set out to m["content"]
+    give out
+
+task last_role(msgs)
+    give msgs[length(msgs) - 1]["role"]
+
+task tool_call(name, args)
+    give {"id": "call_" + name, "type": "function", "function": {"name": name, "arguments": json_encode(args)}}
+
+task reply_tools(calls)
+    give {"choices": [{"message": {"role": "assistant", "content": nothing, "tool_calls": calls}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
+
+task reply_text(t)
+    give {"choices": [{"message": {"role": "assistant", "content": t}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 10}}
+
+-- cuenta mensajes `role` DESPUÉS del último mensaje de usuario (= tools ejecutadas en este turno)
+task count_role(msgs, role)
+    let n be 0
+    each m in msgs
+        when m["role"] == "user"
+            set n to 0
+        otherwise when m["role"] == role
+            set n to n + 1
+    give n
+
+-- Wire Anthropic: valida la forma del request y devuelve tool_use → luego texto con lo recibido.
+task has_tool_result(msgs)
+    let last be msgs[length(msgs) - 1]
+    when last["role"] != "user"
+        give false
+    when text(last["content"]) == last["content"]
+        give false
+    each b in last["content"]
+        when b["type"] == "tool_result"
+            give true
+    give false
+
+serve on 8765
+    route "POST /v1/messages"
+        let b be json of request
+        let h be headers of request
+        when not contains(h, "x-api-key")
+            give fail(401, "missing x-api-key")
+        when not contains(b, "system")
+            give fail(400, "missing system")
+        when text(b["system"]) != b["system"]
+            give fail(400, "system must be a string")
+        let msgs be b["messages"]
+        when has_tool_result(msgs)
+            let blocks be msgs[length(msgs) - 1]["content"]
+            let ids be apply((x) => x["tool_use_id"], blocks)
+            give {"content": [{"type": "text", "text": "final anthropic · results=" + text(length(blocks)) + " ids=" + join(ids, ",") + " · first: " + slice(blocks[0]["content"], 0, 30)}], "stop_reason": "end_turn", "usage": {"input_tokens": 50, "output_tokens": 5}}
+        give {"content": [{"type": "text", "text": "voy a mirar"}, {"type": "tool_use", "id": "tu_1", "name": "ls", "input": {"path": "."}}, {"type": "tool_use", "id": "tu_2", "name": "read", "input": {"path": ".gitignore"}}], "stop_reason": "tool_use", "usage": {"input_tokens": 50, "output_tokens": 20}}
+
+    route "POST /v1/chat/completions"
+        let b be json of request
+        let msgs be b["messages"]
+        let q be lower(last_user(msgs))
+        let tools_seen be count_role(msgs, "tool")
+        let n_tools_offered be when contains(b, "tools") then length(b["tools"]) otherwise 0
+        when n_tools_offered == 0
+            when starts_with(q, "loop")
+                give reply_text("Hice N listados.\n]<]minimax[>[<tool_call><invoke name=\"ls\"></invoke></tool_call>")
+            give reply_text("final (no tools offered) · msgs=" + text(length(msgs)))
+        when starts_with(q, "ls")
+            when tools_seen == 0
+                give reply_tools([tool_call("ls", {"path": "."})])
+            give reply_text("final ls · msgs=" + text(length(msgs)) + " · last tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 40))
+        when starts_with(q, "escribe ")
+            when tools_seen == 0
+                give reply_tools([tool_call("write", {"path": "scratch_mock.txt", "content": slice(q, 8, length(q))})])
+            when tools_seen == 1
+                give reply_tools([tool_call("edit", {"path": "scratch_mock.txt", "old_string": "hola", "new_string": "chau"}), tool_call("read", {"path": "scratch_mock.txt"})])
+            give reply_text("final escribe · msgs=" + text(length(msgs)) + " · read said: " + msgs[length(msgs) - 1]["content"])
+        when starts_with(q, "peligro")
+            when tools_seen == 0
+                give reply_tools([tool_call("bash", {"command": "rm -rf /tmp/x"})])
+            give reply_text("final peligro · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        when starts_with(q, "alucina")
+            when tools_seen == 0
+                give reply_tools([tool_call("hack", {"x": 1})])
+            give reply_text("final alucina · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        when starts_with(q, "bash")
+            when tools_seen == 0
+                give reply_tools([tool_call("bash", {"command": "echo hello-from-shell && echo err 1>&2 && exit 2"})])
+            give reply_text("final bash · tool said: " + replace_text(msgs[length(msgs) - 1]["content"], "\n", " | "))
+        when starts_with(q, "loop")
+            give reply_tools([tool_call("ls", {"path": "."})])
+        when starts_with(q, "cuelga")
+            when tools_seen == 0
+                give reply_tools([tool_call("bash", {"command": "node -e \"setInterval(()=>{},1000)\" & sleep 200", "timeout": 2})])
+            give reply_text("final cuelga · tool said: " + replace_text(msgs[length(msgs) - 1]["content"], "\n", " | "))
+        when starts_with(q, "servidor")
+            when tools_seen == 0
+                give reply_tools([tool_call("bash", {"command": "(sleep 300 > /dev/null 2>&1 < /dev/null &) ; echo bg-started"})])
+            give reply_text("final servidor · tool said: " + msgs[length(msgs) - 1]["content"])
+        when starts_with(q, "proceso")
+            when tools_seen == 0
+                give reply_tools([tool_call("process", {"action": "start", "name": "demo", "command": "for i in 1 2 3 4 5 6; do echo tick-$i; sleep 1; done; echo BOOM-error >&2; exit 1"})])
+            when tools_seen == 1
+                give reply_tools([tool_call("bash", {"command": "sleep 3; echo ok"})])
+            when tools_seen == 2
+                give reply_tools([tool_call("process", {"action": "logs", "name": "demo", "tail": 3}), tool_call("process", {"action": "list"})])
+            give reply_text("final proceso · last: " + replace_text(msgs[length(msgs) - 1]["content"], "\n", " | "))
+        when starts_with(q, "crudo")
+            when tools_seen == 0
+                give reply_tools([tool_call("ls", {"path": "."})])
+            give reply_text("Voy a seguir.\n]<]minimax[>[<tool_call>\n<invoke name=\"bash\"><command>ls</command></invoke>")
+        give reply_text("final directo · msgs=" + text(length(msgs)))

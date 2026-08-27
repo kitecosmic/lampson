@@ -1,0 +1,19 @@
+-- lib/tools/read.syn — leer un archivo del workspace (con rango de líneas)
+use "./common.syn" as c
+
+export task tool(path, offset, limit)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let off be when offset == nothing then 1 otherwise floor(offset)
+    let lim be when limit == nothing then 2000 otherwise floor(limit)
+    give c.truncate(read_file(c.ws(path), off, lim), c.MAX_OUTPUT)
+
+export let SPEC be {
+    "name": "read",
+    "description": "Read a file from the workspace. Returns the text with line-range support. Use offset (1-based line) and limit (max lines) for big files; default reads the first 2000 lines. Always read a file before editing it.",
+    "parameters": {"type": "object", "properties": {
+        "path": {"type": "string", "description": "Path relative to the workspace root"},
+        "offset": {"type": "integer", "description": "1-based first line to read (optional)"},
+        "limit": {"type": "integer", "description": "Max lines to read (optional)"}
+    }, "required": ["path"]}
+}

@@ -1,0 +1,90 @@
+-- lib/permission.syn — política de permisos (allow | deny | ask) sobre las tool calls
+--
+-- Mezcla de los tres harnesses:
+--   * evaluate(tool, args, mode) → allow | deny | ask; "ask" suspende hasta que el humano responde.
+--   * 3 niveles — HARDLINE (nunca, ni en yolo), DANGEROUS (pide aprobación; yolo lo pasa; strict lo niega), resto.
+--
+-- Nota Synsema: el aislamiento de FILESYSTEM ya lo da el lenguaje (file("./*") es el workspace,
+-- call_tool intersecta), así que aquí solo miramos el CONTENIDO de los comandos de shell.
+--
+-- Modos (LAMPSON_PERMISSION): "ask" (default) | "yolo" (dangerous → allow) | "strict" (dangerous → deny)
+
+-- Tier 1: nunca. Coincidencia por substring, case-insensitive.
+-- (el comando se evalúa con un espacio final añadido, así "rm -rf / " matchea la raíz pero NO "rm -rf /tmp/x")
+export let HARDLINE be [
+    "rm -rf / ", "rm -rf /* ", "rm -fr / ", "rm -rf ~ ", "rm -rf ~/ ", "rm -rf * ", "rm -rf . ", "rm -rf ./ ", "rm -rf .. ",
+    "mkfs", "dd if=", ":(){", "fork bomb",
+    "format c:", "del /s /q c:\\", "rd /s /q c:\\", "rmdir /s /q c:\\",
+    "shutdown", "reboot", "> /dev/sda", "chmod -r 777 /",
+    "git push --force origin main", "git push -f origin main", "git push --force origin master"
+]
+
+-- Tier 2: pide aprobación (o deny en strict, allow en yolo).
+export let DANGEROUS be [
+    "rm -rf", "rm -r", "del /s", "rd /s", "rmdir /s", "remove-item -recurse",
+    "git push --force", "git push -f", "git reset --hard", "git clean -f", "git checkout --", "git branch -d",
+    "sudo", "curl | sh", "curl | bash", "wget | sh", "| sh", "| bash",
+    "drop table", "drop database", "truncate table", "delete from",
+    "npm publish", "cargo publish", "pip upload", "twine upload",
+    "docker rm", "docker system prune", "kubectl delete",
+    "chmod", "chown", "> ~/", "crontab",
+    "> .env", ">.env", ">> .env", "tee .env", "> ./.env"
+]
+
+task contains_any(haystack, needles)
+    each n in needles
+        when contains(haystack, lower(n))
+            give n
+    give nothing
+
+-- ¿es un archivo de secretos real? ".env", ".env.local", ".env.production"… sí; ".env.example/.sample/.template" no.
+task is_secret_env(base)
+    when base == ".env"
+        give true
+    when not starts_with(base, ".env.")
+        give false
+    each ok in [".env.example", ".env.sample", ".env.template", ".env.dist", ".env.test.example"]
+        when base == ok
+            give false
+    give true
+
+-- evaluate(tool_name, args, mode) → {decision: "allow"|"deny"|"ask", reason}
+export task evaluate(name, args, mode)
+    when name == "bash"
+        let cmd be (when contains(args, "command") then lower(text(args["command"])) otherwise "") + " "
+        let hard be contains_any(cmd, HARDLINE)
+        when hard != nothing
+            give {"decision": "deny", "reason": "hardline pattern: " + hard}
+        let danger be contains_any(cmd, DANGEROUS)
+        when danger != nothing
+            when mode == "yolo"
+                give {"decision": "allow", "reason": "yolo mode (dangerous: " + danger + ")"}
+            when mode == "strict"
+                give {"decision": "deny", "reason": "strict mode (dangerous: " + danger + ")"}
+            give {"decision": "ask", "reason": "dangerous pattern: " + danger}
+        give {"decision": "allow", "reason": "command"}
+    when name == "write" or name == "edit"
+        -- el scope file("./*") ya impide salir del workspace; aquí solo miramos secretos obvios
+        let p be when contains(args, "path") then lower(replace_text(text(args["path"]), "\\", "/")) otherwise ""
+        let parts be split(p, "/")
+        let base be parts[length(parts) - 1]
+        when is_secret_env(base)
+            when mode == "yolo"
+                give {"decision": "allow", "reason": "yolo mode (.env)"}
+            give {"decision": "ask", "reason": "writes a .env file (secrets)"}
+        give {"decision": "allow", "reason": "workspace write"}
+    give {"decision": "allow", "reason": "read-only tool"}
+
+-- Resumen legible de una tool call, para mostrar al humano antes de aprobar / en el log.
+task one_line(s, max)
+    let t be replace_text(replace_text(s, "\r", ""), "\n", " ⏎ ")
+    when length(t) > max
+        give slice(t, 0, max) + "…"
+    give t
+
+export task describe_call(name, args)
+    when name == "bash"
+        give "$ " + one_line(when contains(args, "command") then text(args["command"]) otherwise "", 160)
+    when contains(args, "path")
+        give name + " " + text(args["path"])
+    give name + " " + json_encode(args)

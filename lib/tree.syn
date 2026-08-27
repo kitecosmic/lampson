@@ -1,0 +1,59 @@
+-- lib/tree.syn — árbol de archivos del workspace (para el banner de terminal y el explorador web)
+use "./tools/common.syn" as c
+
+let MAX_ENTRIES be 2000
+
+task walk(dir, depth, max_depth, state)
+    let out be []
+    when depth > max_depth
+        give out
+    let entries be []
+    try
+        set entries to list_dir(dir)
+    recover err
+        give out
+    each e in entries
+        when state["n"] >= MAX_ENTRIES
+            give out
+        let rel be c.unws(dir + "/" + e["name"])
+        when e["is_dir"]
+            when not contains(c.IGNORED_DIRS, e["name"])
+                set state["n"] to state["n"] + 1
+                set out to append(out, {"name": e["name"], "path": rel, "is_dir": true, "children": walk(dir + "/" + e["name"], depth + 1, max_depth, state)})
+        otherwise
+            set state["n"] to state["n"] + 1
+            set out to append(out, {"name": e["name"], "path": rel, "is_dir": false, "size": e["size"]})
+    -- carpetas primero
+    give where(out, (x) => x["is_dir"]) + where(out, (x) => not x["is_dir"])
+
+-- árbol anidado: [{name, path, is_dir, size?, children?}]
+export task tree(max_depth)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let state be {"n": 0}
+    give {"entries": walk(c.ROOT, 0, max_depth, state), "count": state["n"], "truncated": state["n"] >= MAX_ENTRIES}
+
+-- render de texto para la terminal (2 niveles, compacto)
+export task render(max_depth, max_lines)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let t be tree(max_depth)
+    let lines be []
+    each e in t["entries"]
+        when length(lines) < max_lines
+            set lines to append(lines, "  " + e["name"] + (when e["is_dir"] then "/" otherwise ""))
+            when e["is_dir"] and contains(e, "children")
+                each ch in e["children"]
+                    when length(lines) < max_lines
+                        set lines to append(lines, "    " + ch["name"] + (when ch["is_dir"] then "/" otherwise ""))
+    when length(lines) >= max_lines
+        set lines to append(lines, "  … " + text(t["count"]) + " entradas en total — /files muestra el árbol completo")
+    give join(lines, "\n")
+
+-- contenido de un archivo para el visor web
+export task file_content(path)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let real be c.ws(path)
+    let content be read_file(real)
+    give {"path": c.unws(real), "content": c.truncate(content, 200000), "lines": length(split(content, "\n"))}

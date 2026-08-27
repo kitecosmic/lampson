@@ -1,0 +1,17 @@
+-- lib/tools/write.syn — crear/sobrescribir un archivo (atómico, crea directorios)
+use "./common.syn" as c
+
+export task tool(path, content)
+    require file("workspace")
+    require file("workspace/*")
+    write_file(c.ws(path), content)
+    give `wrote {text(length(content))} chars to {c.unws(c.ws(path))}`
+
+export let SPEC be {
+    "name": "write",
+    "description": "Create or overwrite a file with the given content (atomic; creates parent dirs). Prefer `edit` for changing existing files. Paths are relative to the workspace root.",
+    "parameters": {"type": "object", "properties": {
+        "path": {"type": "string"},
+        "content": {"type": "string"}
+    }, "required": ["path", "content"]}
+}

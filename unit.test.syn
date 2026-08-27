@@ -1,0 +1,189 @@
+-- tests/unit.test.syn — tests unitarios (sin red, sin LLM)
+--   synsema test unit.test.syn
+-- MIGA: vive en la raíz porque un módulo no puede importar fuera de su directorio ("../" está prohibido).
+-- Los tests e2e (loop + providers + web) usan tests/mock_llm.syn; ver README.
+
+require time
+require exec
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file(".lampson")
+require file(".lampson/*")
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_API_KEY")
+
+use "./lib/permission.syn" as permission
+use "./lib/session.syn" as session
+use "./lib/provider.syn" as provider
+use "./lib/tools.syn" as tools
+use "./lib/loop.syn" as loop
+use "./lib/agents.syn" as agents
+use "./lib/skills.syn" as skills
+use "./lib/tools/proc.syn" as proc
+
+let REG be tools.registry()
+
+-- ---------- permission ----------
+
+test "hardline: rm -rf / se deniega en todos los modos"
+    each mode in ["ask", "yolo", "strict"]
+        let v be permission.evaluate("bash", {"command": "rm -rf /"}, mode)
+        assert_eq(v["decision"], "deny", mode)
+
+test "hardline no da falso positivo con rm -rf /tmp/x (es dangerous)"
+    assert_eq(permission.evaluate("bash", {"command": "rm -rf /tmp/x"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("bash", {"command": "rm -rf /tmp/x"}, "yolo")["decision"], "allow")
+    assert_eq(permission.evaluate("bash", {"command": "rm -rf /tmp/x"}, "strict")["decision"], "deny")
+
+test "comandos normales se permiten; lecturas siempre"
+    assert_eq(permission.evaluate("bash", {"command": "git status && ls -la"}, "strict")["decision"], "allow")
+    assert_eq(permission.evaluate("read", {"path": "x"}, "strict")["decision"], "allow")
+    assert_eq(permission.evaluate("grep", {"pattern": "rm -rf /"}, "ask")["decision"], "allow")
+
+test "escribir .env pide aprobación; .env.example no"
+    assert_eq(permission.evaluate("write", {"path": ".env", "content": "x"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("write", {"path": "app/.env.local", "content": "x"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("write", {"path": "futbol5/.env.example", "content": "x"}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("write", {"path": "src/env.ts", "content": "x"}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("write", {"path": "src/a.syn", "content": "x"}, "ask")["decision"], "allow")
+
+test "escribir .env por bash (redirect) pide aprobación; describe_call en una línea"
+    assert_eq(permission.evaluate("bash", {"command": "echo X=1 > .env && npx prisma db push"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("bash", {"command": "cat .env.example"}, "ask")["decision"], "allow")
+    assert_eq(permission.describe_call("bash", {"command": "echo a" + "\n" + "echo b"}), "$ echo a ⏎ echo b")
+
+test "describe_call"
+    assert_eq(permission.describe_call("bash", {"command": "ls"}), "$ ls")
+    assert_eq(permission.describe_call("read", {"path": "a.txt"}), "read a.txt")
+
+-- ---------- provider ----------
+
+test "config: preset deepseek por defecto y override por env"
+    let cfg be provider.config()
+    assert(contains(provider.PRESETS, cfg["provider"]) or cfg["provider"] != "", "provider name")
+    assert(cfg["wire"] == "openai" or cfg["wire"] == "anthropic")
+    assert(cfg["max_tokens"] > 0)
+
+test "presets: cada uno tiene wire, base_url y model"
+    each name in keys(provider.PRESETS)
+        let p be provider.PRESETS[name]
+        assert(contains(p, "wire") and contains(p, "base_url") and contains(p, "model"), name)
+        assert(not ends_with_slash(p["base_url"]), name + " base_url sin barra final")
+
+task ends_with_slash(s)
+    give slice(s, length(s) - 1, length(s)) == "/"
+
+-- ---------- tools ----------
+
+-- Los tests de tools escriben en workspace/_lampson_test/ (el workspace montado) y lo limpian.
+let T be "_lampson_test"
+
+test "edit exige old_string único y write/read funcionan (vía call_tool = least-privilege)"
+    call_tool(REG["write"], {"path": T + "/s.txt", "content": "aaa\nbbb\naaa\n"})
+    assert_error(() => call_tool(REG["edit"], {"path": T + "/s.txt", "old_string": "aaa", "new_string": "ccc"}))
+    assert_eq(call_tool(REG["edit"], {"path": T + "/s.txt", "old_string": "aaa", "new_string": "ccc", "replace_all": true}), "edited " + T + "/s.txt: 2 replacement(s)")
+    assert_eq(call_tool(REG["edit"], {"path": "./" + T + "/s.txt", "old_string": "bbb", "new_string": "ddd"}), "edited " + T + "/s.txt: 1 replacement(s)")
+    assert_eq(call_tool(REG["read"], {"path": T + "/s.txt"}), "ccc\nddd\nccc\n")
+    assert_error(() => call_tool(REG["edit"], {"path": T + "/s.txt", "old_string": "zzz", "new_string": "y"}))
+
+test "find con glob mínimo, ls y grep (paths relativos al workspace)"
+    call_tool(REG["write"], {"path": T + "/deep/a.syn", "content": "export task run_turn()\n    give 1\n"})
+    let found be call_tool(REG["find"], {"pattern": "*.syn", "path": T})
+    assert(contains(found, T + "/deep/a.syn"), found)
+    assert(not contains(found, "workspace/"), found)
+    assert(contains(call_tool(REG["ls"], {"path": T}), "deep/"))
+    assert_eq(call_tool(REG["find"], {"pattern": "nope_*_nope", "path": T}), "no files matched nope_*_nope")
+    let r be call_tool(REG["grep"], {"pattern": "export task run_turn", "path": T, "glob": "*.syn", "regex": false})
+    assert(contains(r, T + "/deep/a.syn:1:"), r)
+
+test "bash corre con cwd = workspace"
+    let out be call_tool(REG["bash"], {"command": "ls " + T})
+    assert(contains(out, "deep"), out)
+
+test "una tool NO puede salir del workspace (least-privilege real): abs, .., hermano"
+    assert_error(() => call_tool(REG["read"], {"path": "C:/Windows/win.ini"}))
+    assert_error(() => call_tool(REG["read"], {"path": "../lib/loop.syn"}))
+    assert_error(() => call_tool(REG["find"], {"pattern": "*", "path": ".."}))
+    assert_error(() => call_tool(REG["write"], {"path": "../pwned.txt", "content": "x"}))
+
+test "perfiles: plan no ve write/edit/bash; subagentes no ven delegate"
+    let plan be agents.registry_for("plan")
+    assert(contains(plan, "read") and contains(plan, "delegate"))
+    assert(not contains(plan, "write") and not contains(plan, "bash"))
+    let review be agents.registry_for("review")
+    assert(contains(review, "bash") and not contains(review, "edit") and not contains(review, "delegate"))
+    assert_eq(length(agents.catalog_for("build")), length(tools.CATALOG) + 1)
+
+test "skills: índice, sección de prompt, carga por tool y prioridad workspace > harness"
+    let idx be skills.index()
+    assert(contains(idx, "lampson") and contains(idx, "synsema"), text(keys(idx)))
+    assert(idx["lampson"]["source"] == "harness" or idx["lampson"]["source"] == "project")
+    assert(contains(skills.prompt_section(idx), "- synsema (harness):"))
+    let body be call_tool(REG["skill"], {"name": "lampson"})
+    assert(starts_with(body, "# skill: lampson"), body)
+    assert(contains(body, "workspace/"))
+    assert_error(() => call_tool(REG["skill"], {"name": "nope"}))
+    -- una skill del proyecto con el mismo nombre gana a la del harness
+    call_tool(REG["write"], {"path": "skills/lampson/SKILL.md", "content": "---\nname: lampson\ndescription: override\n---\ncustom body"})
+    let idx2 be skills.index()
+    assert_eq(idx2["lampson"]["source"], "project")
+    assert(contains(call_tool(REG["skill"], {"name": "lampson"}), "custom body"))
+    -- limpiar: no dejar la skill de prueba en el workspace del usuario
+    run("C:\Program Files\Git\bin\bash.exe", ["-c", "rm -rf workspace/skills/lampson; rmdir workspace/skills 2>/dev/null; true"], 10)
+    assert(not contains(skills.index()["lampson"], "nope"))
+
+test "procesos gestionados: start → report ve líneas nuevas → halt mata el árbol"
+    proc.halt("t_demo")
+    let st be proc.start("t_demo", "for i in 1 2 3 4 5 6 7 8 9 10; do echo line-$i; sleep 1; done")
+    assert(contains(st, "running"), st)
+    let r1 be proc.report()
+    assert(contains(r1, "t_demo") and contains(r1, "line-1"), r1)
+    sleep(2)
+    let r2 be proc.report()
+    assert(contains(r2, "line-") and not contains(r2, "line-1" + "\n"), r2)
+    assert(contains(proc.logs("t_demo", 2), "line-"))
+    assert(contains(proc.halt("t_demo"), "stopped"))
+    sleep(1)
+    assert_eq(proc.alive("t_demo"), false)
+    assert_error(() => proc.start("bad name!", "echo x"))
+
+test "delegate rechaza build y agentes desconocidos"
+    let reg be agents.registry_for("build")
+    assert_error(() => call_tool(reg["delegate"], {"agent": "build", "brief": "x"}))
+    assert_error(() => call_tool(reg["delegate"], {"agent": "nope", "brief": "x"}))
+
+test "truncate"
+    assert_eq(tools.truncate("abc", 10), "abc")
+    assert(starts_with(tools.truncate("abcdefghij", 3), "abc\n\n[... truncated: 7 more chars"))
+
+test "catálogo y registry coinciden"
+    let reg be tools.registry()
+    each t in tools.CATALOG
+        assert(contains(reg, t["name"]), "tool en catálogo sin task: " + t["name"])
+        assert(contains(t, "description") and contains(t["parameters"], "properties"), t["name"])
+    assert_eq(length(keys(reg)), length(tools.CATALOG))
+
+-- ---------- session ----------
+
+test "session: save/load/list/title round-trip"
+    let id be "test-" + session.new_id()
+    let msgs be [{"role": "system", "content": "s"}, {"role": "user", "content": "hola\nmundo"}, {"role": "assistant", "content": "ok", "tool_calls": []}]
+    session.save(id, msgs, {"title": session.title_of(msgs)})
+    assert(session.exists(id))
+    let d be session.load(id)
+    assert_eq(d["messages"], msgs)
+    assert_eq(d["meta"]["title"], "hola mundo")
+    let ids be apply((s) => s["id"], session.list())
+    assert(contains(ids, id))
+    assert_eq(session.exists("no-such-session"), false)
+
+-- ---------- loop helpers ----------
+
+test "estimate_tokens y with_mode"
+    assert(loop.estimate_tokens([{"role": "user", "content": "hola"}]) > 0)
+    let opts be loop.default_opts({}, [], nothing)
+    assert_eq(loop.with_mode(opts, "yolo")["permission_mode"], "yolo")
+    assert_eq(opts["max_steps"], 40)

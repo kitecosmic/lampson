@@ -1,0 +1,68 @@
+-- lib/session.syn — persistencia de sesiones (historial canónico como JSON en .lampson/sessions/)
+--
+-- Aquí: un JSON por sesión, reescrito atómicamente en cada turno (write_file es atómico).
+-- Suficiente para v1 y trivialmente inspeccionable. Migrar a `db("./.lampson/sessions.db")` si crece.
+--
+-- MIGA: no existe append_file → releer + reescribir. write_file crea los directorios padres.
+
+let DIR be ".lampson/sessions"
+
+export task new_id()
+    require time
+    give format_time(now(), "%Y%m%d-%H%M%S")
+
+task path_of(id)
+    give DIR + "/" + id + ".json"
+
+export task save(id, messages, meta)
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    let doc be {"id": id, "updated": format_time(now()), "meta": meta, "messages": messages}
+    write_file(path_of(id), json_encode(doc))
+    give id
+
+export task load(id)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let doc be json_decode(read_file(path_of(id)))
+    give doc
+
+export task exists(id)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    try
+        read_file(path_of(id), 1, 1)
+        give true
+    recover err
+        give false
+
+-- [{id, updated, title}] ordenado por id descendente (los ids son timestamps).
+export task list()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let out be []
+    try
+        let entries be list_dir(DIR)
+        each e in entries
+            when not e["is_dir"]
+                let id be replace_text(e["name"], ".json", "")
+                try
+                    let d be load(id)
+                    let title be when contains(d["meta"], "title") then d["meta"]["title"] otherwise ""
+                    set out to append(out, {"id": id, "updated": d["updated"], "title": title})
+                recover err
+                    set out to out
+    recover err
+        give []
+    give sort_by(out, (s) => 0 - number(replace_text(replace_text(s["id"], "-", ""), "test", "")))
+
+-- Título = primer mensaje de usuario recortado.
+export task title_of(messages)
+    each m in messages
+        when m["role"] == "user"
+            let t be replace_text(m["content"], "\n", " ")
+            when length(t) > 60
+                give slice(t, 0, 60) + "…"
+            give t
+    give "(sin título)"

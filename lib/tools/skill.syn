@@ -1,0 +1,11 @@
+-- lib/tools/skill.syn — cargar una skill (SKILL.md) al contexto
+-- Nota: skills.syn está un nivel arriba y un módulo no puede importar "../", así que este archivo
+-- solo define el SPEC; la task real vive en lib/tools.syn (que sí puede importar ./skills.syn).
+
+export let SPEC be {
+    "name": "skill",
+    "description": "Load a skill: project- or harness-specific instructions for a kind of task (how to deploy, how tests are run here, how this harness works, how to write Synsema...). The system prompt lists the available skills with a one-line description; call this with the name BEFORE starting that kind of task and follow the instructions it returns.",
+    "parameters": {"type": "object", "properties": {
+        "name": {"type": "string", "description": "Skill name exactly as listed in the system prompt"}
+    }, "required": ["name"]}
+}

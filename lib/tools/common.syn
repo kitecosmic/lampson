@@ -1,0 +1,63 @@
+-- lib/tools/common.syn — helpers compartidos por las tools (puros, sin capacidades)
+--
+-- MODELO DE WORKSPACE (miga de seguridad, verificada en v0.6.7):
+--   el scope `file("./*")` se comporta como `"*"` (disco entero) — un bug del runtime; `file("dir/*")`
+--   sí deniega `..`, absolutos y hermanos. Por eso el proyecto objetivo se MONTA como `./workspace`
+--   (junction en Windows / symlink en unix, lo hace lampson.ps1 / lampson.sh) y TODAS las tools
+--   declaran `file("workspace/*")`. El modelo ve paths relativos a la raíz del workspace; `ws()` los
+--   traduce. Es el mismo modelo mental que `docker -v proyecto:/workspace`.
+
+export let ROOT be "workspace"
+export let MAX_OUTPUT be 30000
+export let IGNORED_DIRS be [".git", "node_modules", ".synsema", ".lampson", "workspace", "target", "dist", "build", "coverage", "__pycache__", ".venv", ".next", ".netlify", ".cache", ".turbo"]
+
+-- path del modelo → path real bajo workspace/
+export task ws(path)
+    let p be when path == nothing then "." otherwise replace_text(text(path), "\\", "/")
+    let stripping be true
+    while stripping
+        when starts_with(p, "./")
+            set p to slice(p, 2, length(p))
+        otherwise when starts_with(p, "/")
+            set p to slice(p, 1, length(p))
+        otherwise
+            set stripping to false
+    when p == "." or p == "" or p == ROOT
+        give ROOT
+    when starts_with(p, ROOT + "/")
+        give p
+    give ROOT + "/" + p
+
+-- path real → path como lo ve el modelo
+export task unws(path)
+    when starts_with(path, ROOT + "/")
+        give slice(path, length(ROOT) + 1, length(path))
+    when path == ROOT
+        give "."
+    give path
+
+export task truncate(s, max)
+    when length(s) > max
+        give slice(s, 0, max) + `\n\n[... truncated: {text(length(s) - max)} more chars ...]`
+    give s
+
+export task ends_with(s, suffix)
+    when length(suffix) > length(s)
+        give false
+    give slice(s, length(s) - length(suffix), length(s)) == suffix
+
+-- glob mínimo: "*.ts" (sufijo), "test_*" (prefijo), "*foo*" (contiene), exacto.
+export task glob_match(name, pat)
+    when pat == "*"
+        give true
+    when pat == ""
+        give true
+    let star_first be starts_with(pat, "*")
+    let star_last be ends_with(pat, "*")
+    when star_first and star_last
+        give contains(name, slice(pat, 1, length(pat) - 1))
+    when star_first
+        give ends_with(name, slice(pat, 1, length(pat)))
+    when star_last
+        give starts_with(name, slice(pat, 0, length(pat) - 1))
+    give name == pat

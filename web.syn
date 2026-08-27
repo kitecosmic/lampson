@@ -1,0 +1,166 @@
+-- web.syn — Lampson por URL (chat web con SSE)
+--
+--   synsema serve web.syn            → http://127.0.0.1:8080
+--
+-- API:
+--   GET  /                       UI (public/index.html)
+--   GET  /api/sessions           lista de sesiones
+--   GET  /api/sessions/:id       historial de una sesión
+--   POST /api/chat               {session?, message, agent?} → SSE con eventos del loop y "done" al final
+--
+-- Permisos bajo web: el modo (ask|yolo|strict) viene en cada POST /api/chat (selector de la UI; default
+-- LAMPSON_PERMISSION). En "ask", una tool peligrosa emite el evento SSE `approval_request` y el loop
+-- espera (polling de state_*) hasta que la UI responda por POST /api/approve o venza el timeout → deniega.
+-- Nunca se auto-aprueba en silencio.
+--
+-- MIGAS serve: secret() y config() se resuelven DENTRO del handler (globals redactados por request);
+-- las tasks deben definirse ANTES de `serve on`; `send` solo parsea dentro de `stream`, así que
+-- el emisor de eventos se define dentro del bloque stream.
+
+intent: "Web chat for a coding agent: tools from an allow-list, least-privilege per tool, SSE progress"
+
+require serve(8080)
+require net
+require time
+require exec
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_API_KEY")
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file(".lampson")
+require file(".lampson/*")
+
+use "./lib/provider.syn" as provider
+use "./lib/tools.syn" as tools
+use "./lib/prompt.syn" as prompt
+use "./lib/loop.syn" as loop
+use "./lib/session.syn" as session
+use "./lib/agents.syn" as agents
+use "./lib/tree.syn" as tree
+use "./lib/git.syn" as git
+use "./lib/tools/proc.syn" as proc
+
+let APPROVAL_TIMEOUT be 180
+
+task boot(profile, mode, ask_fn)
+    let cfg be provider.config()
+    let p be when contains(agents.PROFILES, profile) then profile otherwise "build"
+    let opts be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_fn)
+    set opts to loop.with_steps(opts, agents.steps_for(p))
+    set opts to loop.with_mode(opts, mode)
+    give {"cfg": cfg, "system": {"role": "system", "content": prompt.build(agents.env_info(cfg), agents.addendum_for(p))}, "opts": opts, "profile": p}
+
+serve on 8080
+    max_streams 50
+    static "./public"
+
+    route "GET /api/sessions"
+        give {"sessions": session.list()}
+
+    route "GET /api/sessions/:id"
+        when not session.exists(params.id)
+            give not_found("session not found")
+        let doc be session.load(params.id)
+        let visible be where(doc["messages"], (m) => m["role"] != "system")
+        give {"id": doc["id"], "updated": doc["updated"], "meta": doc["meta"], "messages": visible}
+
+    route "GET /api/config"
+        let cfg be provider.config()
+        give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
+
+    route "GET /api/tree"
+        give tree.tree(6)
+
+    route "GET /api/git"
+        give git.status()
+
+    route "GET /api/proc"
+        give {"processes": proc.list()}
+
+    route "GET /api/proc/log"
+        when not contains(query, "name")
+            give fail(400, "name required")
+        let n be when contains(query, "tail") then number(query.tail) otherwise 200
+        give {"name": query.name, "running": proc.alive(query.name), "log": proc.logs(query.name, n)}
+
+    route "GET /api/ports"
+        give {"ports": proc.listeners()}
+
+    route "POST /api/ports/kill"
+        expect body {pid: number}
+        let b be json of request
+        give {"result": proc.kill_pid(b["pid"])}
+
+    route "POST /api/proc/stop"
+        expect body {name: text}
+        let b be json of request
+        give {"result": proc.halt(b["name"])}
+
+    route "GET /api/file"
+        when not contains(query, "path")
+            give fail(400, "path required")
+        give tree.file_content(query.path)
+
+    route "POST /api/approve"
+        expect body {id: text, decision: bool}
+        let b be json of request
+        state_set("approval:" + b["id"], when b["decision"] then "yes" otherwise "no")
+        give {"ok": true}
+
+    route "POST /api/chat"
+        expect body {message: text}
+        let b be json of request
+        let message be b["message"]
+        let sid be when contains(b, "session") then text(b["session"]) otherwise ""
+        let want be when contains(b, "agent") then lower(text(b["agent"])) otherwise "build"
+        let mode be when contains(b, "permission") then lower(text(b["permission"])) otherwise lower(env("LAMPSON_PERMISSION", "ask"))
+        when mode != "ask" and mode != "yolo" and mode != "strict"
+            set mode to "ask"
+        stream
+            task emit(kind, data)
+                send {"kind": kind, "data": data} as "event"
+            -- aprobación humana desde la UI: pregunta por SSE y espera la respuesta (o el timeout)
+            task ask_web(name, args, why)
+                let id be text(floor(now() * 1000)) + "-" + name
+                send {"kind": "approval_request", "data": {"id": id, "name": name, "args": args, "why": why, "timeout": APPROVAL_TIMEOUT}} as "event"
+                let waited be 0
+                let answer be nothing
+                while answer == nothing and waited < APPROVAL_TIMEOUT
+                    set answer to state_get("approval:" + id, nothing)
+                    when answer == nothing
+                        sleep(0.5)
+                        set waited to waited + 0.5
+                state_delete("approval:" + id)
+                let ok be answer == "yes"
+                send {"kind": "approval_result", "data": {"id": id, "approved": ok, "timeout": answer == nothing}} as "event"
+                give ok
+            let ctx be boot(want, mode, ask_web)
+            let messages be [ctx["system"]]
+            when sid != ""
+                when session.exists(sid)
+                    let prev be session.load(sid)["messages"]
+                    set messages to [ctx["system"]] + slice(prev, 1, length(prev))
+                otherwise
+                    set sid to ""
+            when sid == ""
+                set sid to session.new_id()
+            send {"kind": "session", "data": sid} as "event"
+            send {"kind": "mode", "data": {"agent": ctx["profile"], "permission": mode}} as "event"
+            when starts_with(trim(message), "!")
+                -- comando del USUARIO: sin política de permisos, salida al contexto; el modelo no interviene
+                let cmd be trim(slice(trim(message), 1, length(trim(message))))
+                let bash_tool be agents.registry_for("build")["bash"]
+                send {"kind": "tool_call", "data": {"id": "user", "name": "bash", "args": {"command": cmd}}} as "event"
+                let out be call_tool(bash_tool, {"command": cmd, "timeout": 600})
+                send {"kind": "tool_result", "data": {"call": {"id": "user", "name": "bash", "args": {"command": cmd}}, "output": out}} as "event"
+                set messages to append(messages, {"role": "user", "content": "[The user ran this command in the shell themselves]\n$ " + cmd + "\n" + tools.truncate(out, 6000)})
+                session.save(sid, messages, {"title": session.title_of(messages)})
+                send {"kind": "done", "data": {"text": "", "steps": 0, "usage": {"input": 0, "output": 0}, "stopped": "user_command", "session": sid}} as "event"
+            otherwise
+                set messages to append(messages, {"role": "user", "content": message})
+                let result be loop.run_turn(ctx["cfg"], messages, ctx["opts"], emit)
+                session.save(sid, result["messages"], {"title": session.title_of(result["messages"])})
+                send {"kind": "done", "data": {"text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "session": sid}} as "event"

@@ -1,0 +1,67 @@
+-- lib/tools/bash.syn — ejecutar un comando de shell con cwd = workspace/
+--
+-- MIGAS:
+--   * en Windows `bash` a secas resuelve al de WSL y cuelga; usar Git Bash explícito (default) o cmd.
+--   * `run()` se cuelga para siempre si el comando deja un descendiente vivo: en Windows los hijos
+--     heredan TODOS los handles, incluido el pipe de stdout de Synsema, y run() espera su EOF (pasado el
+--     timeout también). Por eso el comando corre vía lib/tools/bash_wrapper.sh, que cierra su stdout
+--     ANTES de lanzar nada, aplica el timeout de verdad, mata el ÁRBOL, y devuelve la salida por archivo
+--     en .lampson/tmp/. El timeout de run() queda solo como red de seguridad.
+--   * el proceso hijo NO hereda el scope de Synsema (un `cat ../x` en bash funciona). El aislamiento del
+--     shell lo dan permission.syn (patrones) + el operador (contenedor si hace falta).
+use "./common.syn" as c
+use "./proc.syn" as proc
+
+export task shell_config()
+    require env("LAMPSON_*")
+    require env("OS")
+    let is_win be env("OS", "") == "Windows_NT"
+    let shell be env("LAMPSON_SHELL", when is_win then "C:\\Program Files\\Git\\bin\\bash.exe" otherwise "bash")
+    let is_cmd be c.ends_with(lower(shell), "cmd.exe") or lower(shell) == "cmd"
+    give {"shell": shell, "flag": env("LAMPSON_SHELL_FLAG", when is_cmd then "/c" otherwise "-c"), "is_cmd": is_cmd}
+
+export task tool(command, timeout)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    let sc be shell_config()
+    let t be when timeout == nothing then 120 otherwise floor(timeout)
+    when t > 600
+        set t to 600
+    when t < 1
+        set t to 1
+    let out be ""
+    when sc["is_cmd"]
+        -- cmd: sin wrapper (no hay bash); el timeout del runtime es lo único que hay
+        let r be run(sc["shell"], [sc["flag"], command], t, {"cwd": c.ROOT, "max_output": 1000000})
+        set out to r["stdout"]
+        when r["stderr"] != ""
+            set out to out + "\n[stderr]\n" + r["stderr"]
+        when r["exit_code"] != 0
+            set out to out + `\n[exit code {text(r["exit_code"])}]`
+    otherwise
+        -- bash: wrapper con plazo real + kill del árbol; comando por env, salida por archivo
+        let outfile be ".lampson/tmp/bash-" + text(floor(now() * 1000)) + ".txt"
+        write_file(outfile, "")
+        run(sc["shell"], ["lib/tools/bash_wrapper.sh", text(t), outfile], t + 15, {"cwd": ".", "env": {"LAMPSON_CMD": command, "LAMPSON_WS": c.ROOT}})
+        set out to read_file(outfile)
+        write_file(outfile, "")
+    when trim(out) == ""
+        set out to "(no output)"
+    -- lo que pasó mientras tanto en los procesos gestionados (servidores) — el agente "ve la consola"
+    let rep be proc.report()
+    when rep != ""
+        set out to out + "\n\n" + rep
+    give c.truncate(out, c.MAX_OUTPUT)
+
+export let SPEC be {
+    "name": "bash",
+    "description": "Run a shell command with the workspace root as working directory (no persistent shell state between calls: cwd and env reset). Returns stdout+stderr and [exit code N] when non-zero. Use it for git, tests, builds, package managers. Commands are killed (with their child processes) after the timeout (default 120s, max 600) — so NEVER run a server, watcher or REPL here: use the `process` tool (start/logs/stop) for anything long-running; its new log lines are appended to every bash result automatically. Avoid interactive commands. Prefer read/grep/find over cat/grep/find for files.",
+    "parameters": {"type": "object", "properties": {
+        "command": {"type": "string"},
+        "timeout": {"type": "integer", "description": "Seconds (optional, default 120, max 600)"}
+    }, "required": ["command"]}
+}

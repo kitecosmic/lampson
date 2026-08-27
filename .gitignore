@@ -1,0 +1,11 @@
+# secretos y estado local
+.env
+.lampson/
+.synsema/
+workspace
+# notas internas de investigación (no forman parte del producto)
+notes/
+# temporales
+tests/*.log
+tests/*.txt
+*.tmp

@@ -1,0 +1,69 @@
+-- lib/tools.syn — agregador de tools: una tool = un archivo en lib/tools/<nombre>.syn
+--
+-- Contrato de cada archivo de tool ("plugin"):
+--   export task tool(...)    -- la tool; sus `require` al TOPE del cuerpo (call_tool los intersecta)
+--   export let SPEC be {...} -- {name, description, parameters (JSON Schema)} para el modelo
+--
+-- Para agregar una tool: crear lib/tools/x.syn con ese contrato y sumarla a las dos listas de abajo.
+-- La lista es EXPLÍCITA a propósito: Synsema no tiene `use` dinámico (sin supply chain), así que
+-- el allow-list de tools se lee en este archivo y se audita con `synsema check`.
+--
+-- Seguridad que ya pone el lenguaje: ninguna tool declara `net` → ninguna tool puede usar la red,
+-- aunque el entry la tenga para hablar con el LLM.
+
+use "./tools/common.syn" as common
+use "./tools/read.syn" as t_read
+use "./tools/write.syn" as t_write
+use "./tools/edit.syn" as t_edit
+use "./tools/ls.syn" as t_ls
+use "./tools/find.syn" as t_find
+use "./tools/grep.syn" as t_grep
+use "./tools/bash.syn" as t_bash
+use "./tools/skill.syn" as t_skill
+use "./tools/process.syn" as t_process
+use "./skills.syn" as skills
+
+-- la task de la tool skill (su SPEC está en tools/skill.syn)
+task skill_tool(name)
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    give skills.load(name)
+
+-- Allow-list nombre → task. El modelo solo devuelve NOMBRES; el loop decide si se ejecuta.
+export task registry()
+    give {
+        "read": t_read.tool,
+        "write": t_write.tool,
+        "edit": t_edit.tool,
+        "ls": t_ls.tool,
+        "find": t_find.tool,
+        "grep": t_grep.tool,
+        "bash": t_bash.tool,
+        "process": t_process.tool,
+        "skill": skill_tool
+    }
+
+export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, t_bash.SPEC, t_process.SPEC, t_skill.SPEC]
+
+-- Subconjuntos (para perfiles de agente): registry/catálogo filtrados por nombre.
+export task registry_subset(names)
+    let all be registry()
+    let out be {}
+    each n in names
+        when contains(all, n)
+            set out[n] to all[n]
+    give out
+
+export task catalog_subset(names)
+    give where(CATALOG, (s) => contains(names, s["name"]))
+
+-- Re-exports usados por los entries
+export task truncate(s, max)
+    give common.truncate(s, max)
+
+export task shell_config()
+    require env("LAMPSON_*")
+    require env("OS")
+    give t_bash.shell_config()

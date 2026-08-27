@@ -1,0 +1,58 @@
+-- lib/git.syn — estado de git del workspace (rama + archivos cambiados) para la UI
+use "./tools/common.syn" as c
+
+let G be "git"
+
+task run_git(args)
+    try
+        let r be run(G, args, 15, {"cwd": c.ROOT})
+        when r["exit_code"] != 0
+            give nothing
+        give r["stdout"]
+    recover err
+        give nothing
+
+-- {repo: bool, branch, changes: {path: "M"|"A"|"D"|"??"|"R"|…}, counts: {modified, added, deleted, untracked}}
+export task status()
+    require exec("git")
+    let out be run_git(["status", "--porcelain=v1", "-b", "--untracked-files=all"])
+    when out == nothing
+        give {"repo": false, "branch": "", "changes": {}, "counts": {"modified": 0, "added": 0, "deleted": 0, "untracked": 0}}
+    let branch be ""
+    let changes be {}
+    let counts be {"modified": 0, "added": 0, "deleted": 0, "untracked": 0}
+    each line in split(replace_text(out, "\r", ""), "\n")
+        when starts_with(line, "## ")
+            set branch to split(split(slice(line, 3, length(line)), "...")[0], " ")[0]
+        otherwise when length(line) > 3
+            let xy be slice(line, 0, 2)
+            let path be replace_text(trim(slice(line, 3, length(line))), "\"", "")
+            when contains(path, " -> ")
+                set path to split(path, " -> ")[1]
+            let code be trim(xy)
+            when xy == "??"
+                set code to "??"
+                set counts["untracked"] to counts["untracked"] + 1
+            otherwise when contains(xy, "D")
+                set code to "D"
+                set counts["deleted"] to counts["deleted"] + 1
+            otherwise when contains(xy, "A")
+                set code to "A"
+                set counts["added"] to counts["added"] + 1
+            otherwise
+                set code to "M"
+                set counts["modified"] to counts["modified"] + 1
+            set changes[path] to code
+    give {"repo": true, "branch": branch, "changes": changes, "counts": counts}
+
+-- una línea para el banner de terminal
+export task summary()
+    require exec("git")
+    let s be status()
+    when not s["repo"]
+        give "sin git"
+    let k be s["counts"]
+    let n be k["modified"] + k["added"] + k["deleted"] + k["untracked"]
+    when n == 0
+        give "git " + s["branch"] + " · limpio"
+    give "git " + s["branch"] + " · " + text(k["modified"]) + " modificados · " + text(k["untracked"]) + " nuevos · " + text(k["deleted"]) + " borrados"

@@ -1,0 +1,35 @@
+-- lib/tools/find.syn — buscar archivos por nombre (walk recursivo con glob mínimo)
+use "./common.syn" as c
+
+task walk(dir, pat, acc, depth)
+    when depth > 8
+        give acc
+    when length(acc) > 500
+        give acc
+    let out be acc
+    each e in list_dir(dir)
+        let full be dir + "/" + e["name"]
+        when e["is_dir"]
+            when not contains(c.IGNORED_DIRS, e["name"])
+                set out to walk(full, pat, out, depth + 1)
+        otherwise
+            when c.glob_match(e["name"], pat)
+                set out to append(out, c.unws(full))
+    give out
+
+export task tool(pattern, path)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let found be walk(c.ws(path), pattern, [], 0)
+    when length(found) == 0
+        give "no files matched " + pattern
+    give join(found, "\n")
+
+export let SPEC be {
+    "name": "find",
+    "description": "Find files by name pattern, recursively (skips .git, node_modules, build dirs). Pattern is a simple glob: '*.ts', 'test_*', '*config*', or an exact name. Returns paths relative to the workspace root, max 500.",
+    "parameters": {"type": "object", "properties": {
+        "pattern": {"type": "string"},
+        "path": {"type": "string", "description": "Directory to start from (default: workspace root)"}
+    }, "required": ["pattern"]}
+}

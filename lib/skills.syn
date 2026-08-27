@@ -1,0 +1,101 @@
+-- lib/skills.syn — skills: procedimientos en Markdown que el modelo carga bajo demanda 
+--
+-- Una skill = carpeta con SKILL.md y frontmatter YAML mínimo:
+--   ---
+--   name: deploy
+--   description: Cómo desplegar este proyecto (una línea; es lo que ve el modelo en el índice)
+--   ---
+--   ...instrucciones...
+--
+-- Se buscan en (prioridad de abajo hacia arriba, el nombre repetido gana el más específico):
+--   skills/<name>/SKILL.md                 -- del harness (enseñan a usar lampson y Synsema)
+--   workspace/skills/<name>/SKILL.md       -- del proyecto (committeables)
+--   workspace/.lampson/skills/<name>/SKILL.md  -- locales al proyecto (no committeadas)
+--
+-- El system prompt lleva SOLO el índice (name + description); el contenido entra al contexto
+-- cuando el modelo llama a la tool `skill(name)`. Así el prompt no crece con cada skill.
+
+let ROOTS be [
+    {"dir": "skills", "source": "harness"},
+    {"dir": "workspace/skills", "source": "project"},
+    {"dir": "workspace/.lampson/skills", "source": "local"}
+]
+
+task frontmatter(md)
+    -- devuelve {name, description, body}; sin frontmatter → name vacío
+    let out be {"name": "", "description": "", "body": md}
+    when not starts_with(md, "---")
+        give out
+    let rest be slice(md, 3, length(md))
+    let parts be split(rest, "\n---")
+    when length(parts) < 2
+        give out
+    let head be parts[0]
+    let body be join(slice(parts, 1, length(parts)), "\n---")
+    each line in split(head, "\n")
+        let l be trim(line)
+        when starts_with(l, "name:")
+            set out["name"] to trim(slice(l, 5, length(l)))
+        otherwise when starts_with(l, "description:")
+            set out["description"] to trim(slice(l, 12, length(l)))
+    set out["body"] to trim(body)
+    give out
+
+task scan_root(root, acc)
+    let out be acc
+    try
+        each e in list_dir(root["dir"])
+            when e["is_dir"]
+                let path be root["dir"] + "/" + e["name"] + "/SKILL.md"
+                try
+                    let fm be frontmatter(read_file(path))
+                    let name be when fm["name"] == "" then e["name"] otherwise fm["name"]
+                    set out[name] to {"name": name, "description": fm["description"], "path": path, "source": root["source"]}
+                recover err
+                    set out to out
+    recover err
+        give out
+    give out
+
+-- índice: map name → {name, description, path, source}
+export task index()
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let acc be {}
+    each r in ROOTS
+        set acc to scan_root(r, acc)
+    give acc
+
+-- sección del system prompt
+export task prompt_section(idx)
+    let names be sort_by(keys(idx), (n) => n)
+    when length(names) == 0
+        give ""
+    let lines be ["", "# Skills (load one with the `skill` tool when relevant — read it BEFORE doing that kind of task)"]
+    each n in names
+        let s be idx[n]
+        set lines to append(lines, "- " + n + " (" + s["source"] + "): " + s["description"])
+    give join(lines, "\n")
+
+export task load(name)
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let idx be index()
+    when not contains(idx, name)
+        raise("unknown skill '" + name + "'. Available: " + join(sort_by(keys(idx), (n) => n), ", "))
+    let s be idx[name]
+    let fm be frontmatter(read_file(s["path"]))
+    -- archivos hermanos de la skill (scripts, templates) para que el modelo sepa que existen
+    let dir be slice(s["path"], 0, length(s["path"]) - length("/SKILL.md"))
+    let extras be []
+    each e in list_dir(dir)
+        when e["name"] != "SKILL.md"
+            set extras to append(extras, dir + "/" + e["name"] + (when e["is_dir"] then "/" otherwise ""))
+    let head be "# skill: " + name + " (" + s["source"] + ", " + s["path"] + ")\n"
+    when length(extras) > 0
+        set head to head + "Files in this skill: " + join(extras, ", ") + "\n"
+    give head + "\n" + fm["body"]
