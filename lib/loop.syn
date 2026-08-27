@@ -24,9 +24,23 @@ task emit(on_event, kind, data)
     when on_event != nothing
         call(on_event, {"kind": kind, "data": data})
 
+-- Imágenes adjuntas (base64 en m["images"]) fuera del texto: para contar tokens y para el resumen
+-- de compaction se reemplazan por una marca; cada imagen se estima en ~1000 tokens.
+task without_images(messages)
+    let out be []
+    let n_images be 0
+    each m in messages
+        when contains(m, "images")
+            set n_images to n_images + length(m["images"])
+            set out to append(out, {"role": m["role"], "content": m["content"] + "\n[" + text(length(m["images"])) + " imagen(es) adjunta(s)]"})
+        otherwise
+            set out to append(out, m)
+    give {"messages": out, "images": n_images}
+
 -- Estimación barata de tokens (4 chars ≈ 1 token), suficiente para decidir compaction.
 export task estimate_tokens(messages)
-    give floor(length(json_encode(messages)) / 4)
+    let w be without_images(messages)
+    give floor(length(json_encode(w["messages"])) / 4) + w["images"] * 1000
 
 -- Compaction del contexto:
 -- resume todo menos el system y los últimos `keep_last` mensajes en un único mensaje user.
@@ -55,7 +69,7 @@ export task compact(cfg, messages, keep_last)
             set moving to false
     let old be slice(rest, 0, cut)
     let recent be slice(rest, cut, length(rest))
-    let transcript be json_encode(old)
+    let transcript be json_encode(without_images(old)["messages"])
     let req be [{"role": "system", "content": "You summarize agent conversations for context compaction."},
                 {"role": "user", "content": "Summarize this conversation between a user and a coding agent so the agent can continue seamlessly. Keep: the user's goals and constraints, decisions made, files touched (with what changed), current state, pending work, and any errors seen. Be concise but complete. Output plain text.\n\n" + truncate_text(transcript, 120000)}]
     let r be provider.chat_retry(cfg, req, [], 2)

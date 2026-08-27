@@ -39,6 +39,7 @@ use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
+use "./lib/settings.syn" as settings
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -132,7 +133,9 @@ let COMMANDS be [
     ["/yolo", "", "permisos: PERMITIR comandos peligrosos sin preguntar (los destructivos del sistema siguen bloqueados)"],
     ["/strict", "", "permisos: DENEGAR comandos peligrosos"],
     ["/model", "<nombre>", "cambiar el modelo para esta sesión (mismo proveedor y key)"],
-    ["/provider", "[nombre] [modelo]", "cambiar de proveedor (deepseek, anthropic, openai, minimax…); sin args lista cuáles tienen key (LAMPSON_API_KEY_<PROVEEDOR> en .env)"],
+    ["/provider", "[nombre] [modelo]", "cambiar de proveedor (deepseek, anthropic, openai, minimax…); sin args lista cuáles tienen key"],
+    ["/setup", "", "elegir proveedor, modelo y pegar la API key (queda en lampson/.lampson/config.json, local)"],
+    ["/delete", "<id>", "borrar una sesión guardada (ver /sessions)"],
     ["/config", "", "ver la configuración vigente (proveedor, modelo, límites, workspace)"],
     ["/files", "", "árbol completo del workspace"],
     ["/procs", "", "procesos que el agente dejó corriendo (servidores) y su estado"],
@@ -231,9 +234,48 @@ task skills_list()
         give "  (sin skills)"
     give join(out, "\n")
 
+-- ---------- onboarding ----------
+-- Primera vez (ningún proveedor con key) o /setup: elegir proveedor, modelo y pegar la key. Va a
+-- lampson/.lampson/config.json (local, gitignored) y vale para terminal y web. Sin TTY no pregunta.
+task setup_wizard()
+    print("")
+    print("  " + cyan("Configuremos el modelo.") + " Elegí un proveedor (número o nombre):")
+    let list be provider.providers()
+    each e in enumerate(list)
+        let p be e["item"]
+        print("  " + pad(text(e["index"] + 1) + ".", 4) + pad(p["name"], 12) + dim(p["model"]) + (when p["name"] == "ollama" then dim("  (local, sin key)") otherwise (when p["has_key"] then green("  ● key guardada") otherwise "")))
+    let choice be read_line("  proveedor: ")
+    when choice == nothing or trim(choice) == ""
+        print("  (sin cambios)")
+        give false
+    let name be lower(trim(choice))
+    when matches(name, "[0-9]+")
+        let i be floor(number(name)) - 1
+        when i >= 0 and i < length(list)
+            set name to list[i]["name"]
+    when not contains(provider.PRESETS, name)
+        print("  " + red("no conozco el proveedor " + name))
+        give false
+    let preset be provider.PRESETS[name]
+    let model be read_line("  modelo [" + preset["model"] + "]: ")
+    set model to when model == nothing then "" otherwise trim(model)
+    when name != "ollama"
+        print("  " + dim("la key se guarda en lampson/.lampson/config.json (solo en esta máquina); Enter para dejar la actual"))
+        let key be read_line("  API key de " + name + ": ")
+        when key != nothing and trim(key) != ""
+            settings.set_key(name, trim(key))
+    settings.set_default(name, model)
+    print("  " + green("listo") + " · " + name + " · " + (when model == "" then preset["model"] otherwise model) + dim("   (cambialo cuando quieras con /setup o /provider)"))
+    give true
+
 -- ---------- boot ----------
 
 let cfg be provider.config()
+when not provider.configured() and cfg["provider"] != "ollama"
+    print("")
+    print("  Bienvenido a Lampson. Todavía no hay ninguna API key configurada.")
+    when setup_wizard()
+        set cfg to provider.config()
 let env_info be agents.env_info(cfg)
 let profile be lower(env("LAMPSON_AGENT", "build"))
 task system_for(p)
@@ -361,6 +403,17 @@ while running
                 when not cfg["has_key"]
                     print("  " + yellow("ojo: no hay key para " + cfg["provider"] + " — agregá LAMPSON_API_KEY_" + upper(cfg["provider"]) + "=… en lampson\\.env (se usará LAMPSON_API_KEY, que probablemente falle)"))
                 print("  proveedor=" + cfg["provider"] + " · modelo=" + cfg["model"] + " · " + cfg["wire"] + " → " + cfg["base_url"] + dim("   (solo esta sesión; para fijarlo: LAMPSON_PROVIDER en .env)"))
+        otherwise when input == "/setup"
+            when setup_wizard()
+                set cfg to provider.config()
+        otherwise when starts_with(input, "/delete")
+            let id be trim(slice(input, 7, length(input)))
+            when id == ""
+                print("  uso: /delete <id>   (ver /sessions)")
+            otherwise when id == sid
+                print("  esa es la sesión actual; hacé /new primero")
+            otherwise
+                print("  " + session.delete(id))
         otherwise when input == "/new"
             set sid to session.new_id()
             set messages to [system_msg]

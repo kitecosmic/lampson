@@ -212,6 +212,18 @@
   textarea::placeholder { color:var(--ink-3); }
   textarea:focus { outline:none; }
   .crow { display:flex; align-items:center; gap:10px; margin-top:6px; }
+  /* imágenes pegadas: miniaturas en el composer y en el mensaje */
+  .attach { display:flex; gap:8px; flex-wrap:wrap; }
+  .attach:not(:empty) { margin:2px 0 8px; }
+  .attach .th, .user .th { position:relative; width:72px; height:72px; border:1px solid var(--rule); border-radius:var(--r); overflow:hidden; background:var(--paper-3); }
+  .attach .th img, .user .th img { width:100%; height:100%; object-fit:cover; display:block; }
+  .attach .th .rm { position:absolute; top:2px; right:2px; width:18px; height:18px; border-radius:50%; background:var(--paper); color:var(--ink-2); font:600 11px/18px var(--mono); text-align:center; cursor:pointer; border:1px solid var(--rule-2); }
+  .attach .th .rm:hover { color:var(--rubric); }
+  .attach .th .sz { position:absolute; left:0; right:0; bottom:0; background:rgba(0,0,0,.55); color:#fff; font:400 9.5px/1.4 var(--mono); text-align:center; }
+  .user .ims { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .user .th { width:120px; height:90px; cursor:zoom-in; }
+  .composer.drop { border-color:var(--accent); }
+  .attach .novision { flex-basis:100%; color:var(--amber); font:400 11.5px/1.5 var(--mono); }
   .crow .tools { color:var(--ink-3); font:400 11px/1 var(--mono); letter-spacing:.03em; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .crow .keys { color:var(--ink-3); font:400 10.5px/1 var(--mono); letter-spacing:.03em; }
   #send { width:34px; height:30px; padding:0; font-size:15px; display:inline-flex; align-items:center; justify-content:center; }
@@ -219,6 +231,29 @@
   form.busy #send { display:none; } form.busy #stop { display:inline-flex; align-items:center; gap:6px; }
   .hint { display:none; }
 
+  /* ventana de proveedor / modelo / key — la única "modal" de la app, misma gramática que las tarjetas */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal .box { width:min(560px, 92vw); background:var(--paper); border:1px solid var(--rule-2); border-radius:var(--r); padding:22px 24px 18px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  .modal .eyebrow { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--rubric); margin:0 0 10px; }
+  .modal h3 { font:600 1.45rem/1.2 var(--serif); letter-spacing:-.015em; margin:0 0 .4em; }
+  .modal .lead { color:var(--ink-2); margin:0 0 16px; font-size:14px; }
+  .modal .lead code { font:400 .88em/1.5 var(--mono); background:var(--paper-2); padding:.08em .3em; border-radius:2px; color:var(--ink); }
+  .plist { border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); max-height:40vh; overflow:auto; margin:0 0 14px; }
+  .plist .pr { display:flex; align-items:center; gap:10px; padding:7px 10px; cursor:pointer; font:400 12.5px/1.4 var(--mono); color:var(--ink-2); border-left:2px solid transparent; }
+  .plist .pr:hover { color:var(--ink); }
+  .plist .pr.on { color:var(--ink); border-left-color:var(--accent); background:var(--paper-2); }
+  .plist .pr b { width:110px; font-weight:600; color:var(--ink); }
+  .plist .pr .dm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-3); }
+  .plist .pr .k { font-size:11px; color:var(--str); }
+  .plist .pr .k.no { color:var(--ink-3); }
+  .modal label { display:flex; align-items:center; gap:12px; font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0 0 10px; }
+  .modal input { flex:1; font:400 13px/1.4 var(--mono); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:7px 10px; }
+  .modal input:focus { outline:none; border-color:var(--rule-2); box-shadow:0 0 0 3px var(--accent-bg); }
+  .modal .btns { display:flex; gap:8px; align-items:center; margin-top:14px; }
+  .modal .err { color:var(--rubric); font:400 12px/1.4 var(--mono); }
+  .s .del { margin-left:auto; color:var(--ink-3); visibility:hidden; font-size:11px; padding:0 4px; }
+  .s:hover .del { visibility:visible; }
+  .s .del:hover { color:var(--rubric); }
   @media (max-width:900px) { body { grid-template-columns:1fr; grid-template-areas:"top" "main"; } aside { display:none; } #log, form { padding-left:20px; padding-right:20px; } }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { transition:none !important; animation:none !important; } }
 </style>
@@ -238,8 +273,7 @@
     <span class="hpath" id="hpath"></span>
     <select id="agent" title="perfil de agente: qué tools puede usar"></select>
     <select id="perm" title="qué pasa con un comando peligroso (rm -rf, git push --force, sudo…)"><option value="ask">permisos: preguntar</option><option value="yolo">permisos: permitir todo</option><option value="strict">permisos: denegar</option></select>
-    <select id="provider" title="proveedor de LLM · una key por proveedor en lampson/.env: LAMPSON_API_KEY_<PROVEEDOR>"></select>
-    <span class="pill" id="model" title="modelo · clic para cambiarlo">…</span>
+    <span class="pill" id="model" title="proveedor y modelo · clic para cambiarlos o cargar una API key">…</span>
   </div>
 </header>
 <aside>
@@ -270,10 +304,22 @@
     <div id="log"></div>
     <div id="termpane"><div class="vh"><span class="st"></span><b>terminal</b><span id="tmeta"></span><span class="spacer"></span><span class="x" id="tclose">✕ cerrar</span></div><div id="xterm"></div></div>
   </div>
+  <div id="setup" class="modal" style="display:none">
+    <div class="box">
+      <p class="eyebrow">proveedor</p>
+      <h3 id="setupTitle">Modelo</h3>
+      <p class="lead" id="setupLead">Elegí con qué modelo trabaja el agente. La API key queda en <code>lampson/.lampson/config.json</code>, solo en esta máquina; nunca vuelve al navegador.</p>
+      <div class="plist" id="plist"></div>
+      <label>modelo <input id="setModel" spellcheck="false" autocomplete="off"></label>
+      <label>API key <input id="setKey" type="password" spellcheck="false" autocomplete="off" placeholder="pegala acá"></label>
+      <div class="btns"><button class="primary" id="setSave">Guardar</button><button id="setCancel">Cancelar</button><span class="err" id="setErr"></span></div>
+    </div>
+  </div>
   <div>
     <form id="f">
       <div class="composer">
-        <textarea id="in" rows="1" placeholder="¿Qué hacemos en este proyecto?  ·  !comando lo corrés vos"></textarea>
+        <div class="attach" id="attach"></div>
+        <textarea id="in" rows="1" placeholder="¿Qué hacemos en este proyecto?  ·  !comando lo corrés vos  ·  Ctrl+V pega una imagen"></textarea>
         <div class="crow"><span class="tools" id="agentHint2"></span><span class="keys">Enter envía · Shift+Enter salto</span><button id="stop" type="button" title="cortar el turno actual">■ detener</button><button id="send" class="primary" type="submit" title="enviar (Enter)">↑</button></div>
       </div>
     </form>
@@ -399,6 +445,54 @@ async function checkUpdate() {
   };
 }
 
+// ---- proveedor / modelo / API key (guardados en el servidor: .lampson/config.json; la key nunca vuelve) ----
+let setupSel = '';
+function paintModel() {
+  const p = (cfg.providers || []).find(x => x.name === cfg.provider);
+  $('#model').textContent = cfg.provider ? `${cfg.provider} · ${cfg.model || ''}` : '';
+  $('#model').classList.toggle('nokey', !!p && !p.has_key);
+  $('#model').style.display = cfg.provider ? '' : 'none';
+}
+function openSetup(onboarding) {
+  $('#setupTitle').textContent = onboarding ? 'Bienvenido a Lampson' : 'Modelo';
+  $('#setupLead').innerHTML = onboarding
+    ? 'Un agente con herramientas acotadas a este proyecto. Para empezar, elegí un proveedor y pegá su API key. Queda en <code>lampson/.lampson/config.json</code>, solo en esta máquina; nunca vuelve al navegador.'
+    : 'Elegí con qué modelo trabaja el agente (vale para la web y la terminal). La API key queda en <code>lampson/.lampson/config.json</code>, solo en esta máquina; nunca vuelve al navegador.';
+  $('#setCancel').style.display = onboarding ? 'none' : '';
+  $('#setErr').textContent = '';
+  setupSel = cfg.provider || (cfg.providers || [])[0]?.name || '';
+  const list = $('#plist'); list.innerHTML = '';
+  for (const p of (cfg.providers || [])) {
+    const r = document.createElement('div'); r.className = 'pr' + (p.name === setupSel ? ' on' : ''); r.dataset.name = p.name;
+    r.innerHTML = `<b>${esc(p.name)}</b><span class="dm">${esc(p.model)}</span><span class="k ${p.has_key ? '' : 'no'}">${p.name === 'ollama' ? 'sin key' : (p.has_key ? '● key guardada' : '○ sin key')}</span>`;
+    r.onclick = () => { setupSel = p.name; list.querySelectorAll('.pr').forEach(x => x.classList.toggle('on', x.dataset.name === p.name)); fillSetup(); };
+    list.appendChild(r);
+  }
+  fillSetup(); $('#setup').style.display = 'flex'; $('#setKey').focus();
+}
+function fillSetup() {
+  const p = (cfg.providers || []).find(x => x.name === setupSel) || {};
+  $('#setModel').value = setupSel === cfg.provider ? (cfg.model || p.model || '') : (p.model || '');
+  $('#setModel').placeholder = p.model || '';
+  $('#setKey').value = ''; $('#setKey').disabled = setupSel === 'ollama';
+  $('#setKey').placeholder = setupSel === 'ollama' ? 'ollama no necesita key' : (p.has_key ? 'hay una key guardada · pegá otra para reemplazarla' : 'pegala acá');
+}
+$('#setSave').onclick = async () => {
+  const body = { provider: setupSel, model: $('#setModel').value.trim() }; if ($('#setKey').value.trim()) body.key = $('#setKey').value.trim();
+  const p = (cfg.providers || []).find(x => x.name === setupSel) || {};
+  if (setupSel !== 'ollama' && !p.has_key && !body.key) { $('#setErr').textContent = 'falta la API key'; return; }
+  $('#setSave').disabled = true;
+  try {
+    const r = await fetch('/api/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); const d = await r.json();
+    if (!r.ok) { $('#setErr').textContent = d.error || ('error ' + r.status); return; }
+    cfg.providers = d.providers; cfg.provider = d.provider; cfg.model = d.model; cfg.vision = d.vision; cfg.configured = d.configured; paintModel(); paintAttach();
+    $('#setup').style.display = 'none'; if (log.querySelector('.empty')) empty();
+  } catch (e) { $('#setErr').textContent = e.message; } finally { $('#setSave').disabled = false; }
+};
+$('#setCancel').onclick = () => { $('#setup').style.display = 'none'; };
+$('#model').onclick = () => openSetup(false);
+$('#setKey').addEventListener('keydown', e => { if (e.key === 'Enter') $('#setSave').click(); });
+
 // ---- secciones del sidebar (acordeón) ----
 function setSec(name, open) {
   const s = document.querySelector(`.sec[data-sec="${name}"]`); if (!s) return;
@@ -427,15 +521,8 @@ async function loadCfg() {
   $('#proj').textContent = ws.split(/[\\/]/).filter(Boolean).pop() || 'workspace'; $('#proj').title = ws;
   $('#hpath').textContent = ws; $('#hpath').title = ws;
   $('#perm').value = localStorage.getItem('lampson.perm') || cfg.permission || 'ask'; $('#perm').onchange = () => localStorage.setItem('lampson.perm', $('#perm').value);
-  // proveedor + modelo: el default viene de .env; el usuario puede cambiarlos en caliente (se guardan en el navegador)
-  const ps = $('#provider'); ps.innerHTML = '';
-  for (const p of (cfg.providers || [])) { const o = document.createElement('option'); o.value = p.name; o.textContent = (p.has_key ? '' : '○ ') + p.name; o.title = p.has_key ? p.model : `sin key: LAMPSON_API_KEY_${p.name.toUpperCase()} en lampson/.env`; o.dataset.model = p.model; ps.appendChild(o); }
-  const savedP = localStorage.getItem('lampson.provider'); ps.value = (cfg.providers || []).some(p => p.name === savedP) ? savedP : (cfg.provider || '');
-  const modelFor = () => { if (ps.value === cfg.provider) return localStorage.getItem('lampson.model.' + ps.value) || cfg.model || ''; return localStorage.getItem('lampson.model.' + ps.value) || (ps.selectedOptions[0] || {}).dataset?.model || ''; };
-  const paintModel = () => { const p = (cfg.providers || []).find(x => x.name === ps.value); $('#model').textContent = modelFor(); $('#model').classList.toggle('nokey', !!p && !p.has_key); $('#model').title = (p && !p.has_key) ? `sin key para ${ps.value} · agregá LAMPSON_API_KEY_${ps.value.toUpperCase()} en lampson/.env` : 'modelo · clic para cambiarlo'; };
-  ps.onchange = () => { localStorage.setItem('lampson.provider', ps.value); paintModel(); };
-  $('#model').onclick = () => { const m = prompt(`modelo para ${ps.value}`, modelFor()); if (m === null) return; if (m.trim()) localStorage.setItem('lampson.model.' + ps.value, m.trim()); else localStorage.removeItem('lampson.model.' + ps.value); paintModel(); };
   paintModel();
+  if (cfg.configured === false) openSetup(true);
   const sel = $('#agent'); sel.innerHTML = '';
   for (const a of (cfg.agents || ['build'])) { const o = document.createElement('option'); o.value = a; o.textContent = 'agente: ' + a; sel.appendChild(o); }
   sel.value = localStorage.getItem('lampson.agent') || 'build';
@@ -562,7 +649,11 @@ async function loadSessions() {
   const box = $('#sessions'); box.innerHTML = '';
   $('#sessCount').textContent = r.sessions.length || '';
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
-  for (const s of r.sessions) { const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span>'; d.title = s.id; d.onclick = () => open(s.id); box.appendChild(d); }
+  for (const s of r.sessions) {
+    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
+    d.querySelector('.del').onclick = async (ev) => { ev.stopPropagation(); if (!confirm(`¿Borrar la sesión «${s.title || s.id}»?`)) return; await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); };
+    box.appendChild(d);
+  }
 }
 async function open(id) {
   session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log');
@@ -570,13 +661,51 @@ async function open(id) {
   const d = await r.json();
   const queue = []; // pasos sin resultado todavía, en orden (varias tool calls por turno)
   for (const m of d.messages) {
-    if (m.role === 'user') { queue.length = 0; add('user', esc(m.content)); }
+    if (m.role === 'user') { queue.length = 0; add('user', esc(m.content) + imagesHtml(m.images)); }
     else if (m.role === 'assistant') { if (m.content) add('assistant', md(m.content)); for (const c of (m.tool_calls || [])) { const el = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(c))}`); wireMore(el); queue.push(el); } }
     else if (m.role === 'tool') { const out = String(m.content); const bad = /^(ERROR|DENIED)/.test(out); const el = queue.shift() || add('step', '<span class="ic">→</span>'); const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   }
   loadSessions();
 }
 $('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); loadSessions(); };
+
+// ---- imágenes pegadas / arrastradas al composer ----
+// Se reducen en el navegador (lado mayor ≤ 1568 px, el límite útil de los modelos con visión) y viajan como
+// base64 en el POST; PNG si sigue liviano (capturas con texto), JPEG si no. Máximo 4 por mensaje.
+let attachments = []; // [{media_type, data(base64), preview(dataURL), bytes}]
+const MAX_IMAGES = 4, MAX_SIDE = 1568;
+function fmtBytes(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB'; }
+async function shrinkImage(file) {
+  const url = URL.createObjectURL(file); const img = new Image();
+  await new Promise((ok, ko) => { img.onload = ok; img.onerror = ko; img.src = url; }); URL.revokeObjectURL(url);
+  const scale = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
+  const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  let dataUrl = c.toDataURL('image/png'); let type = 'image/png';
+  if (dataUrl.length > 1.4 * 1048576) { dataUrl = c.toDataURL('image/jpeg', 0.85); type = 'image/jpeg'; }
+  const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  return { media_type: type, data, preview: dataUrl, bytes: Math.round(data.length * 0.75), w: c.width, h: c.height };
+}
+function paintAttach() {
+  const box = $('#attach'); box.innerHTML = '';
+  if (attachments.length && cfg.vision === false) { const w = document.createElement('div'); w.className = 'novision'; w.textContent = `${cfg.provider} · ${cfg.model} no acepta imágenes: el modelo recibirá solo una nota. Cambiá a un modelo con visión (clic en el modelo, arriba) para que la vea.`; box.appendChild(w); }
+  attachments.forEach((a, i) => { const d = document.createElement('div'); d.className = 'th'; d.title = `${a.w}×${a.h} · ${a.media_type} · ${fmtBytes(a.bytes)}`; d.innerHTML = `<img src="${a.preview}" alt=""><span class="rm" title="quitar">✕</span><span class="sz">${fmtBytes(a.bytes)}</span>`; d.querySelector('.rm').onclick = () => { attachments.splice(i, 1); paintAttach(); }; box.appendChild(d); });
+}
+async function addImages(files) {
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue;
+    if (attachments.length >= MAX_IMAGES) { add('meta', `máximo ${MAX_IMAGES} imágenes por mensaje`); break; }
+    try { attachments.push(await shrinkImage(f)); } catch (e) { add('denied', 'no pude leer la imagen: ' + esc(e.message)); }
+  }
+  paintAttach(); $('#in').focus();
+}
+$('#in').addEventListener('paste', e => { const files = [...(e.clipboardData?.items || [])].filter(i => i.kind === 'file').map(i => i.getAsFile()).filter(Boolean); if (files.length) { e.preventDefault(); addImages(files); } });
+const composer = document.querySelector('.composer');
+composer.addEventListener('dragover', e => { e.preventDefault(); composer.classList.add('drop'); });
+composer.addEventListener('dragleave', () => composer.classList.remove('drop'));
+composer.addEventListener('drop', e => { e.preventDefault(); composer.classList.remove('drop'); addImages([...e.dataTransfer.files]); });
+function imagesHtml(ims) { if (!ims || !ims.length) return ''; return '<div class="ims">' + ims.map(im => `<div class="th"><img src="data:${esc(im.media_type)};base64,${im.data}" alt="imagen adjunta"></div>`).join('') + '</div>'; }
+log.addEventListener('click', e => { const im = e.target.closest('.user .th img'); if (im) window.open(im.src, '_blank'); });
 
 // ---- chat (SSE) ----
 let aborter = null;
@@ -585,10 +714,11 @@ $('#stop').onclick = () => { if (aborter) aborter.abort(); };
 async function send(message) {
   setBusy(true); aborter = new AbortController();
   if (log.querySelector('.empty')) { log.innerHTML = ''; log.classList.remove('hero'); }
-  add('user', esc(message));
+  const images = attachments.map(a => ({ media_type: a.media_type, data: a.data, w: a.w, h: a.h })); attachments = []; paintAttach();
+  add('user', esc(message) + imagesHtml(images));
   const thinking = add('working', '<span class="dot"></span><span>pensando…</span>');
   try {
-    const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, message, agent: $('#agent').value || 'build', permission: $('#perm').value || 'ask', provider: $('#provider').value || '', model: $('#model').textContent || '' }), signal: aborter.signal });
+    const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, message, agent: $('#agent').value || 'build', permission: $('#perm').value || 'ask', images }), signal: aborter.signal });
     if (!res.ok || !res.body) { add('denied', 'error HTTP ' + res.status + ' ' + esc(await res.text())); }
     else {
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
@@ -612,14 +742,14 @@ function handle(chunk, thinking) {
   else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out); const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }
   else if (k === 'approval_result') { const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === d.id); if (el) el.querySelector('.btns').innerHTML = d.approved ? '<span style="color:var(--str)">✓ permitido</span>' : (d.timeout ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
-  else if (k === 'mode') { $('#agent').value = d.agent; $('#perm').value = d.permission; if (d.has_key === false) add('denied', `‼ no hay API key para ${esc(d.provider)}: agregá LAMPSON_API_KEY_${esc(String(d.provider).toUpperCase())}=… en lampson/.env y reiniciá el servidor`); }
+  else if (k === 'mode') { $('#agent').value = d.agent; $('#perm').value = d.permission; if (d.has_key === false) { add('denied', `‼ no hay API key para ${esc(d.provider)} — cargala en la ventana de modelo (clic en «${esc(d.provider)} · ${esc(d.model)}» arriba)`); } }
   else if (k === 'tool_denied') { const el = pending || add('step', '<span class="ic">✗</span>'); el.insertAdjacentHTML('beforeend', `<span class="denied"> ✗ ${esc(d.reason)}</span>`); }
   else if (k === 'error') add('denied', '‼ ' + esc(d));
   else if (k === 'compact') add('meta', '⧗ compactando contexto (~' + d.before + ' tokens)');
   else if (k === 'done') { if (d.stopped !== 'user_command') add('meta', `${d.steps} paso${d.steps === 1 ? '' : 's'} · ${d.usage.input + d.usage.output} tokens · ${d.stopped}`); }
   log.appendChild(thinking); $('#stage').scrollTop = $('#stage').scrollHeight;
 }
-$('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if (!t || busy) return; $('#in').value = ''; send(t); };
+$('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if ((!t && !attachments.length) || busy) return; $('#in').value = ''; send(t || '(imagen adjunta)'); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
 loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });

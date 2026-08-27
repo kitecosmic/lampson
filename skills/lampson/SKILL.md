@@ -42,6 +42,15 @@ watching a dev server), when something is denied for you (secrets, dangerous com
 should verify a result with their own eyes. Say exactly what to type, e.g. "run `!npm run dev` (or open
 the terminal button and run `npm run dev`), then tell me the URL".
 
+## Provider, model, keys, images
+- Provider/model/API keys live in `lampson/.lampson/config.json` (local); the user changes them with
+  `/setup`, `/provider`, or the `provider · model` pill in the web header. Never ask the user to paste a
+  key into the chat; point them there. Keys are sealed secrets: you cannot read or print them.
+- The user can paste images in the web UI. If your model has no vision, the image arrives as a text
+  note `[Image N WxHpx attached, but this model does not accept image input …]` — say so and suggest
+  a vision model instead of guessing what the image shows.
+- Sessions can be deleted (`/delete <id>`, or ✕ in the web sidebar).
+
 ## Network exposure
 - The web server listens on all interfaces but every `/api/*` route (and the terminal socket) only
   accepts loopback clients; others get 401 unless they present `LAMPSON_WEB_TOKEN`. If the user asks

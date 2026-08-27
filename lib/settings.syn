@@ -1,0 +1,60 @@
+-- lib/settings.syn — configuración editable en caliente: proveedor, modelo y API keys
+--
+-- Dónde: lampson/.lampson/config.json (gitignored, local). Lo escriben el onboarding de la terminal, la
+-- ventana "proveedor" de la web y /provider. .env sigue valiendo (LAMPSON_PROVIDER, LAMPSON_API_KEY[_X]):
+-- config.json gana sobre .env, y una key guardada acá se sella con as_secret() al leerla (nunca se
+-- devuelve al navegador ni se imprime; el frontend solo ve has_key).
+--
+-- Forma: {"provider": "deepseek", "model": "deepseek-chat", "keys": {"deepseek": "sk-…"}}
+
+let PATH be ".lampson/config.json"
+
+export task load()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    try
+        let doc be json_decode(read_file(PATH))
+        when not contains(doc, "keys")
+            set doc["keys"] to {}
+        give doc
+    recover err
+        give {"provider": "", "model": "", "keys": {}}
+
+export task save(doc)
+    require file(".lampson")
+    require file(".lampson/*")
+    write_file(PATH, json_encode(doc))
+    give true
+
+-- key guardada para un proveedor, como TEXTO ("" si no hay). Sellarla con as_secret antes de usarla.
+export task raw_key(name)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let doc be load()
+    when contains(doc["keys"], lower(name))
+        give text(doc["keys"][lower(name)])
+    give ""
+
+export task set_key(name, key)
+    require file(".lampson")
+    require file(".lampson/*")
+    let doc be load()
+    when trim(key) == ""
+        let keys be {}
+        each k in keys(doc["keys"])
+            when k != lower(name)
+                set keys[k] to doc["keys"][k]
+        set doc["keys"] to keys
+    otherwise
+        set doc["keys"][lower(name)] to trim(key)
+    save(doc)
+    give true
+
+export task set_default(name, model)
+    require file(".lampson")
+    require file(".lampson/*")
+    let doc be load()
+    set doc["provider"] to lower(name)
+    set doc["model"] to model
+    save(doc)
+    give true

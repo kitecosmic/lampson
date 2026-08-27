@@ -7,6 +7,8 @@ workspace
 notes/
 # memoria por proyecto del agente (local)
 memory/
+# copia de web.syn en otro puerto para probar sin tocar el servidor abierto
+web_test.syn
 # temporales
 tests/*.log
 tests/*.txt

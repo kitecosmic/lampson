@@ -46,6 +46,7 @@ use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
+use "./lib/settings.syn" as settings
 
 let APPROVAL_TIMEOUT be 180
 
@@ -103,7 +104,26 @@ serve on 8080
 
     route "GET /api/config" requires auth
         let cfg be provider.config()
-        give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "providers": provider.providers(), "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
+        give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "vision": provider.supports_vision(cfg), "providers": provider.providers(), "configured": provider.configured(), "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
+
+    -- proveedor/modelo por defecto y API keys → .lampson/config.json (local). La key nunca vuelve al cliente.
+    route "POST /api/settings" requires auth
+        expect body {provider: text}
+        let b be json of request
+        let name be lower(text(b["provider"]))
+        when not contains(provider.PRESETS, name)
+            give fail(400, "unknown provider " + name)
+        when contains(b, "key")
+            settings.set_key(name, text(b["key"]))
+        let model be when contains(b, "model") then trim(text(b["model"])) otherwise ""
+        settings.set_default(name, model)
+        let ncfg be provider.config_for(name, "")
+        give {"ok": true, "providers": provider.providers(), "provider": name, "model": ncfg["model"], "vision": provider.supports_vision(ncfg), "configured": provider.configured()}
+
+    route "POST /api/sessions/delete" requires auth
+        expect body {id: text}
+        let b be json of request
+        give {"result": session.delete(text(b["id"]))}
 
     route "GET /api/tree" requires auth
         give tree.tree(6)
@@ -243,7 +263,22 @@ serve on 8080
                 session.save(sid, messages, {"title": session.title_of(messages)})
                 send {"kind": "done", "data": {"text": "", "steps": 0, "usage": {"input": 0, "output": 0}, "stopped": "user_command", "session": sid}} as "event"
             otherwise
-                set messages to append(messages, {"role": "user", "content": message})
+                -- imágenes pegadas en la UI: [{media_type, data(base64)}] — el cliente ya las redujo; tope 5 MB por mensaje
+                let images be []
+                when contains(b, "images")
+                    let total be 0
+                    each im in b["images"]
+                        when contains(im, "data") and contains(im, "media_type")
+                            set total to total + length(im["data"])
+                            when total <= 5000000
+                                let entry be {"media_type": text(im["media_type"]), "data": text(im["data"])}
+                                when contains(im, "w") and contains(im, "h")
+                                    set entry to {"media_type": text(im["media_type"]), "data": text(im["data"]), "w": floor(number(im["w"])), "h": floor(number(im["h"]))}
+                                set images to append(images, entry)
+                let umsg be {"role": "user", "content": message}
+                when length(images) > 0
+                    set umsg to {"role": "user", "content": message, "images": images}
+                set messages to append(messages, umsg)
                 let result be loop.run_turn(ctx["cfg"], messages, ctx["opts"], emit)
                 session.save(sid, result["messages"], {"title": session.title_of(result["messages"])})
                 send {"kind": "done", "data": {"text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "session": sid}} as "event"

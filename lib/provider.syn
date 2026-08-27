@@ -22,6 +22,8 @@
 --   * Bajo `serve`, secret() debe resolverse DENTRO del handler (los globals cruzan redactados).
 --   * number("4096") es FLOAT → json_encode emite 4096.0 y las APIs lo rechazan ("invalid params"): floor() para enteros.
 
+use "./settings.syn" as settings
+
 let ANTHROPIC_VERSION be "2023-06-01"
 
 -- Tabla base URL por proveedor
@@ -43,39 +45,80 @@ export let PRESETS be {
 task key_var(name)
     give "LAMPSON_API_KEY_" + upper(name)
 
+-- proveedor por defecto: config.json (onboarding / UI) > LAMPSON_PROVIDER en .env > deepseek
+task env_default()
+    give lower(env("LAMPSON_PROVIDER", "deepseek"))
+
+export task default_provider()
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let s be settings.load()
+    when contains(s, "provider") and s["provider"] != "" and contains(PRESETS, lower(s["provider"]))
+        give lower(s["provider"])
+    give env_default()
+
 export task has_key(name)
     require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     when name == "ollama"
+        give true
+    when settings.raw_key(name) != ""
         give true
     when env(key_var(name), "") != ""
         give true
-    give name == lower(env("LAMPSON_PROVIDER", "deepseek")) and env("LAMPSON_API_KEY", "") != ""
+    give name == env_default() and env("LAMPSON_API_KEY", "") != ""
+
+-- ¿hay algún proveedor usable? (si no, la UI/terminal muestran el onboarding)
+export task configured()
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    each n in keys(PRESETS)
+        when n != "ollama" and has_key(n)
+            give true
+    give false
 
 -- [{name, model, wire, has_key, current}] para selectores
 export task providers()
     require env("LAMPSON_*")
-    let cur be lower(env("LAMPSON_PROVIDER", "deepseek"))
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let cur be default_provider()
     let out be []
     each n in sort_by(keys(PRESETS), (x) => x)
         set out to append(out, {"name": n, "model": PRESETS[n]["model"], "wire": PRESETS[n]["wire"], "has_key": has_key(n), "current": n == cur})
     give out
 
--- Configuración para un proveedor concreto (name "" = el de env/.env; model "" = el del preset o LAMPSON_MODEL).
+-- Configuración para un proveedor concreto (name "" = el por defecto; model "" = el guardado/preset).
 -- Llamar DENTRO del handler bajo serve.
 export task config_for(name, model)
     require env("LAMPSON_*")
     require secret("LAMPSON_*")
-    let default_name be lower(env("LAMPSON_PROVIDER", "deepseek"))
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let s be settings.load()
+    let default_name be default_provider()
     let n be when name == nothing or name == "" then default_name otherwise lower(name)
     let preset be when contains(PRESETS, n) then PRESETS[n] otherwise PRESETS["openai"]
-    let is_default be n == default_name
-    -- overrides de .env (WIRE/BASE_URL/MODEL) solo aplican al proveedor por defecto
-    let wire be when is_default then env("LAMPSON_WIRE", preset["wire"]) otherwise preset["wire"]
-    let base be when is_default then env("LAMPSON_BASE_URL", preset["base_url"]) otherwise preset["base_url"]
-    let m be when model != nothing and model != "" then model otherwise (when is_default then env("LAMPSON_MODEL", preset["model"]) otherwise preset["model"])
+    let is_env_default be n == env_default()
+    -- overrides de .env (WIRE/BASE_URL/MODEL) solo aplican al proveedor de .env
+    let wire be when is_env_default then env("LAMPSON_WIRE", preset["wire"]) otherwise preset["wire"]
+    let base be when is_env_default then env("LAMPSON_BASE_URL", preset["base_url"]) otherwise preset["base_url"]
+    let m be preset["model"]
+    when is_env_default
+        set m to env("LAMPSON_MODEL", m)
+    when n == default_name and contains(s, "model") and s["model"] != ""
+        set m to s["model"]
+    when model != nothing and model != ""
+        set m to model
+    -- key: guardada en config.json > LAMPSON_API_KEY_<P> > LAMPSON_API_KEY (solo para el proveedor de .env)
     let key be secret("LAMPSON_API_KEY", "ollama")
     when env(key_var(n), "") != ""
         set key to secret(key_var(n), "ollama")
+    when settings.raw_key(n) != ""
+        set key to as_secret(settings.raw_key(n), "api_key_" + n)
     give {
         "provider": n,
         "wire": wire,
@@ -90,6 +133,8 @@ export task config_for(name, model)
 export task config()
     require env("LAMPSON_*")
     require secret("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     give config_for("", "")
 
 task strip_slash(url)
@@ -117,8 +162,75 @@ task to_openai_messages(messages)
             set out to append(out, entry)
         otherwise when m["role"] == "tool"
             set out to append(out, {"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
+        otherwise when has_images(m)
+            -- multimodal: partes texto + image_url con data URL (OpenAI, DeepSeek, OpenRouter, Groq…)
+            let parts be [{"type": "text", "text": image_handle(m)}]
+            each im in m["images"]
+                set parts to append(parts, {"type": "image_url", "image_url": {"url": "data:" + im["media_type"] + ";base64," + im["data"]}})
+            set out to append(out, {"role": "user", "content": parts})
         otherwise
             set out to append(out, {"role": m["role"], "content": m["content"]})
+    give out
+
+-- ¿mensaje de usuario con imágenes adjuntas? ({images: [{media_type, data(base64), w?, h?}]} en el formato canónico)
+task has_images(m)
+    when m["role"] != "user"
+        give false
+    when not contains(m, "images")
+        give false
+    give length(m["images"]) > 0
+
+-- ¿El modelo acepta imágenes? Declarado, no adivinado: desconocido = no (así el usuario ve un aviso
+-- claro en vez de un 400). Overrides: "vision": true|false en .lampson/config.json.
+export task supports_vision(cfg)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let s be settings.load()
+    when contains(s, "vision")
+        give s["vision"] == true
+    let p be cfg["provider"]
+    let m be lower(cfg["model"])
+    when p == "anthropic"
+        give true
+    when p == "openai"
+        give starts_with(m, "gpt-4o") or starts_with(m, "gpt-4.1") or starts_with(m, "gpt-5") or starts_with(m, "o1") or starts_with(m, "o3") or starts_with(m, "o4")
+    when p == "openrouter" or p == "ollama"
+        give contains(m, "vision") or contains(m, "vl") or contains(m, "gpt-4o") or contains(m, "gpt-5") or contains(m, "claude") or contains(m, "gemini") or contains(m, "llava") or contains(m, "pixtral") or contains(m, "qwen2.5vl") or contains(m, "qwen3-vl")
+    when p == "grok"
+        give contains(m, "vision") or starts_with(m, "grok-4")
+    when p == "kimi"
+        give contains(m, "vision") or contains(m, "vl")
+    give false
+
+-- Modelo sin visión: la imagen se reemplaza por una nota que el modelo puede explicarle al usuario
+-- (patrón de opencode), en vez de reventar en el proveedor. El texto conserva el handle con dimensiones.
+task image_note(m)
+    let notes be []
+    each e in enumerate(m["images"])
+        let im be e["item"]
+        let dims be when contains(im, "w") then " " + text(floor(im["w"])) + "x" + text(floor(im["h"])) + "px" otherwise ""
+        set notes to append(notes, "[Image " + text(e["index"] + 1) + dims + " attached, but this model does not accept image input — tell the user to switch to a vision model (e.g. anthropic or gpt-4o) if they need it read]")
+    give m["content"] + "\n" + join(notes, "\n")
+
+-- Handle textual junto a cada imagen (patrón de hermes/deepseek): el modelo sabe cuántas hay y de qué tamaño.
+task image_handle(m)
+    let parts be []
+    each e in enumerate(m["images"])
+        let im be e["item"]
+        let dims be when contains(im, "w") then " " + text(floor(im["w"])) + "x" + text(floor(im["h"])) + "px" otherwise ""
+        set parts to append(parts, "[Image " + text(e["index"] + 1) + dims + "]")
+    give m["content"] + "\n" + join(parts, " ")
+
+-- Mensajes listos para el wire: imágenes fuera si el modelo no las acepta
+task prepare(cfg, messages)
+    when supports_vision(cfg)
+        give messages
+    let out be []
+    each m in messages
+        when has_images(m)
+            set out to append(out, {"role": "user", "content": image_note(m)})
+        otherwise
+            set out to append(out, m)
     give out
 
 task to_openai_tools(catalog)
@@ -193,6 +305,21 @@ task to_anthropic(messages)
                 when length(blocks) == 0
                     set blocks to append(blocks, {"type": "text", "text": "(sin contenido)"})
                 set out to append(out, {"role": "assistant", "content": blocks})
+            otherwise when has_images(m)
+                -- bloques image (base64) + texto; si el anterior era user de texto, se funde en bloques (roles alternados)
+                let blocks be []
+                each im in m["images"]
+                    set blocks to append(blocks, {"type": "image", "source": {"type": "base64", "media_type": im["media_type"], "data": im["data"]}})
+                set blocks to append(blocks, {"type": "text", "text": image_handle(m)})
+                let n be length(out)
+                let fused be false
+                when n > 0
+                    when out[n - 1]["role"] == "user"
+                        when text(out[n - 1]["content"]) == out[n - 1]["content"]
+                            set out to slice(out, 0, n - 1) + [{"role": "user", "content": [{"type": "text", "text": out[n - 1]["content"]}] + blocks}]
+                            set fused to true
+                when not fused
+                    set out to append(out, {"role": "user", "content": blocks})
             otherwise
                 -- dos `user` seguidos (p.ej. el pedido + la salida de un `!comando`) → uno solo
                 let n be length(out)
@@ -243,9 +370,12 @@ task chat_anthropic(cfg, messages, catalog)
 
 export task chat(cfg, messages, catalog)
     require net
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let ready be prepare(cfg, messages)
     when cfg["wire"] == "anthropic"
-        give chat_anthropic(cfg, messages, catalog)
-    give chat_openai(cfg, messages, catalog)
+        give chat_anthropic(cfg, ready, catalog)
+    give chat_openai(cfg, ready, catalog)
 
 -- Reintento simple con backoff para 429/5xx/red .
 export task chat_retry(cfg, messages, catalog, attempts)

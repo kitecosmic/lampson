@@ -67,6 +67,23 @@ export task list()
         give []
     give sort_by(out, (s) => 0 - number(replace_text(replace_text(s["id"], "-", ""), "test", "")))
 
+-- Borrar una sesión (no hay delete_file en el runtime: se usa el shell del sistema sobre la ruta fija).
+export task delete(id)
+    require exec
+    require env("OS")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when not matches(id, "[a-zA-Z0-9_-]{1,40}")
+        raise("invalid session id")
+    when not exists(id)
+        give "no existe " + id
+    let p be replace_text(path_of(id), "/", "\\")
+    when env("OS", "") == "Windows_NT"
+        run("cmd", ["/c", "del", "/q", p], 10)
+    otherwise
+        run("rm", ["-f", path_of(id)], 10)
+    give "borrada " + id
+
 -- Título = primer mensaje de usuario recortado.
 export task title_of(messages)
     each m in messages

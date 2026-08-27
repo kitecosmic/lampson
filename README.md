@@ -53,10 +53,16 @@ lampson            # terminal
 lampson --web      # http://127.0.0.1:8080
 ```
 
-**Switching providers**: keep one key per provider in `lampson/.env` — `LAMPSON_API_KEY_DEEPSEEK`,
-`LAMPSON_API_KEY_ANTHROPIC`, `LAMPSON_API_KEY_OPENAI`… (`LAMPSON_API_KEY` is the default provider's).
-Then switch on the fly: `/provider anthropic [model]` in the terminal, or the provider selector and
-the model pill in the web header. Nothing in `.env` needs to change; providers without a key show as `○`.
+**First run**: Lampson asks for a provider, a model and its API key — a short wizard in the terminal, a
+welcome window in the web UI. That goes to `lampson/.lampson/config.json` (local, gitignored) and is
+shared by both UIs. Change it any time: `/setup` or `/provider <name> [model]` in the terminal, or click
+the `provider · model` pill in the web header (one key per provider is kept, so switching is instant).
+`.env` still works for the same settings (`LAMPSON_PROVIDER`, `LAMPSON_API_KEY`, `LAMPSON_API_KEY_<PROVIDER>`).
+
+**Images**: paste (Ctrl+V) or drop images into the web composer; they are downscaled in the browser
+(≤ 1568 px) and sent inline. If the current model does not declare image input, you are warned before
+sending and the model receives a text note instead of a 400. Set `"vision": true` in `config.json` to
+override the built-in table for a model Lampson does not know.
 
 **Updating**: Lampson checks `origin/main` on start and tells you when a newer version exists (terminal
 banner, web header button). Run `lampson --update` (or `/update` in the REPL, or the web button) and
