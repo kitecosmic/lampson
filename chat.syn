@@ -295,7 +295,7 @@ task shell_argv(cmd)
 
 task run_interactive(cmd)
     let sh be shell_argv(cmd)
-    let p be proc_spawn(sh[0], sh[1], {"cwd": "workspace", "pty": true, "cols": 120, "rows": 40})
+    let p be proc_spawn(sh[0], sh[1], {"cwd": env("LAMPSON_WORKSPACE", "workspace"), "pty": true, "cols": 120, "rows": 40})
     let captured be []
     let partial be ""
     let alive be true

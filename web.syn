@@ -70,14 +70,20 @@ task as_text(x)
     give x
 
 -- shell para el terminal web: [cmd, args]. Windows: pwsh si está, si no PowerShell 5; unix: bash de login.
+-- En pwsh, los directorios de `ls` salen sin fondo azul (el default de $PSStyle se lee mal en un tema oscuro).
 task term_shell()
     when env("OS", "") == "Windows_NT"
         try
             run("pwsh", ["-NoLogo", "-Command", "exit"], 10)
-            give ["pwsh", ["-NoLogo"]]
+            give ["pwsh", ["-NoLogo", "-NoExit", "-Command", "$PSStyle.FileInfo.Directory = $PSStyle.Foreground.BrightBlue"]]
         recover err
             give ["powershell", ["-NoLogo"]]
     give ["bash", ["-l"]]
+
+-- cwd del terminal: la ruta REAL del proyecto (LAMPSON_WORKSPACE), no la junction ./workspace —
+-- así el prompt muestra dónde estás de verdad y coincide con el header.
+task term_cwd()
+    give env("LAMPSON_WORKSPACE", "workspace")
 
 task boot(profile, mode, ask_fn, pname, model)
     let cfg be provider.config_for(pname, model)
@@ -136,8 +142,8 @@ serve on 8080
     route "GET /api/term" requires auth
         socket
             let sh be term_shell()
-            let p be proc_spawn(sh[0], sh[1], {"cwd": "workspace", "pty": true, "cols": 120, "rows": 32})
-            ws_send(socket, "c" + json_encode({"type": "hello", "shell": sh[0], "pid": proc_stats(p)["pid"]}))
+            let p be proc_spawn(sh[0], sh[1], {"cwd": term_cwd(), "pty": true, "cols": 120, "rows": 32})
+            ws_send(socket, "c" + json_encode({"type": "hello", "shell": sh[0], "pid": proc_stats(p)["pid"], "cwd": term_cwd()}))
             let open be true
             while open
                 let ev be select({"ui": socket, "sh": p}, 600)

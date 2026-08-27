@@ -254,6 +254,10 @@
   .s .del { margin-left:auto; color:var(--ink-3); visibility:hidden; font-size:11px; padding:0 4px; }
   .s:hover .del { visibility:visible; }
   .s .del:hover { color:var(--rubric); }
+  .del.ask, .s:hover .del.ask { visibility:visible; color:var(--ink-2); font:400 11px/1.4 var(--mono); white-space:nowrap; }
+  .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
+  .del.ask .no { color:var(--ink-2); cursor:pointer; }
+  .del.ask .yes:hover, .del.ask .no:hover { text-decoration:underline; text-underline-offset:.18em; }
   @media (max-width:900px) { body { grid-template-columns:1fr; grid-template-areas:"top" "main"; } aside { display:none; } #log, form { padding-left:20px; padding-right:20px; } }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { transition:none !important; animation:none !important; } }
 </style>
@@ -418,7 +422,7 @@ function openTerm() {
     const s = String(e.data);
     if (s[0] === 'o') { term.write(s.slice(1)); return; }
     let m; try { m = JSON.parse(s.slice(1)); } catch { return; }
-    if (m.type === 'hello') $('#tmeta').textContent = `${m.shell} · pid ${m.pid} · cwd = workspace`;
+    if (m.type === 'hello') $('#tmeta').textContent = `${m.shell} · pid ${m.pid} · ${m.cwd || 'workspace'}`;
     if (m.type === 'exit') { term.write(`\r\n\x1b[2m[shell terminado · código ${m.code}]\x1b[0m\r\n`); $('#termpane').classList.remove('live'); }
   };
   termWs.onclose = () => { $('#termpane').classList.remove('live'); if ($('#tmeta').textContent === 'conectando…') $('#tmeta').textContent = 'sin conexión'; };
@@ -492,6 +496,16 @@ $('#setSave').onclick = async () => {
 $('#setCancel').onclick = () => { $('#setup').style.display = 'none'; };
 $('#model').onclick = () => openSetup(false);
 $('#setKey').addEventListener('keydown', e => { if (e.key === 'Enter') $('#setSave').click(); });
+
+// ---- confirmación en línea (sin confirm() del navegador): el ✕ se convierte en «¿borrar? sí · no» ----
+function inlineConfirm(el, label, onYes) {
+  const prev = el.innerHTML; el.classList.add('ask');
+  el.innerHTML = `<span class="q">${esc(label)}</span> <span class="yes">sí</span> · <span class="no">no</span>`;
+  const restore = () => { el.innerHTML = prev; el.classList.remove('ask'); };
+  el.querySelector('.yes').onclick = (ev) => { ev.stopPropagation(); onYes(); };
+  el.querySelector('.no').onclick = (ev) => { ev.stopPropagation(); restore(); };
+  setTimeout(() => { if (el.classList.contains('ask')) restore(); }, 6000);
+}
 
 // ---- secciones del sidebar (acordeón) ----
 function setSec(name, open) {
@@ -613,7 +627,7 @@ async function loadPorts() {
     const d = document.createElement('div'); d.className = 'p'; d.style.cursor = 'default'; d.title = `pid ${p.pid}\n${p.command || '(línea de comando no disponible)'}`;
     const what = p.command ? p.command.replace(/^"?[A-Za-z]:\\[^"]*\\([^"\\]+)"?/, '$1') : p.name;
     d.innerHTML = `<a class="port" href="http://127.0.0.1:${p.port}" target="_blank" rel="noopener" title="abrir http://127.0.0.1:${p.port} en otra pestaña">:${p.port}</a><span class="cm">${esc(what)}</span><button title="matar este proceso (pid ${p.pid}; no lo gestiona lampson)">✕</button>`;
-    d.querySelector('button').onclick = async () => { if (!confirm(`¿Matar ${p.name} (pid ${p.pid}) que escucha en :${p.port}?`)) return; await fetch('/api/ports/kill', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pid: p.pid }) }); loadPorts(); };
+    const kb = d.querySelector('button'); kb.onclick = () => { const holder = document.createElement('span'); holder.className = 'del'; kb.replaceWith(holder); inlineConfirm(holder, `¿matar pid ${p.pid}?`, async () => { await fetch('/api/ports/kill', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pid: p.pid }) }); loadPorts(); }); setTimeout(() => { if (!holder.classList.contains('ask')) loadPorts(); }, 6100); };
     box.appendChild(d);
   }
 }
@@ -651,7 +665,7 @@ async function loadSessions() {
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
   for (const s of r.sessions) {
     const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
-    d.querySelector('.del').onclick = async (ev) => { ev.stopPropagation(); if (!confirm(`¿Borrar la sesión «${s.title || s.id}»?`)) return; await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); };
+    d.querySelector('.del').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del'), '¿borrar?', async () => { await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); }); };
     box.appendChild(d);
   }
 }
