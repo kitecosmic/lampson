@@ -14,8 +14,13 @@ export task load()
     require file.read(".lampson/*")
     try
         let doc be json_decode(read_file(PATH))
+        -- claves siempre presentes: quien lee no tiene que chequear (y `and` no cortocircuita)
         when not contains(doc, "keys")
             set doc["keys"] to {}
+        when not contains(doc, "provider")
+            set doc["provider"] to ""
+        when not contains(doc, "model")
+            set doc["model"] to ""
         give doc
     recover err
         give {"provider": "", "model": "", "keys": {}}

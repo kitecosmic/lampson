@@ -54,8 +54,9 @@ export task default_provider()
     require file.read(".lampson")
     require file.read(".lampson/*")
     let s be settings.load()
-    when contains(s, "provider") and s["provider"] != "" and contains(PRESETS, lower(s["provider"]))
-        give lower(s["provider"])
+    when s["provider"] != ""
+        when contains(PRESETS, lower(s["provider"]))
+            give lower(s["provider"])
     give env_default()
 
 export task has_key(name)
@@ -109,8 +110,9 @@ export task config_for(name, model)
     let m be preset["model"]
     when is_env_default
         set m to env("LAMPSON_MODEL", m)
-    when n == default_name and contains(s, "model") and s["model"] != ""
-        set m to s["model"]
+    when n == default_name
+        when s["model"] != ""
+            set m to s["model"]
     when model != nothing and model != ""
         set m to model
     -- key: guardada en config.json > LAMPSON_API_KEY_<P> > LAMPSON_API_KEY (solo para el proveedor de .env)
@@ -182,6 +184,7 @@ task has_images(m)
 
 -- ¿El modelo acepta imágenes? Declarado, no adivinado: desconocido = no (así el usuario ve un aviso
 -- claro en vez de un 400). Overrides: "vision": true|false en .lampson/config.json.
+-- Verificado 2026-08-27: MiniMax-M3 (wire anthropic) describe imágenes; deepseek-chat y kimi-k2 no las aceptan.
 export task supports_vision(cfg)
     require file.read(".lampson")
     require file.read(".lampson/*")
@@ -190,8 +193,10 @@ export task supports_vision(cfg)
         give s["vision"] == true
     let p be cfg["provider"]
     let m be lower(cfg["model"])
-    when p == "anthropic"
+    when p == "anthropic" or p == "minimax"
         give true
+    when p == "groq"
+        give contains(m, "llama-4") or contains(m, "vision")
     when p == "openai"
         give starts_with(m, "gpt-4o") or starts_with(m, "gpt-4.1") or starts_with(m, "gpt-5") or starts_with(m, "o1") or starts_with(m, "o3") or starts_with(m, "o4")
     when p == "openrouter" or p == "ollama"

@@ -62,8 +62,10 @@ the `provider · model` pill in the web header (one key per provider is kept, so
 **Images**: paste (Ctrl+V) or drop images into the web composer; they are downscaled in the browser
 (≤ 1568 px) and sent inline. In the terminal, `/paste` attaches the image on the clipboard (copy a
 screenshot first) and `/image <path>` a file; they go with your next message (`📎2 ❯`). If the current model does not declare image input, you are warned before
-sending and the model receives a text note instead of a 400. Set `"vision": true` in `config.json` to
-override the built-in table for a model Lampson does not know.
+sending and the model receives a text note instead of a 400. The table is `supports_vision` in
+`lib/provider.syn` (anthropic, minimax, gpt-4o/4.1/5, o-series, groq llama-4, and models named
+`*vision*`/`*vl*` on openrouter/ollama/kimi/grok); set `"vision": true` in `config.json` to override
+it for a model Lampson does not know — or `false` to force the text note.
 
 **Updating**: Lampson checks `origin/main` on start and tells you when a newer version exists (terminal
 banner, web header button). Run `lampson --update` (or `/update` in the REPL, or the web button) and
