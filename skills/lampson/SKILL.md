@@ -46,7 +46,9 @@ the terminal button and run `npm run dev`), then tell me the URL".
 - Provider/model/API keys live in `lampson/.lampson/config.json` (local); the user changes them with
   `/setup`, `/provider`, or the `provider · model` pill in the web header. Never ask the user to paste a
   key into the chat; point them there. Keys are sealed secrets: you cannot read or print them.
-- The user can paste images in the web UI. If your model has no vision, the image arrives as a text
+- The user can paste images in the web UI, or in the terminal with `/paste` (clipboard) and
+  `/image <path>`. If they say "look at this screenshot" in the terminal, tell them to copy it and type
+  `/paste`, then send their message. If your model has no vision, the image arrives as a text
   note `[Image N WxHpx attached, but this model does not accept image input …]` — say so and suggest
   a vision model instead of guessing what the image shows.
 - Sessions can be deleted (`/delete <id>`, or ✕ in the web sidebar).

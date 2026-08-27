@@ -135,6 +135,8 @@ let COMMANDS be [
     ["/model", "<nombre>", "cambiar el modelo para esta sesión (mismo proveedor y key)"],
     ["/provider", "[nombre] [modelo]", "cambiar de proveedor (deepseek, anthropic, openai, minimax…); sin args lista cuáles tienen key"],
     ["/setup", "", "elegir proveedor, modelo y pegar la API key (queda en lampson/.lampson/config.json, local)"],
+    ["/paste", "", "adjuntar la imagen del portapapeles al próximo mensaje (copiá una captura y escribí /paste)"],
+    ["/image", "<ruta>", "adjuntar una imagen (png/jpg/gif/webp) al próximo mensaje; /image sin ruta muestra o quita las pendientes"],
     ["/delete", "<id>", "borrar una sesión guardada (ver /sessions)"],
     ["/config", "", "ver la configuración vigente (proveedor, modelo, límites, workspace)"],
     ["/files", "", "árbol completo del workspace"],
@@ -268,6 +270,41 @@ task setup_wizard()
     print("  " + green("listo") + " · " + name + " · " + (when model == "" then preset["model"] otherwise model) + dim("   (cambialo cuando quieras con /setup o /provider)"))
     give true
 
+-- ---------- imágenes en el REPL ----------
+-- Una terminal no puede pegar una imagen, así que se lee del portapapeles (/paste) o de un archivo
+-- (/image ruta) con un script del sistema que devuelve "media_type|w|h|base64". Quedan pendientes
+-- hasta el próximo mensaje al agente (mismo formato canónico que la web: m["images"]).
+let pending_images be []
+
+task grab_image(mode, path)
+    let r be nothing
+    when env("OS", "") == "Windows_NT"
+        set r to run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "lib/tools/img.ps1", mode, path], 60)
+    otherwise
+        set r to run("bash", ["lib/tools/img.sh", mode, path], 60)
+    let line be trim(replace_text(r["stdout"], "\r", ""))
+    when line == "" or starts_with(line, "ERROR|")
+        give {"error": when line == "" then trim(r["stderr"]) otherwise slice(line, 6, length(line))}
+    let parts be split(line, "|")
+    when length(parts) < 4
+        give {"error": "salida inesperada del lector de imágenes"}
+    give {"media_type": parts[0], "w": floor(number(parts[1])), "h": floor(number(parts[2])), "data": parts[3]}
+
+task attach_image(mode, path)
+    when length(pending_images) >= 4
+        print("  " + yellow("máximo 4 imágenes por mensaje (/image para quitarlas)"))
+        give false
+    let im be grab_image(mode, path)
+    when contains(im, "error")
+        print("  " + red("✗ " + im["error"]))
+        give false
+    set pending_images to append(pending_images, im)
+    let vis be provider.supports_vision(cfg)
+    print("  " + green("📎 imagen " + text(length(pending_images)) + " adjunta") + dim(" · " + text(im["w"]) + "x" + text(im["h"]) + " · " + text(floor(length(im["data"]) * 3 / 4 / 1024)) + " KB · se manda con tu próximo mensaje"))
+    when not vis
+        print("  " + yellow("ojo: " + cfg["provider"] + " · " + cfg["model"] + " no acepta imágenes; el modelo recibirá solo una nota. Cambiá con /provider a uno con visión (anthropic, gpt-4o…)"))
+    give true
+
 -- ---------- boot ----------
 
 let cfg be provider.config()
@@ -359,7 +396,7 @@ let total_usage be {"input": 0, "output": 0}
 let mode be opts["permission_mode"]
 let running be true
 while running
-    let line be read_line("\n" + cyan("❯ "))
+    let line be read_line("\n" + (when length(pending_images) > 0 then dim("📎" + text(length(pending_images)) + " ") otherwise "") + cyan("❯ "))
     when line == nothing
         set running to false
     otherwise
@@ -406,6 +443,21 @@ while running
         otherwise when input == "/setup"
             when setup_wizard()
                 set cfg to provider.config()
+        otherwise when input == "/paste"
+            attach_image("clip", "")
+        otherwise when starts_with(input, "/image")
+            let p be trim(slice(input, 6, length(input)))
+            when p == ""
+                when length(pending_images) == 0
+                    print("  sin imágenes pendientes · uso: /image <ruta>  o  /paste")
+                otherwise
+                    print("  " + text(length(pending_images)) + " imagen(es) pendiente(s) — se mandan con tu próximo mensaje. ¿Quitarlas? (s/N)")
+                    let a be read_line("  ")
+                    when a != nothing and lower(trim(a)) == "s"
+                        set pending_images to []
+                        print("  quitadas")
+            otherwise
+                attach_image("file", p)
         otherwise when starts_with(input, "/delete")
             let id be trim(slice(input, 7, length(input)))
             when id == ""
@@ -502,7 +554,11 @@ while running
                 set messages to append(messages, {"role": "user", "content": "[The user ran this command in the shell themselves]\n$ " + cmd + "\n" + tools.truncate(out, 6000)})
                 session.save(sid, messages, {"title": session.title_of(messages)})
         otherwise
-            set messages to append(messages, {"role": "user", "content": input})
+            when length(pending_images) > 0
+                set messages to append(messages, {"role": "user", "content": input, "images": pending_images})
+                set pending_images to []
+            otherwise
+                set messages to append(messages, {"role": "user", "content": input})
             let result be loop.run_turn(cfg, messages, opts, on_event)
             set messages to result["messages"]
             set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}

@@ -60,7 +60,8 @@ the `provider · model` pill in the web header (one key per provider is kept, so
 `.env` still works for the same settings (`LAMPSON_PROVIDER`, `LAMPSON_API_KEY`, `LAMPSON_API_KEY_<PROVIDER>`).
 
 **Images**: paste (Ctrl+V) or drop images into the web composer; they are downscaled in the browser
-(≤ 1568 px) and sent inline. If the current model does not declare image input, you are warned before
+(≤ 1568 px) and sent inline. In the terminal, `/paste` attaches the image on the clipboard (copy a
+screenshot first) and `/image <path>` a file; they go with your next message (`📎2 ❯`). If the current model does not declare image input, you are warned before
 sending and the model receives a text note instead of a 400. Set `"vision": true` in `config.json` to
 override the built-in table for a model Lampson does not know.
 
