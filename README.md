@@ -62,7 +62,7 @@ docker run --rm -p 8080:8080 -v "$PWD:/lampson/workspace" \
 Or from a clone: `docker build -t lampson .` and use `lampson` as the image. `docker-compose.yml`
 does the same with persistent sessions and memory.
 
-> Status: developed and tested on Windows 11; the Docker image builds from Debian. The Linux/macOS
+> Status: developed and tested on Windows 11; the Docker image (Ubuntu 24.04) is built by CI. The Linux/macOS
 > installer is written but not yet exercised on a real machine — issues welcome.
 
 ## Use
