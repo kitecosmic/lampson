@@ -34,10 +34,13 @@ description: How this harness works — tools, workspace mount, permissions, age
 ## When you need the USER to run something
 The user can run any command themselves from the chat by prefixing it with `!` — e.g. `!npm run dev`,
 `!cat .env`, `!git push`. Their command runs without the permission policy and its output is added to
-your context automatically. Offer this when: a command needs an interactive terminal (dev servers you
-want them to watch, `nano`, logins), when something is denied for you (secrets, dangerous commands), or
-when they should verify a result with their own eyes. Say exactly what to type, e.g. "run `!npm run dev`
-in a second terminal, then tell me the URL".
+your context automatically. In the terminal REPL, `!` runs inside a real pseudo-terminal: prompts
+(`y/N`, passwords, `npm init`) work — the user answers them inline. In the web UI there is also a
+**full interactive terminal** (header button `>_ terminal`, a shell with cwd = workspace, opens in the
+center pane like a file). Offer these when: a command needs an interactive terminal (logins, TUIs,
+watching a dev server), when something is denied for you (secrets, dangerous commands), or when they
+should verify a result with their own eyes. Say exactly what to type, e.g. "run `!npm run dev` (or open
+the terminal button and run `npm run dev`), then tell me the URL".
 
 ## Agents / modes
 - `build` (default): all tools. `plan`: read-only, produce a numbered plan. `review`: read + run

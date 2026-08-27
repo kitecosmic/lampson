@@ -1,13 +1,14 @@
 ---
 name: synsema
-description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, and the runtime traps that cost hours. Load before touching any .syn file.
+description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, live processes / pseudo-terminals, and the runtime traps that cost hours. Load before touching any .syn file.
 ---
 
-# Synsema quick reference (v0.6.7)
+# Synsema quick reference (v0.6.8)
 
 ## Dev loop
 - `synsema check file.syn` (parse + validates every `use` import) · `synsema run file.syn` ·
-  `synsema test file.syn` (runs `test "..."` blocks) · `synsema serve file.syn` (HTTP server).
+  `synsema test file.syn` (runs `test "..."` blocks) · `synsema serve file.syn` (HTTP server) ·
+  `synsema update` (self-update; then refresh the AI skill with the command it prints).
 - Errors carry `file:line` and a suggestion. Read them; they are usually right.
 
 ## Syntax reflexes (Python → Synsema)
@@ -28,6 +29,18 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   (least-privilege). Plain calls run with the program's ambient capabilities.
 - `sandbox` blocks strip everything. `secret("K")` is opaque: pass it as a header, never print it.
 
+## Processes
+- `run(cmd, [args], timeout?, {cwd, env, stdin})` → `{exit_code, stdout, stderr}`; captures everything,
+  returns at the end; non-zero exit is DATA (only timeout / can't-launch raise).
+- Live process (v0.6.7+): `let p be proc_spawn(cmd, [args], {cwd})` then `proc_recv(p, secs)` →
+  `{type: "stdout"|"stderr"|"exit", data}` or `nothing`; `proc_send(p, text)`, `proc_kill(p)`, `proc_close(p)`.
+  `select({"a": handle, "b": handle}, secs)` waits on processes, sockets and bus at once (`ev["name"]`).
+- **Pseudo-terminal (v0.6.8+)**: `proc_spawn(cmd, args, {"pty": true, "cols": 120, "rows": 40})` for
+  y/N prompts, passwords, REPLs, TUIs. One `stdout` stream of raw bytes with ANSI (`line_mode` off);
+  `strip_ansi(text)` shows what a human sees; keys go with `proc_send` (Enter = `"\r"`, Ctrl-C = `bytes([3])`);
+  `proc_resize(p, cols, rows)`. Web terminal = `socket` route + pty in one `select` (xterm.js renders).
+- Every live process dies with its interpreter (end of request / program) — no orphans.
+
 ## Traps verified on this machine (do not fight them)
 - `file("./*")` behaves like `"*"` (whole disk). Use a named dir scope: `file("workspace/*")`.
 - `http_post(url, MAP)` sends `text(map)`, not JSON → `http_post(url, json_encode(body), {"Content-Type": "application/json"})`.
@@ -37,6 +50,7 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
 - A task named `run` shadows the builtin `run` (infinite recursion).
 - Reserved words that break variable/param names: `reason task ask stop decide analyze generate show approve confirm`.
 - `and`/`or` do NOT short-circuit → nest `when` before indexing.
-- No `merge`: add a key with `set m["k"] to v`. No `append_file`: read + write (atomic).
+- No `merge`: add a key with `set m["k"] to v`. No `append_file`: read + write (atomic; parents created).
+- Runtime error messages are Capitalized (`Not a directory: …`) and `contains` is case-sensitive → compare `lower(text(err))`.
 - Under `serve`: resolve `secret()` inside the handler; define tasks before `serve on`; `send` only inside `stream`.
 - `.env` values override shell-exported ones if set there.

@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <title>Lampson</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/vendor/xterm.css">
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/xterm-addon-fit.js"></script>
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   /* Misma dirección que docs.synsema.com: tinta sobre papel, una superfamilia (IBM Plex) en dos
@@ -119,13 +122,21 @@
   #log { padding:26px 40px 30px; max-width:920px; }
   #log.hero { max-width:none; min-height:100%; display:flex; align-items:center; padding:20px 40px; }
   #viewer { display:none; padding:0; }
-  #viewer .vh { position:sticky; top:0; display:flex; gap:12px; align-items:center; padding:9px 16px; background:var(--paper-3); border-bottom:1px solid var(--rule); font:400 11.5px/1 var(--mono); color:var(--ink-3); letter-spacing:.03em; }
-  #viewer .vh b { color:var(--ink); font-weight:400; }
-  #viewer .vh .x { cursor:pointer; color:var(--ink-3); }
-  #viewer .vh .x:hover { color:var(--ink); }
+  .vh { position:sticky; top:0; display:flex; gap:12px; align-items:center; padding:9px 16px; background:var(--paper-3); border-bottom:1px solid var(--rule); font:400 11.5px/1 var(--mono); color:var(--ink-3); letter-spacing:.03em; }
+  .vh b { color:var(--ink); font-weight:400; }
+  .vh .x { cursor:pointer; color:var(--ink-3); }
+  .vh .x:hover { color:var(--ink); }
   #viewer pre { margin:0; padding:14px 18px; font:400 12.5px/1.62 var(--mono); tab-size:4; }
   #viewer pre .ln { display:inline-block; width:4ch; margin-right:16px; color:var(--ink-3); text-align:right; user-select:none; }
   #viewer pre.log { color:var(--ink-2); white-space:pre-wrap; }
+  /* terminal real (xterm.js sobre un pty del servidor) — ocupa la zona central como un archivo abierto */
+  #termpane { display:none; height:100%; flex-direction:column; }
+  #termpane .vh { position:static; }
+  #termpane .vh .st { width:7px; height:7px; border-radius:50%; background:var(--ink-3); }
+  #termpane.live .vh .st { background:var(--str); }
+  #xterm { flex:1; min-height:0; padding:10px 14px; background:var(--paper); }
+  #xterm .xterm { height:100%; }
+  #xterm .xterm-viewport { background:transparent !important; }
 
   /* mensajes: el del usuario es una nota al margen (como el blockquote de la doc), el del agente es prosa */
   .msg { margin:0 0 16px; }
@@ -215,6 +226,7 @@
     <span class="brand">lampson<span class="proj" id="proj">…</span></span>
     <span class="spacer"></span>
     <button class="hbtn upd" id="update" style="display:none"></button>
+    <button class="hbtn" id="term" title="abrir un terminal real (shell en el workspace)">&gt;_ terminal</button>
     <button class="hbtn" id="new" title="empezar una conversación nueva">+ sesión</button>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
   </div>
@@ -252,6 +264,7 @@
   <div id="stage">
     <div id="viewer"><div class="vh"><b id="vpath"></b><span id="vmeta"></span><span class="spacer"></span><span class="x" id="vclose">✕ cerrar</span></div><pre id="vbody"></pre></div>
     <div id="log"></div>
+    <div id="termpane"><div class="vh"><span class="st"></span><b>terminal</b><span id="tmeta"></span><span class="spacer"></span><span class="x" id="tclose">✕ cerrar</span></div><div id="xterm"></div></div>
   </div>
   <div>
     <form id="f">
@@ -282,7 +295,7 @@ function md(src) { // Markdown mínimo: code fences, inline code, bold, headers,
   }).join('');
   return h.replace(/(\d+)/g, (m, i) => blocks[+i]);
 }
-function add(cls, html) { $('#viewer').style.display = 'none'; log.style.display = ''; log.classList.remove('hero'); const d = document.createElement('div'); d.className = 'msg ' + cls; d.innerHTML = html; log.appendChild(d); $('#stage').scrollTop = $('#stage').scrollHeight; return d; }
+function add(cls, html) { showPane('log'); log.classList.remove('hero'); const d = document.createElement('div'); d.className = 'msg ' + cls; d.innerHTML = html; log.appendChild(d); $('#stage').scrollTop = $('#stage').scrollHeight; return d; }
 function describe(c) { const a = c.args || {}; if (c.name === 'bash') return '$ ' + (a.command || ''); if (c.name === 'delegate') return 'delegate → ' + a.agent + ': ' + String(a.brief || '').slice(0, 80); if (a.path) return c.name + ' ' + a.path; if (a.pattern) return c.name + ' ' + a.pattern; if (a.name) return c.name + ' ' + a.name; return c.name + ' ' + JSON.stringify(a); }
 function cmdHtml(text) { const t = String(text); const long = t.length > 220 || t.split('\n').length > 4; return `<span class="cmd">${esc(t)}</span>` + (long ? ' <span class="more">ver todo</span>' : ''); }
 function wireMore(el) { const m = el.querySelector('.more'); if (m) m.onclick = () => { el.querySelector('.cmd').classList.toggle('open'); m.textContent = el.querySelector('.cmd').classList.contains('open') ? 'menos' : 'ver todo'; }; }
@@ -324,8 +337,48 @@ function empty() {
 const SUN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.7v2.1M12 19.2v2.1M2.7 12h2.1M19.2 12h2.1M5.3 5.3l1.5 1.5M17.2 17.2l1.5 1.5M18.7 5.3l-1.5 1.5M6.8 17.2l-1.5 1.5"/></svg>';
 const MOON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"/></svg>';
 function paintTheme() { const light = document.documentElement.getAttribute('data-theme') === 'light'; $('#theme').innerHTML = light ? MOON : SUN; $('#theme').title = light ? 'Cambiar a tema oscuro' : 'Cambiar a tema claro'; }
-$('#theme').onclick = () => { const r = document.documentElement; r.setAttribute('data-theme', r.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); try { localStorage.setItem('lampson.theme', r.getAttribute('data-theme')); } catch (e) {} paintTheme(); };
+$('#theme').onclick = () => { const r = document.documentElement; r.setAttribute('data-theme', r.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); try { localStorage.setItem('lampson.theme', r.getAttribute('data-theme')); } catch (e) {} paintTheme(); if (term) term.options.theme = termTheme(); };
 paintTheme();
+
+// ---- terminal real: xterm.js ↔ WebSocket /api/term ↔ pty en el servidor ----
+// Frames binarios = bytes del pty; texto JSON = control (hello / exit). Cerrar el panel cierra el socket y mata el shell.
+let term = null, termWs = null, termFit = null;
+function termTheme() {
+  const s = getComputedStyle(document.documentElement); const v = n => s.getPropertyValue(n).trim();
+  return { background: v('--paper'), foreground: v('--ink'), cursor: v('--accent'), cursorAccent: v('--paper'), selectionBackground: v('--sel'),
+    black: v('--paper-3'), brightBlack: v('--ink-3'), red: v('--rubric'), brightRed: v('--rubric'), green: v('--str'), brightGreen: v('--str'),
+    yellow: v('--amber'), brightYellow: v('--amber'), blue: v('--accent'), brightBlue: v('--accent'), magenta: v('--rubric'), brightMagenta: v('--rubric'),
+    cyan: v('--accent'), brightCyan: v('--accent'), white: v('--ink-2'), brightWhite: v('--ink') };
+}
+function showPane(which) { // 'log' | 'viewer' | 'term'
+  log.style.display = which === 'log' ? '' : 'none';
+  $('#viewer').style.display = which === 'viewer' ? 'block' : 'none';
+  $('#termpane').style.display = which === 'term' ? 'flex' : 'none';
+}
+function openTerm() {
+  if (term) { showPane('term'); termFit.fit(); term.focus(); return; }
+  showPane('term'); procOpen = null; clearInterval(procTimer);
+  term = new Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'), fontSize: 13, lineHeight: 1.25, theme: termTheme(), scrollback: 5000, allowProposedApi: true });
+  termFit = new FitAddon.FitAddon(); term.loadAddon(termFit); term.open($('#xterm')); termFit.fit();
+  $('#tmeta').textContent = 'conectando…';
+  termWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/term'); termWs.binaryType = 'arraybuffer';
+  const send = (o) => { if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify(o)); };
+  termWs.onopen = () => { $('#termpane').classList.add('live'); send({ type: 'resize', cols: term.cols, rows: term.rows }); term.focus(); };
+  termWs.onmessage = (e) => { // "o" + salida del pty | "c" + JSON de control
+    const s = String(e.data);
+    if (s[0] === 'o') { term.write(s.slice(1)); return; }
+    let m; try { m = JSON.parse(s.slice(1)); } catch { return; }
+    if (m.type === 'hello') $('#tmeta').textContent = `${m.shell} · pid ${m.pid} · cwd = workspace`;
+    if (m.type === 'exit') { term.write(`\r\n\x1b[2m[shell terminado · código ${m.code}]\x1b[0m\r\n`); $('#termpane').classList.remove('live'); }
+  };
+  termWs.onclose = () => { $('#termpane').classList.remove('live'); if ($('#tmeta').textContent === 'conectando…') $('#tmeta').textContent = 'sin conexión'; };
+  term.onData(d => send({ type: 'in', data: d }));
+  term.onResize(({ cols, rows }) => send({ type: 'resize', cols, rows }));
+  new ResizeObserver(() => { if ($('#termpane').style.display !== 'none') termFit.fit(); }).observe($('#xterm'));
+}
+function closeTerm() { if (termWs) { try { termWs.close(); } catch (e) {} } if (term) term.dispose(); term = null; termWs = null; termFit = null; $('#xterm').innerHTML = ''; $('#termpane').classList.remove('live'); showPane('log'); }
+$('#term').onclick = openTerm;
+$('#tclose').onclick = closeTerm;
 
 // ---- actualizaciones de Lampson (una vez por carga; el fetch a origin puede tardar) ----
 async function checkUpdate() {
@@ -426,9 +479,9 @@ async function openFile(path, row) {
   if (!r.ok) { add('denied', esc(d.error || 'error')); return; }
   $('#vpath').textContent = d.path; $('#vmeta').textContent = d.lines + ' líneas';
   $('#vbody').className = ''; $('#vbody').innerHTML = String(d.content).split('\n').map((l, i) => `<span class="ln">${i + 1}</span>${esc(l)}`).join('\n');
-  log.style.display = 'none'; $('#viewer').style.display = 'block'; $('#stage').scrollTop = 0;
+  showPane('viewer'); $('#stage').scrollTop = 0;
 }
-$('#vclose').onclick = () => { $('#viewer').style.display = 'none'; log.style.display = ''; procOpen = null; clearInterval(procTimer); $('#vbody').className = ''; document.querySelectorAll('.row.active, .m.active, .p.active').forEach(x => x.classList.remove('active')); memOpen = null; };
+$('#vclose').onclick = () => { showPane('log'); procOpen = null; clearInterval(procTimer); $('#vbody').className = ''; document.querySelectorAll('.row.active, .m.active, .p.active').forEach(x => x.classList.remove('active')); memOpen = null; };
 
 // ---- memoria del proyecto ----
 let memOpen = null;
@@ -446,7 +499,7 @@ async function openMemory(name) {
   if (r.error) { add('denied', esc(r.error)); return; }
   $('#vpath').textContent = 'memoria · ' + name + '.md'; $('#vmeta').textContent = 'notas del agente sobre este proyecto (editables a mano en lampson/memory/)';
   const pre = $('#vbody'); pre.className = 'log'; pre.textContent = r.content || '(vacía)';
-  log.style.display = 'none'; $('#viewer').style.display = 'block'; $('#stage').scrollTop = 0; loadMemory();
+  showPane('viewer'); $('#stage').scrollTop = 0; loadMemory();
 }
 
 // ---- procesos gestionados ----
@@ -485,7 +538,7 @@ async function openProc(name) {
   const r = await (await fetch('/api/proc/log?name=' + encodeURIComponent(name) + '&tail=400')).json();
   $('#vpath').textContent = 'proceso ' + name; $('#vmeta').textContent = r.running ? '● corriendo · log en vivo' : '○ terminado';
   const pre = $('#vbody'); pre.className = 'log'; pre.textContent = r.log || '(sin salida todavía)';
-  log.style.display = 'none'; $('#viewer').style.display = 'block'; $('#stage').scrollTop = $('#stage').scrollHeight;
+  showPane('viewer'); $('#stage').scrollTop = $('#stage').scrollHeight;
   clearInterval(procTimer); if (r.running) procTimer = setInterval(async () => { if (procOpen !== name || $('#viewer').style.display === 'none') { clearInterval(procTimer); return; } const x = await (await fetch('/api/proc/log?name=' + encodeURIComponent(name) + '&tail=400')).json(); pre.textContent = x.log || ''; $('#vmeta').textContent = x.running ? '● corriendo · log en vivo' : '○ terminado'; if (!x.running) { clearInterval(procTimer); loadProcs(); } }, 2000);
   loadProcs();
 }
@@ -499,7 +552,7 @@ async function loadSessions() {
   for (const s of r.sessions) { const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span>'; d.title = s.id; d.onclick = () => open(s.id); box.appendChild(d); }
 }
 async function open(id) {
-  session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); $('#viewer').style.display = 'none'; log.style.display = '';
+  session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log');
   const r = await fetch('/api/sessions/' + id); if (!r.ok) { session = ''; empty(); return loadSessions(); }
   const d = await r.json();
   const queue = []; // pasos sin resultado todavía, en orden (varias tool calls por turno)
@@ -510,7 +563,7 @@ async function open(id) {
   }
   loadSessions();
 }
-$('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; $('#viewer').style.display = 'none'; log.style.display = ''; empty(); loadSessions(); };
+$('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); loadSessions(); };
 
 // ---- chat (SSE) ----
 let aborter = null;

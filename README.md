@@ -19,7 +19,10 @@ language itself — and every step is visible, in the terminal or in a web UI.
 - **Project memory**: the agent keeps its own notes per project (`memory/<project>/*.md`, outside
   the repo) — how to run it, gotchas, decisions — and rereads them in the next session. You can read
   and edit them (web panel, `/memory`).
-- **`!command`**: run something yourself from the chat; the output lands in the agent's context.
+- **`!command`**: run something yourself from the chat inside a real pseudo-terminal (prompts, passwords
+  and REPLs work); the output lands in the agent's context.
+- **Terminal in the browser**: the web UI opens a real shell (pty, cwd = your project) in the center pane
+  — `>_ terminal` in the header. Synsema 0.6.8+.
 - **Sessions** persisted as JSON, including every tool call, result, error and denial.
 
 ## Install

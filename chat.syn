@@ -146,7 +146,7 @@ let COMMANDS be [
     ["/resume", "<id>", "reanudar una sesión guardada"],
     ["/flags", "", "flags de arranque: lampson --web --agent --yolo --workspace …"],
     ["/update", "", "actualizar Lampson a la última versión (git pull); también: lampson --update"],
-    ["!<comando>", "", "correr un comando de shell VOS (sin pedir permiso); la salida queda en el contexto del agente"],
+    ["!<comando>", "", "correr un comando VOS en un terminal real (prompts y REPLs funcionan; ^C corta); la salida queda en el contexto del agente"],
     ["/help", "", "esta ayuda"],
     ["/exit", "", "salir (la sesión queda guardada)"]
 ]
@@ -241,18 +241,57 @@ task opts_for(p, mode)
     let o be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_user)
     set o to loop.with_steps(o, agents.steps_for(p))
     give loop.with_mode(o, mode)
-let registry_bash be agents.registry_for("build")["bash"]
 
--- salida de un !comando: hasta 60 líneas, el resto colapsado
-task shell_out(out)
-    let lines be split(out, "\n")
-    let shown be []
-    each e in enumerate(lines)
-        when e["index"] < 60
-            set shown to append(shown, "    " + e["item"])
-    when length(lines) > 60
-        set shown to append(shown, dim("    … +" + text(length(lines) - 60) + " líneas"))
-    give join(shown, "\n")
+-- !comando del usuario en un pseudo-terminal: la salida se ve EN VIVO y, si el proceso se queda esperando
+-- (prompt y/N, contraseña, REPL, `npm init`…), lo que escribas se le manda como teclas + Enter.
+-- Enter vacío = seguir esperando · ^C = cortar. Devuelve la salida (sin ANSI) para el contexto del agente.
+task shell_argv(cmd)
+    when env("OS", "") == "Windows_NT"
+        give ["powershell", ["-NoLogo", "-NoProfile", "-Command", cmd]]
+    give ["bash", ["-lc", cmd]]
+
+task run_interactive(cmd)
+    let sh be shell_argv(cmd)
+    let p be proc_spawn(sh[0], sh[1], {"cwd": "workspace", "pty": true, "cols": 120, "rows": 40})
+    let captured be []
+    let partial be ""
+    let alive be true
+    while alive
+        let ev be proc_recv(p, 5)
+        when ev == nothing
+            when proc_status(p) != "running"
+                set alive to false
+            otherwise
+                -- silencio: si quedó una línea a medias es casi seguro un prompt; dejar escribir
+                let hint be when trim(partial) == "" then "(sin salida hace 5 s · Enter: seguir esperando · texto: mandárselo · ^C: cortar) " otherwise partial + " "
+                let line be read_line(dim(hint))
+                set partial to ""
+                when line == nothing or trim(line) == "^C"
+                    proc_kill(p)
+                    set captured to append(captured, "[cortado por el usuario]")
+                otherwise when trim(line) != ""
+                    proc_send(p, line + "\r")
+        otherwise when ev["type"] == "exit"
+            when partial != ""
+                print("    " + partial)
+                set captured to append(captured, partial)
+            set captured to append(captured, "[exit " + text(ev["data"]["exit_code"]) + "]")
+            set alive to false
+        otherwise
+            let raw be ev["data"]
+            when is_bytes(raw)
+                set raw to decode(raw, "utf8_lossy")
+            let chunk be strip_ansi(raw)
+            let lines be split(partial + chunk, "\n")
+            let n be length(lines)
+            each e in enumerate(lines)
+                when e["index"] < n - 1
+                    print("    " + e["item"])
+                    set captured to append(captured, e["item"])
+            set partial to lines[n - 1]
+            flush()
+    proc_close(p)
+    give join(captured, "\n")
 
 let system_msg be system_for(profile)
 let opts be opts_for(profile, lower(env("LAMPSON_PERMISSION", "ask")))
@@ -390,8 +429,8 @@ while running
                 print("  uso: !<comando>   p.ej. !git status · !npm test · !cat .env")
             otherwise
                 print("  " + yellow("$ " + cmd))
-                let out be call_tool(registry_bash, {"command": cmd, "timeout": 600})
-                print(shell_out(out))
+                flush()
+                let out be run_interactive(cmd)
                 set messages to append(messages, {"role": "user", "content": "[The user ran this command in the shell themselves]\n$ " + cmd + "\n" + tools.truncate(out, 6000)})
                 session.save(sid, messages, {"title": session.title_of(messages)})
         otherwise

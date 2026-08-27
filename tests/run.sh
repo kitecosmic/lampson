@@ -12,7 +12,10 @@ if [ -e "$mount" ]; then
 fi
 rm -rf "$tmp"; mkdir -p "$tmp"; : > "$tmp/.lampson-test-workspace"
 ln -s "$tmp" "$mount"
-restore() { rm -f "$mount"; [ -n "$previous" ] && [ -d "$previous" ] && ln -s "$previous" "$mount"; true; }
+restore() {
+    rm -rf "$here"/memory/lampson-test-workspace-* "$here"/.lampson/sessions/test-*.json
+    rm -f "$mount"; [ -n "$previous" ] && [ -d "$previous" ] && ln -s "$previous" "$mount"; true
+}
 trap restore EXIT
 
 cd "$here"

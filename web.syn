@@ -49,6 +49,22 @@ use "./lib/update.syn" as update
 
 let APPROVAL_TIMEOUT be 180
 
+-- salida del pty como texto (v0.6.8 entrega texto aunque la doc diga bytes; cubrimos ambos)
+task as_text(x)
+    when is_bytes(x)
+        give decode(x, "utf8_lossy")
+    give x
+
+-- shell para el terminal web: [cmd, args]. Windows: pwsh si está, si no PowerShell 5; unix: bash de login.
+task term_shell()
+    when env("OS", "") == "Windows_NT"
+        try
+            run("pwsh", ["-NoLogo", "-Command", "exit"], 10)
+            give ["pwsh", ["-NoLogo"]]
+        recover err
+            give ["powershell", ["-NoLogo"]]
+    give ["bash", ["-l"]]
+
 task boot(profile, mode, ask_fn)
     let cfg be provider.config()
     let p be when contains(agents.PROFILES, profile) then profile otherwise "build"
@@ -77,6 +93,39 @@ serve on 8080
 
     route "GET /api/tree"
         give tree.tree(6)
+
+    -- Terminal real en el navegador: un shell dentro de un pseudo-terminal (pty) por conexión WebSocket.
+    -- Navegador → servidor: texto JSON {type: "in", data: teclas} | {type: "resize", cols, rows}.
+    -- Servidor → navegador: frames de texto con prefijo: "o" + salida cruda del pty (ANSI incluido, xterm.js
+    -- la dibuja) | "c" + JSON de control ({type: hello|exit}).
+    -- El shell vive lo que vive el socket: cerrar el panel lo mata (el runtime no deja huérfanos).
+    route "GET /api/term"
+        socket
+            let sh be term_shell()
+            let p be proc_spawn(sh[0], sh[1], {"cwd": "workspace", "pty": true, "cols": 120, "rows": 32})
+            ws_send(socket, "c" + json_encode({"type": "hello", "shell": sh[0], "pid": proc_stats(p)["pid"]}))
+            let open be true
+            while open
+                let ev be select({"ui": socket, "sh": p}, 600)
+                when ev == nothing
+                    set open to proc_status(p) == "running"
+                otherwise when ev["name"] == "ui"
+                    when ev["type"] == "close"
+                        set open to false
+                    otherwise when ev["type"] == "binary"
+                        proc_send(p, ev["data"])
+                    otherwise
+                        let m be json_decode(ev["data"])
+                        when m["type"] == "in"
+                            proc_send(p, m["data"])
+                        otherwise when m["type"] == "resize"
+                            proc_resize(p, floor(m["cols"]), floor(m["rows"]))
+                otherwise when ev["type"] == "exit"
+                    ws_send(socket, "c" + json_encode({"type": "exit", "code": ev["data"]["exit_code"]}))
+                    set open to false
+                otherwise
+                    ws_send(socket, "o" + as_text(ev["data"]))
+            proc_close(p)
 
     route "GET /api/update"
         give update.check()
