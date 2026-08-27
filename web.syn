@@ -25,7 +25,7 @@ require time
 require exec
 require env("LAMPSON_*")
 require env("OS")
-require secret("LAMPSON_API_KEY")
+require secret("LAMPSON_*")
 require file("workspace")
 require file("workspace/*")
 require file.read("skills")
@@ -65,8 +65,8 @@ task term_shell()
             give ["powershell", ["-NoLogo"]]
     give ["bash", ["-l"]]
 
-task boot(profile, mode, ask_fn)
-    let cfg be provider.config()
+task boot(profile, mode, ask_fn, pname, model)
+    let cfg be provider.config_for(pname, model)
     let p be when contains(agents.PROFILES, profile) then profile otherwise "build"
     let opts be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_fn)
     set opts to loop.with_steps(opts, agents.steps_for(p))
@@ -89,7 +89,7 @@ serve on 8080
 
     route "GET /api/config"
         let cfg be provider.config()
-        give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
+        give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "providers": provider.providers(), "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
 
     route "GET /api/tree"
         give tree.tree(6)
@@ -186,6 +186,8 @@ serve on 8080
         let mode be when contains(b, "permission") then lower(text(b["permission"])) otherwise lower(env("LAMPSON_PERMISSION", "ask"))
         when mode != "ask" and mode != "yolo" and mode != "strict"
             set mode to "ask"
+        let pname be when contains(b, "provider") then lower(text(b["provider"])) otherwise ""
+        let pmodel be when contains(b, "model") then text(b["model"]) otherwise ""
         stream
             task emit(kind, data)
                 send {"kind": kind, "data": data} as "event"
@@ -204,7 +206,7 @@ serve on 8080
                 let ok be answer == "yes"
                 send {"kind": "approval_result", "data": {"id": id, "approved": ok, "timeout": answer == nothing}} as "event"
                 give ok
-            let ctx be boot(want, mode, ask_web)
+            let ctx be boot(want, mode, ask_web, pname, pmodel)
             let messages be [ctx["system"]]
             when sid != ""
                 when session.exists(sid)
@@ -215,7 +217,7 @@ serve on 8080
             when sid == ""
                 set sid to session.new_id()
             send {"kind": "session", "data": sid} as "event"
-            send {"kind": "mode", "data": {"agent": ctx["profile"], "permission": mode}} as "event"
+            send {"kind": "mode", "data": {"agent": ctx["profile"], "permission": mode, "provider": ctx["cfg"]["provider"], "model": ctx["cfg"]["model"], "has_key": ctx["cfg"]["has_key"]}} as "event"
             when starts_with(trim(message), "!")
                 -- comando del USUARIO: sin política de permisos, salida al contexto; el modelo no interviene
                 let cmd be trim(slice(trim(message), 1, length(trim(message))))

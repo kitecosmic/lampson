@@ -31,6 +31,7 @@ try {
     # residuos de los tests fuera del workspace: notas de memoria del slug de prueba y sesiones test-*
     Get-ChildItem -LiteralPath (Join-Path $here "memory") -Directory -Filter "lampson-test-workspace-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
     Get-ChildItem -LiteralPath (Join-Path $here ".lampson\sessions") -Filter "test-*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem -LiteralPath (Join-Path $here ".lampson\proc") -Filter "t_demo.*" -ErrorAction SilentlyContinue | Remove-Item -Force
     Pop-Location
     (Get-Item -LiteralPath $mount -Force).Delete()
     if ($previous -and (Test-Path -LiteralPath $previous)) { New-Item -ItemType Junction -Path $mount -Target $previous | Out-Null }

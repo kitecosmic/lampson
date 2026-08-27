@@ -103,7 +103,7 @@ export task list()
         give []
     give out
 
--- Puertos TCP en escucha (cualquier proceso, gestionado o no): [{port, pid, name}] — via proc.sh ports
+-- Puertos TCP en escucha (cualquier proceso, gestionado o no): [{port, pid, name, command}] — via proc.sh ports
 -- (Windows: netstat+tasklist · Linux: ss · macOS: lsof). Un servidor huérfano no aparece en list(); acá sí.
 export task listeners()
     require exec
@@ -122,10 +122,23 @@ export task listeners()
                 let nm be when length(parts) >= 3 then parts[2] otherwise "?"
                 when port >= 1024 and port < 49152 and not contains(SYSTEM_PROCS, lower(nm)) and not contains(seen, text(port))
                     set seen[text(port)] to true
-                    set out to append(out, {"port": port, "pid": floor(number(parts[1])), "name": nm})
+                    set out to append(out, {"port": port, "pid": floor(number(parts[1])), "name": nm, "command": ""})
     recover err
         give out
-    give sort_by(out, (x) => x["port"])
+    -- la línea de comando dice QUÉ es (next dev, un MCP server de otra herramienta, synsema serve…); un run por pid
+    let cmds be {}
+    let enriched be []
+    each l in out
+        let key be text(l["pid"])
+        when not contains(cmds, key)
+            try
+                let r be run(shell(), ["lib/tools/proc.sh", "info", key], 15, {"cwd": "."})
+                set cmds[key] to trim(replace_text(r["stdout"], "\n", " "))
+            recover err
+                set cmds[key] to ""
+        set l["command"] to when length(cmds[key]) > 300 then slice(cmds[key], 0, 300) + "…" otherwise cmds[key]
+        set enriched to append(enriched, l)
+    give sort_by(enriched, (x) => x["port"])
 
 export task kill_pid(pid)
     require exec

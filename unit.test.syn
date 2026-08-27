@@ -15,7 +15,7 @@ require file(".lampson")
 require file(".lampson/*")
 require env("LAMPSON_*")
 require env("OS")
-require secret("LAMPSON_API_KEY")
+require secret("LAMPSON_*")
 
 use "./lib/permission.syn" as permission
 use "./lib/session.syn" as session

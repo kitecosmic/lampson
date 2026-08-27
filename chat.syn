@@ -16,7 +16,7 @@ require stdin
 require exec
 require env("LAMPSON_*")
 require env("OS")
-require secret("LAMPSON_API_KEY")
+require secret("LAMPSON_*")
 require file("workspace")
 require file("workspace/*")
 require file.read("skills")
@@ -132,6 +132,7 @@ let COMMANDS be [
     ["/yolo", "", "permisos: PERMITIR comandos peligrosos sin preguntar (los destructivos del sistema siguen bloqueados)"],
     ["/strict", "", "permisos: DENEGAR comandos peligrosos"],
     ["/model", "<nombre>", "cambiar el modelo para esta sesión (mismo proveedor y key)"],
+    ["/provider", "[nombre] [modelo]", "cambiar de proveedor (deepseek, anthropic, openai, minimax…); sin args lista cuáles tienen key (LAMPSON_API_KEY_<PROVEEDOR> en .env)"],
     ["/config", "", "ver la configuración vigente (proveedor, modelo, límites, workspace)"],
     ["/files", "", "árbol completo del workspace"],
     ["/procs", "", "procesos que el agente dejó corriendo (servidores) y su estado"],
@@ -346,6 +347,20 @@ while running
             otherwise
                 set cfg["model"] to want
                 print("modelo=" + want + " (solo esta sesión; para fijarlo: LAMPSON_MODEL en lampson\\.env)")
+        otherwise when starts_with(input, "/provider")
+            let args be where(split(trim(slice(input, 9, length(input))), " "), (x) => x != "")
+            when length(args) == 0
+                print("  proveedor actual: " + cfg["provider"] + " · modelo " + cfg["model"])
+                each p in provider.providers()
+                    print("  " + (when p["has_key"] then green("● ") otherwise dim("○ ")) + pad(p["name"], 12) + dim(p["model"] + (when p["has_key"] then "" otherwise "   (sin key: LAMPSON_API_KEY_" + upper(p["name"]) + " en lampson\\.env)")))
+                print("  uso: /provider <nombre> [modelo]")
+            otherwise when not contains(provider.PRESETS, lower(args[0]))
+                print("  no conozco el proveedor " + args[0] + " · disponibles: " + join(sort_by(keys(provider.PRESETS), (x) => x), ", "))
+            otherwise
+                set cfg to provider.config_for(args[0], when length(args) > 1 then args[1] otherwise "")
+                when not cfg["has_key"]
+                    print("  " + yellow("ojo: no hay key para " + cfg["provider"] + " — agregá LAMPSON_API_KEY_" + upper(cfg["provider"]) + "=… en lampson\\.env (se usará LAMPSON_API_KEY, que probablemente falle)"))
+                print("  proveedor=" + cfg["provider"] + " · modelo=" + cfg["model"] + " · " + cfg["wire"] + " → " + cfg["base_url"] + dim("   (solo esta sesión; para fijarlo: LAMPSON_PROVIDER en .env)"))
         otherwise when input == "/new"
             set sid to session.new_id()
             set messages to [system_msg]
@@ -372,9 +387,9 @@ while running
             let ports be proc.listeners()
             when length(ports) > 0
                 print("")
-                print("  " + dim("puertos en escucha (cualquier proceso; /kill <pid> para matar uno huérfano):"))
+                print("  " + dim("puertos en escucha en esta máquina (de cualquier programa, no solo de lampson; /kill <pid> para matar uno):"))
                 each l in ports
-                    print("  " + yellow(":" + text(l["port"])) + "  pid " + text(l["pid"]) + "  " + l["name"])
+                    print("  " + yellow(":" + text(l["port"])) + "  pid " + text(l["pid"]) + "  " + l["name"] + "  " + dim(first_line(l["command"], 110)))
         otherwise when starts_with(input, "/logs")
             let args be split(trim(slice(input, 5, length(input))), " ")
             when args[0] == ""

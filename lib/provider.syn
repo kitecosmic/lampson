@@ -37,22 +37,60 @@ export let PRESETS be {
     "minimax":    {"wire": "anthropic", "base_url": "https://api.minimax.io/anthropic/v1", "model": "MiniMax-M3"}
 }
 
--- Lee la configuración desde env/.env. Llamar DENTRO del handler bajo serve.
-export task config()
+-- Keys: una por proveedor en .env como LAMPSON_API_KEY_<PROVIDER> (LAMPSON_API_KEY_DEEPSEEK, _ANTHROPIC…);
+-- LAMPSON_API_KEY es la del proveedor por defecto (LAMPSON_PROVIDER). Así se cambia de proveedor en caliente
+-- (/provider en terminal, selector en la web) sin tocar .env. Solo se comprueba SI hay key, nunca se muestra.
+task key_var(name)
+    give "LAMPSON_API_KEY_" + upper(name)
+
+export task has_key(name)
     require env("LAMPSON_*")
-    require secret("LAMPSON_API_KEY")
-    let name be lower(env("LAMPSON_PROVIDER", "deepseek"))
-    let preset be when contains(PRESETS, name) then PRESETS[name] otherwise PRESETS["openai"]
-    let wire be env("LAMPSON_WIRE", preset["wire"])
+    when name == "ollama"
+        give true
+    when env(key_var(name), "") != ""
+        give true
+    give name == lower(env("LAMPSON_PROVIDER", "deepseek")) and env("LAMPSON_API_KEY", "") != ""
+
+-- [{name, model, wire, has_key, current}] para selectores
+export task providers()
+    require env("LAMPSON_*")
+    let cur be lower(env("LAMPSON_PROVIDER", "deepseek"))
+    let out be []
+    each n in sort_by(keys(PRESETS), (x) => x)
+        set out to append(out, {"name": n, "model": PRESETS[n]["model"], "wire": PRESETS[n]["wire"], "has_key": has_key(n), "current": n == cur})
+    give out
+
+-- Configuración para un proveedor concreto (name "" = el de env/.env; model "" = el del preset o LAMPSON_MODEL).
+-- Llamar DENTRO del handler bajo serve.
+export task config_for(name, model)
+    require env("LAMPSON_*")
+    require secret("LAMPSON_*")
+    let default_name be lower(env("LAMPSON_PROVIDER", "deepseek"))
+    let n be when name == nothing or name == "" then default_name otherwise lower(name)
+    let preset be when contains(PRESETS, n) then PRESETS[n] otherwise PRESETS["openai"]
+    let is_default be n == default_name
+    -- overrides de .env (WIRE/BASE_URL/MODEL) solo aplican al proveedor por defecto
+    let wire be when is_default then env("LAMPSON_WIRE", preset["wire"]) otherwise preset["wire"]
+    let base be when is_default then env("LAMPSON_BASE_URL", preset["base_url"]) otherwise preset["base_url"]
+    let m be when model != nothing and model != "" then model otherwise (when is_default then env("LAMPSON_MODEL", preset["model"]) otherwise preset["model"])
+    let key be secret("LAMPSON_API_KEY", "ollama")
+    when env(key_var(n), "") != ""
+        set key to secret(key_var(n), "ollama")
     give {
-        "provider": name,
+        "provider": n,
         "wire": wire,
-        "base_url": env("LAMPSON_BASE_URL", preset["base_url"]),
-        "model": env("LAMPSON_MODEL", preset["model"]),
+        "base_url": base,
+        "model": m,
         "max_tokens": floor(number(env("LAMPSON_MAX_TOKENS", "4096"))),
         "timeout": number(env("LAMPSON_TIMEOUT", "180")),
-        "key": secret("LAMPSON_API_KEY", "ollama")
+        "key": key,
+        "has_key": has_key(n)
     }
+
+export task config()
+    require env("LAMPSON_*")
+    require secret("LAMPSON_*")
+    give config_for("", "")
 
 task strip_slash(url)
     when length(url) > 0

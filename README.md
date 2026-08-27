@@ -50,6 +50,11 @@ lampson            # terminal
 lampson --web      # http://127.0.0.1:8080
 ```
 
+**Switching providers**: keep one key per provider in `lampson/.env` — `LAMPSON_API_KEY_DEEPSEEK`,
+`LAMPSON_API_KEY_ANTHROPIC`, `LAMPSON_API_KEY_OPENAI`… (`LAMPSON_API_KEY` is the default provider's).
+Then switch on the fly: `/provider anthropic [model]` in the terminal, or the provider selector and
+the model pill in the web header. Nothing in `.env` needs to change; providers without a key show as `○`.
+
 **Updating**: Lampson checks `origin/main` on start and tells you when a newer version exists (terminal
 banner, web header button). Run `lampson --update` (or `/update` in the REPL, or the web button) and
 restart. Re-running the installer does the same. `LAMPSON_HOME` changes the install folder.

@@ -30,7 +30,7 @@
     --rule:#2b2c27; --rule-2:#3c3d36;
     --accent:#8fb4dc; --accent-bg:#1b2836;
     --rubric:#d98670; --str:#a8bd84; --amber:#d9b26f;
-    --sel:#33465b;
+    --sel:#33465b; --term-blue:#4f86d1;
     --serif:"Plex Serif",Georgia,"Times New Roman",serif;
     --mono:"Plex Mono",ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
     --r:3px; --side:280px;
@@ -41,7 +41,7 @@
     --rule:#e4e3da; --rule-2:#cfcec2;
     --accent:#21578c; --accent-bg:#e9eef4;
     --rubric:#99372a; --str:#4a6b3f; --amber:#8a6a1f;
-    --sel:#cfe0f0;
+    --sel:#cfe0f0; --term-blue:#21578c;
   }
 
   * { box-sizing:border-box; }
@@ -67,7 +67,9 @@
   .theme-toggle:hover { color:var(--ink); background:var(--paper-2); }
   header select { font:400 11.5px/1 var(--mono); color:var(--ink-2); background:var(--paper); border:1px solid var(--rule); border-radius:var(--r); padding:5px 6px; cursor:pointer; }
   header select:hover { border-color:var(--rule-2); color:var(--ink); }
-  .pill { font:400 11.5px/1 var(--mono); color:var(--ink-3); letter-spacing:.02em; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis; flex:none; }
+  .pill { font:400 11.5px/1 var(--mono); color:var(--ink-3); letter-spacing:.02em; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis; flex:none; cursor:pointer; border-bottom:1px dashed transparent; }
+  .pill:hover { color:var(--ink); border-bottom-color:var(--rule-2); }
+  .pill.nokey { color:var(--rubric); }
   .gitchip { display:none; align-items:center; gap:8px; font:400 11.5px/1 var(--mono); color:var(--ink-2); max-width:45%; flex:none; }
   .gitchip .br { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .gitchip b { font-weight:600; }
@@ -111,7 +113,8 @@
   .p.run .st { background:var(--str); }
   .p .nm { font-weight:600; color:var(--ink); }
   .p .cm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
-  .p .port { color:var(--amber); font-weight:600; }
+  .p .port { color:var(--amber); font-weight:600; text-decoration:none; flex:none; }
+  .p .port:hover { text-decoration:underline; text-underline-offset:.18em; }
   .p button { padding:1px 7px; font-size:10px; }
   .none { color:var(--ink-3); cursor:default; }
   .none:hover { color:var(--ink-3); }
@@ -235,7 +238,8 @@
     <span class="hpath" id="hpath"></span>
     <select id="agent" title="perfil de agente: qué tools puede usar"></select>
     <select id="perm" title="qué pasa con un comando peligroso (rm -rf, git push --force, sudo…)"><option value="ask">permisos: preguntar</option><option value="yolo">permisos: permitir todo</option><option value="strict">permisos: denegar</option></select>
-    <span class="pill" id="model" title="modelo (LAMPSON_MODEL)">…</span>
+    <select id="provider" title="proveedor de LLM · una key por proveedor en lampson/.env: LAMPSON_API_KEY_<PROVEEDOR>"></select>
+    <span class="pill" id="model" title="modelo · clic para cambiarlo">…</span>
   </div>
 </header>
 <aside>
@@ -252,7 +256,7 @@
     <div class="body" id="memory"></div>
   </section>
   <section class="sec" data-sec="ports">
-    <h2 title="puertos escuchando en esta máquina"><span class="caret">▸</span>Puertos<span class="cnt" id="portCount"></span></h2>
+    <h2 title="puertos TCP en escucha en esta máquina — de cualquier programa, no solo de lampson (útil para saber quién ocupa un puerto)"><span class="caret">▸</span>Puertos<span class="cnt" id="portCount"></span></h2>
     <div class="body" id="ports"></div>
   </section>
   <section class="sec open" data-sec="sessions">
@@ -347,7 +351,7 @@ function termTheme() {
   const s = getComputedStyle(document.documentElement); const v = n => s.getPropertyValue(n).trim();
   return { background: v('--paper'), foreground: v('--ink'), cursor: v('--accent'), cursorAccent: v('--paper'), selectionBackground: v('--sel'),
     black: v('--paper-3'), brightBlack: v('--ink-3'), red: v('--rubric'), brightRed: v('--rubric'), green: v('--str'), brightGreen: v('--str'),
-    yellow: v('--amber'), brightYellow: v('--amber'), blue: v('--accent'), brightBlue: v('--accent'), magenta: v('--rubric'), brightMagenta: v('--rubric'),
+    yellow: v('--amber'), brightYellow: v('--amber'), blue: v('--term-blue'), brightBlue: v('--accent'), magenta: v('--rubric'), brightMagenta: v('--rubric'),
     cyan: v('--accent'), brightCyan: v('--accent'), white: v('--ink-2'), brightWhite: v('--ink') };
 }
 function showPane(which) { // 'log' | 'viewer' | 'term'
@@ -423,7 +427,15 @@ async function loadCfg() {
   $('#proj').textContent = ws.split(/[\\/]/).filter(Boolean).pop() || 'workspace'; $('#proj').title = ws;
   $('#hpath').textContent = ws; $('#hpath').title = ws;
   $('#perm').value = localStorage.getItem('lampson.perm') || cfg.permission || 'ask'; $('#perm').onchange = () => localStorage.setItem('lampson.perm', $('#perm').value);
-  $('#model').textContent = cfg.model || ''; $('#model').style.display = cfg.model ? '' : 'none';
+  // proveedor + modelo: el default viene de .env; el usuario puede cambiarlos en caliente (se guardan en el navegador)
+  const ps = $('#provider'); ps.innerHTML = '';
+  for (const p of (cfg.providers || [])) { const o = document.createElement('option'); o.value = p.name; o.textContent = (p.has_key ? '' : '○ ') + p.name; o.title = p.has_key ? p.model : `sin key: LAMPSON_API_KEY_${p.name.toUpperCase()} en lampson/.env`; o.dataset.model = p.model; ps.appendChild(o); }
+  const savedP = localStorage.getItem('lampson.provider'); ps.value = (cfg.providers || []).some(p => p.name === savedP) ? savedP : (cfg.provider || '');
+  const modelFor = () => { if (ps.value === cfg.provider) return localStorage.getItem('lampson.model.' + ps.value) || cfg.model || ''; return localStorage.getItem('lampson.model.' + ps.value) || (ps.selectedOptions[0] || {}).dataset?.model || ''; };
+  const paintModel = () => { const p = (cfg.providers || []).find(x => x.name === ps.value); $('#model').textContent = modelFor(); $('#model').classList.toggle('nokey', !!p && !p.has_key); $('#model').title = (p && !p.has_key) ? `sin key para ${ps.value} · agregá LAMPSON_API_KEY_${ps.value.toUpperCase()} en lampson/.env` : 'modelo · clic para cambiarlo'; };
+  ps.onchange = () => { localStorage.setItem('lampson.provider', ps.value); paintModel(); };
+  $('#model').onclick = () => { const m = prompt(`modelo para ${ps.value}`, modelFor()); if (m === null) return; if (m.trim()) localStorage.setItem('lampson.model.' + ps.value, m.trim()); else localStorage.removeItem('lampson.model.' + ps.value); paintModel(); };
+  paintModel();
   const sel = $('#agent'); sel.innerHTML = '';
   for (const a of (cfg.agents || ['build'])) { const o = document.createElement('option'); o.value = a; o.textContent = 'agente: ' + a; sel.appendChild(o); }
   sel.value = localStorage.getItem('lampson.agent') || 'build';
@@ -511,8 +523,9 @@ async function loadPorts() {
   $('#portCount').textContent = list.length || ''; autoSec('ports', list.length > 0);
   if (!list.length) { box.innerHTML = '<div class="p none">ninguno</div>'; return; }
   for (const p of list) {
-    const d = document.createElement('div'); d.className = 'p'; d.style.cursor = 'default'; d.title = `pid ${p.pid}`;
-    d.innerHTML = `<span class="port">:${p.port}</span><span class="cm">${esc(p.name)} · pid ${p.pid}</span><button title="matar este proceso (no lo gestiona lampson)">✕</button>`;
+    const d = document.createElement('div'); d.className = 'p'; d.style.cursor = 'default'; d.title = `pid ${p.pid}\n${p.command || '(línea de comando no disponible)'}`;
+    const what = p.command ? p.command.replace(/^"?[A-Za-z]:\\[^"]*\\([^"\\]+)"?/, '$1') : p.name;
+    d.innerHTML = `<a class="port" href="http://127.0.0.1:${p.port}" target="_blank" rel="noopener" title="abrir http://127.0.0.1:${p.port} en otra pestaña">:${p.port}</a><span class="cm">${esc(what)}</span><button title="matar este proceso (pid ${p.pid}; no lo gestiona lampson)">✕</button>`;
     d.querySelector('button').onclick = async () => { if (!confirm(`¿Matar ${p.name} (pid ${p.pid}) que escucha en :${p.port}?`)) return; await fetch('/api/ports/kill', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pid: p.pid }) }); loadPorts(); };
     box.appendChild(d);
   }
@@ -575,7 +588,7 @@ async function send(message) {
   add('user', esc(message));
   const thinking = add('working', '<span class="dot"></span><span>pensando…</span>');
   try {
-    const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, message, agent: $('#agent').value || 'build', permission: $('#perm').value || 'ask' }), signal: aborter.signal });
+    const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session, message, agent: $('#agent').value || 'build', permission: $('#perm').value || 'ask', provider: $('#provider').value || '', model: $('#model').textContent || '' }), signal: aborter.signal });
     if (!res.ok || !res.body) { add('denied', 'error HTTP ' + res.status + ' ' + esc(await res.text())); }
     else {
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
@@ -599,7 +612,7 @@ function handle(chunk, thinking) {
   else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out); const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }
   else if (k === 'approval_result') { const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === d.id); if (el) el.querySelector('.btns').innerHTML = d.approved ? '<span style="color:var(--str)">✓ permitido</span>' : (d.timeout ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
-  else if (k === 'mode') { $('#agent').value = d.agent; $('#perm').value = d.permission; }
+  else if (k === 'mode') { $('#agent').value = d.agent; $('#perm').value = d.permission; if (d.has_key === false) add('denied', `‼ no hay API key para ${esc(d.provider)}: agregá LAMPSON_API_KEY_${esc(String(d.provider).toUpperCase())}=… en lampson/.env y reiniciá el servidor`); }
   else if (k === 'tool_denied') { const el = pending || add('step', '<span class="ic">✗</span>'); el.insertAdjacentHTML('beforeend', `<span class="denied"> ✗ ${esc(d.reason)}</span>`); }
   else if (k === 'error') add('denied', '‼ ' + esc(d));
   else if (k === 'compact') add('meta', '⧗ compactando contexto (~' + d.before + ' tokens)');

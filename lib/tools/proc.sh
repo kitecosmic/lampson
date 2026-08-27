@@ -4,6 +4,7 @@
 #   bash lib/tools/proc.sh alive <pidfile>             → yes | no
 #   bash lib/tools/proc.sh stop  <pidfile>
 #   bash lib/tools/proc.sh ports                       → "port pid name" por línea (>=1024, sin sistema)
+#   bash lib/tools/proc.sh info <pid>                  → línea de comando del proceso
 #
 # start cierra stdout/stderr/stdin ANTES de lanzar (Windows hereda handles: si no, el pipe de Synsema
 # queda abierto y run() se cuelga), lanza el comando con su salida en <logfile> y guarda "PID|stamp".
@@ -48,6 +49,15 @@ case "$ACTION" in
             ss -ltnpH 2>/dev/null | awk '{n=split($4,a,":"); port=a[n]; name="?"; pid="?"; if (match($0,/users:\(\("[^"]+",pid=[0-9]+/)) { s=substr($0,RSTART,RLENGTH); gsub(/users:\(\("/,"",s); split(s,b,"\",pid="); name=b[1]; pid=b[2] } print port" "pid" "name}' | sort -u -k1,1n
         elif command -v lsof >/dev/null 2>&1; then
             lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {n=split($9,a,":"); print a[n]" "$2" "$1}' | sort -u -k1,1n
+        fi
+        ;;
+    info)
+        # línea de comando de un pid (para saber QUÉ escucha en un puerto)
+        PID="$2"
+        if is_win; then
+            powershell.exe -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=$PID').CommandLine" 2>/dev/null | tr -d '\r'
+        else
+            ps -o args= -p "$PID" 2>/dev/null
         fi
         ;;
     kill)
