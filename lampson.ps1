@@ -5,6 +5,7 @@
 #   lampson --workspace C:\otro\proyecto        # elegir la ubicación explícitamente     (también -Workspace)
 #   lampson --agent plan                        # perfil inicial: build | plan | review | explore
 #   lampson --yolo | --strict | --ask            # permisos para comandos peligrosos (--dangerously-skip-permissions = --yolo)
+#   lampson --update                            # actualizar Lampson (git pull) y salir
 #   lampson --help
 #
 # Por qué una junction: el scope file("./*") de Synsema v0.6.7 equivale a "*" (disco entero); el scope
@@ -28,7 +29,8 @@ while ($i -lt $args.Count) {
         '^--?(strict|s)$'       { $Perm = "strict" }
         '^--?(ask)$'            { $Perm = "ask" }
         '^--?(permission|p)$'   { $i++; $Perm = ([string]$args[$i]).ToLower() }
-        '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 8 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
+        '^--?(update|u)$'       { Write-Host "actualizando Lampson en $here"; git -C $here pull --ff-only origin main; Write-Host ("lampson " + (git -C $here rev-parse --short HEAD)); exit $LASTEXITCODE }
+        '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 9 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
         default                 { if ($Workspace -eq "" -and -not $a.StartsWith("-")) { $Workspace = $a } else { Write-Error "argumento desconocido: $a (probá lampson --help)"; exit 1 } }
     }
     $i++

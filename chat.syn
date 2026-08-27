@@ -38,6 +38,7 @@ use "./lib/skills.syn" as skills
 use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
+use "./lib/update.syn" as update
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -144,6 +145,7 @@ let COMMANDS be [
     ["/sessions", "", "listar sesiones guardadas"],
     ["/resume", "<id>", "reanudar una sesión guardada"],
     ["/flags", "", "flags de arranque: lampson --web --agent --yolo --workspace …"],
+    ["/update", "", "actualizar Lampson a la última versión (git pull); también: lampson --update"],
     ["!<comando>", "", "correr un comando de shell VOS (sin pedir permiso); la salida queda en el contexto del agente"],
     ["/help", "", "esta ayuda"],
     ["/exit", "", "salir (la sesión queda guardada)"]
@@ -211,6 +213,9 @@ task banner(ws, cfg, profile, mode, sid)
     print("  workspace   " + ws)
     print("  agente      " + profile + "        permisos  " + mode + "        modelo  " + cfg["model"])
     print("  sesión      " + sid + "        " + git.summary())
+    let upd be update.line()
+    when upd != ""
+        print("  " + yellow("⬆ " + upd) + dim("  (o /update acá)"))
     print(LINE)
     print(tree.render(0, 22))
     print(LINE)
@@ -285,6 +290,14 @@ while running
             help()
         otherwise when input == "/flags"
             flags()
+        otherwise when input == "/update"
+            let u be update.check()
+            when not u["available"]
+                print("  ya estás en la última versión (" + u["current"] + ")")
+            otherwise
+                each n in u["notes"]
+                    print("  " + dim("· " + n))
+                print("  " + update.apply())
         otherwise when input == "/config"
             show_config(cfg, env_info["cwd"], profile, mode, opts)
         otherwise when starts_with(input, "/model")

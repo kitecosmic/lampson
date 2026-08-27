@@ -15,7 +15,8 @@ while [ $# -gt 0 ]; do
         --yolo|--dangerously-skip-permissions) export LAMPSON_PERMISSION=yolo ;;
         --strict) export LAMPSON_PERMISSION=strict ;;
         --ask) export LAMPSON_PERMISSION=ask ;;
-        *) echo "uso: lampson [--web] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask]" >&2; exit 1 ;;
+        --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
+        *) echo "uso: lampson [--web] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
     esac
     shift
 done

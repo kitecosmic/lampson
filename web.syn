@@ -45,6 +45,7 @@ use "./lib/tree.syn" as tree
 use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
+use "./lib/update.syn" as update
 
 let APPROVAL_TIMEOUT be 180
 
@@ -76,6 +77,12 @@ serve on 8080
 
     route "GET /api/tree"
         give tree.tree(6)
+
+    route "GET /api/update"
+        give update.check()
+
+    route "POST /api/update"
+        give {"result": update.apply()}
 
     route "GET /api/git"
         give git.status()

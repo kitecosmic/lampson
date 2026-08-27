@@ -58,6 +58,8 @@
   .brand .proj { color:var(--ink-3); font-weight:400; margin-left:.6em; }
   .hbtn { display:flex; align-items:center; gap:6px; font:600 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; color:var(--ink-2); background:none; border:1px solid var(--rule-2); border-radius:2px; padding:7px 12px; cursor:pointer; }
   .hbtn:hover { color:var(--ink); border-color:var(--ink-3); }
+  .hbtn.upd { color:var(--amber); border-color:var(--amber); }
+  .hbtn.upd:hover { color:var(--ink); border-color:var(--ink); }
   .theme-toggle { display:flex; align-items:center; justify-content:center; background:none; border:0; color:var(--ink-3); cursor:pointer; padding:6px; border-radius:var(--r); line-height:0; }
   .theme-toggle:hover { color:var(--ink); background:var(--paper-2); }
   header select { font:400 11.5px/1 var(--mono); color:var(--ink-2); background:var(--paper); border:1px solid var(--rule); border-radius:var(--r); padding:5px 6px; cursor:pointer; }
@@ -71,7 +73,7 @@
 
   /* ---- sidebar: secciones colapsables; el activo es una muesca en la regla, no una caja ---- */
   aside { grid-area:side; border-right:1px solid var(--rule); background:var(--paper); display:flex; flex-direction:column; min-height:0; overflow:hidden; }
-  .sec { display:flex; flex-direction:column; min-height:0; flex:none; }
+  .sec { display:flex; flex-direction:column; min-height:0; flex:none; overflow:hidden; }
   .sec + .sec { border-top:1px solid var(--rule); }
   .sec h2 { font:400 10.5px/1.35 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
   .sec h2:hover { color:var(--ink); }
@@ -212,6 +214,7 @@
   <div class="hrow">
     <span class="brand">lampson<span class="proj" id="proj">…</span></span>
     <span class="spacer"></span>
+    <button class="hbtn upd" id="update" style="display:none"></button>
     <button class="hbtn" id="new" title="empezar una conversación nueva">+ sesión</button>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
   </div>
@@ -323,6 +326,21 @@ const MOON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke
 function paintTheme() { const light = document.documentElement.getAttribute('data-theme') === 'light'; $('#theme').innerHTML = light ? MOON : SUN; $('#theme').title = light ? 'Cambiar a tema oscuro' : 'Cambiar a tema claro'; }
 $('#theme').onclick = () => { const r = document.documentElement; r.setAttribute('data-theme', r.getAttribute('data-theme') === 'light' ? 'dark' : 'light'); try { localStorage.setItem('lampson.theme', r.getAttribute('data-theme')); } catch (e) {} paintTheme(); };
 paintTheme();
+
+// ---- actualizaciones de Lampson (una vez por carga; el fetch a origin puede tardar) ----
+async function checkUpdate() {
+  let u; try { u = await (await fetch('/api/update')).json(); } catch (e) { return; }
+  const b = $('#update'); if (!u.available) { b.style.display = 'none'; return; }
+  b.textContent = `⬆ actualizar · ${u.behind} commit${u.behind === 1 ? '' : 's'}`;
+  b.title = `${u.current} → ${u.latest}\n${(u.notes || []).map(n => '· ' + n).join('\n')}\n\nen terminal: ${u.command}`;
+  b.style.display = '';
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = 'actualizando…';
+    let r; try { r = await (await fetch('/api/update', { method: 'POST' })).json(); } catch (e) { r = { result: 'no se pudo actualizar: ' + e.message }; }
+    add('meta', '⬆ ' + esc(r.result || ''));
+    b.disabled = false; b.textContent = '⬆ reiniciá el servidor'; b.onclick = null;
+  };
+}
 
 // ---- secciones del sidebar (acordeón) ----
 function setSec(name, open) {
@@ -538,7 +556,7 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if (!t || busy) return; $('#in').value = ''; send(t); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, 10000);
 </script>
 </body>

@@ -1,0 +1,57 @@
+-- lib/update.syn — ¿hay una versión nueva de Lampson? (git fetch contra origin/main)
+--
+-- Lampson se instala como clon de git (install.ps1 / install.sh), así que "actualizar" es un
+-- `git pull --ff-only`. check() compara HEAD con origin/main; el cwd es el directorio de lampson
+-- (el launcher hace cd antes de arrancar). Sin red o sin .git devuelve available=false en silencio.
+-- Cuando la distribución cambie (exe, app de escritorio), cambiar COMMAND y apply() acá y en el skill.
+
+export let COMMAND be "lampson --update"
+
+task run_git(args, secs)
+    try
+        let r be run("git", args, secs)
+        when r["exit_code"] != 0
+            give nothing
+        give trim(replace_text(r["stdout"], "\r", ""))
+    recover err
+        give nothing
+
+-- {available, behind, current, latest, notes: [líneas del log], command}
+export task check()
+    require exec("git")
+    require net
+    let current be run_git(["rev-parse", "--short", "HEAD"], 5)
+    let none be {"available": false, "behind": 0, "current": when current == nothing then "" otherwise current, "latest": "", "notes": [], "command": COMMAND}
+    when current == nothing
+        give none
+    when run_git(["fetch", "-q", "origin", "main"], 12) == nothing
+        give none
+    let behind be run_git(["rev-list", "--count", "HEAD..origin/main"], 5)
+    when behind == nothing or behind == "0"
+        give none
+    let latest be run_git(["rev-parse", "--short", "origin/main"], 5)
+    let log be run_git(["log", "--format=%s", "-5", "HEAD..origin/main"], 5)
+    let notes be when log == nothing then [] otherwise where(split(log, "\n"), (l) => trim(l) != "")
+    give {"available": true, "behind": floor(number(behind)), "current": current, "latest": when latest == nothing then "" otherwise latest, "notes": notes, "command": COMMAND}
+
+-- una línea para banners; "" si no hay nada
+export task line()
+    require exec("git")
+    require net
+    let u be check()
+    when not u["available"]
+        give ""
+    give "hay una versión nueva de Lampson (" + text(u["behind"]) + (when u["behind"] == 1 then " commit" otherwise " commits") + ", " + u["current"] + " → " + u["latest"] + ") · corré " + COMMAND
+
+-- aplica la actualización; devuelve el texto para mostrar
+export task apply()
+    require exec("git")
+    require net
+    try
+        let r be run("git", ["pull", "--ff-only", "origin", "main"], 60)
+        when r["exit_code"] != 0
+            give "no se pudo actualizar: " + trim(r["stderr"]) + "\n(si modificaste archivos de lampson, guardalos con git stash y volvé a intentar)"
+        let now be run_git(["rev-parse", "--short", "HEAD"], 5)
+        give "actualizado a " + (when now == nothing then "HEAD" otherwise now) + " · reiniciá lampson para usar la versión nueva"
+    recover err
+        give "no se pudo actualizar: " + text(err)

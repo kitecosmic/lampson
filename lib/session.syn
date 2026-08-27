@@ -5,6 +5,8 @@
 --
 -- MIGA: no existe append_file → releer + reescribir. write_file crea los directorios padres.
 
+use "./tools/memo.syn" as memo
+
 let DIR be ".lampson/sessions"
 
 export task new_id()
@@ -18,6 +20,9 @@ export task save(id, messages, meta)
     require file(".lampson")
     require file(".lampson/*")
     require time
+    require env("LAMPSON_*")
+    -- cada sesión queda marcada con el proyecto (slug del workspace) para que list() no mezcle proyectos
+    set meta["project"] to memo.slug()
     let doc be {"id": id, "updated": format_time(now()), "meta": meta, "messages": messages}
     write_file(path_of(id), json_encode(doc))
     give id
@@ -37,10 +42,13 @@ export task exists(id)
     recover err
         give false
 
--- [{id, updated, title}] ordenado por id descendente (los ids son timestamps).
+-- [{id, updated, title}] del proyecto ACTUAL, ordenado por id descendente (los ids son timestamps).
+-- Sesiones viejas sin marca de proyecto se listan igual (anteriores a esta marca).
 export task list()
     require file.read(".lampson")
     require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let mine be memo.slug()
     let out be []
     try
         let entries be list_dir(DIR)
@@ -50,7 +58,9 @@ export task list()
                 try
                     let d be load(id)
                     let title be when contains(d["meta"], "title") then d["meta"]["title"] otherwise ""
-                    set out to append(out, {"id": id, "updated": d["updated"], "title": title})
+                    let project be when contains(d["meta"], "project") then d["meta"]["project"] otherwise mine
+                    when project == mine
+                        set out to append(out, {"id": id, "updated": d["updated"], "title": title})
                 recover err
                     set out to out
     recover err

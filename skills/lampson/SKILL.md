@@ -55,6 +55,15 @@ in a second terminal, then tell me the URL".
 - When the context grows past the compaction threshold, older turns are replaced by a summary that
   keeps goals, files touched, current state, pending work and errors seen.
 
+## Updating Lampson
+- Lampson is installed as a git clone (`~/lampson`), so updating is a fast-forward pull. Both UIs
+  check `origin/main` on start and show a notice when a newer version exists (terminal banner, web
+  header button). The user updates with **`lampson --update`** in any terminal, `/update` in the REPL,
+  or the header button in the web UI — then restarts Lampson. Re-running the installer does the same.
+- If asked "how do I update Lampson?", answer exactly that. If the pull fails because of local edits
+  in the lampson folder, suggest `git -C ~/lampson stash` first. (When the distribution changes —
+  desktop app, single binary — this section is the place that gets rewritten.)
+
 ## Extending the harness (if the user asks you to)
 - One tool = one file `lib/tools/<name>.syn` exporting `task tool(...)` (its `require` lines at the
   top of the body) and `let SPEC` (JSON Schema). Register it in `lib/tools.syn` (`use`, `registry()`,
