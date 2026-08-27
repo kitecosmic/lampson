@@ -51,7 +51,9 @@ export task list()
                         set title to trim(replace_text(line, "#", ""))
                 set out to append(out, {"name": name, "title": when length(title) > 120 then slice(title, 0, 120) otherwise title})
     recover err
-        when not contains(err, "not a directory") and not contains(err, "not found") and not contains(err, "No such")
+        -- el runtime lanza "Not a directory: …" (mayúscula) cuando memory/<slug> aún no existe
+        let e be lower(text(err))
+        when not contains(e, "not a directory") and not contains(e, "not found") and not contains(e, "no such")
             raise(err)
         give []
     give sort_by(out, (x) => x["name"])
