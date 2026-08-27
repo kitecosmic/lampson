@@ -49,7 +49,20 @@ use "./lib/update.syn" as update
 
 let APPROVAL_TIMEOUT be 180
 
--- salida del pty como texto (v0.6.8 entrega texto aunque la doc diga bytes; cubrimos ambos)
+-- Quién puede usar la API (chat con tools, terminal, matar procesos): `serve` escucha en 0.0.0.0, así que
+-- sin esto cualquiera en la LAN tendría una shell en tu proyecto. Política: SOLO loopback. Opt-in para
+-- clientes remotos: LAMPSON_WEB_TOKEN en .env + header `Authorization: Bearer <token>` (la UI web no lo
+-- manda; es para scripts). `auth with` corre ANTES del upgrade WebSocket, así que cubre /api/term.
+task check_client(token, request)
+    let ip be text(ip of request)
+    when ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
+        give {"local": true}
+    let want be env("LAMPSON_WEB_TOKEN", "")
+    when want != "" and token == want
+        give {"local": false}
+    give nothing
+
+-- salida del pty como texto (la doc de 0.6.8 ya lo dice así; is_bytes por si cambia)
 task as_text(x)
     when is_bytes(x)
         give decode(x, "utf8_lossy")
@@ -75,23 +88,24 @@ task boot(profile, mode, ask_fn, pname, model)
 
 serve on 8080
     max_streams 50
+    auth with check_client
     static "./public"
 
-    route "GET /api/sessions"
+    route "GET /api/sessions" requires auth
         give {"sessions": session.list()}
 
-    route "GET /api/sessions/:id"
+    route "GET /api/sessions/:id" requires auth
         when not session.exists(params.id)
             give not_found("session not found")
         let doc be session.load(params.id)
         let visible be where(doc["messages"], (m) => m["role"] != "system")
         give {"id": doc["id"], "updated": doc["updated"], "meta": doc["meta"], "messages": visible}
 
-    route "GET /api/config"
+    route "GET /api/config" requires auth
         let cfg be provider.config()
         give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "providers": provider.providers(), "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
 
-    route "GET /api/tree"
+    route "GET /api/tree" requires auth
         give tree.tree(6)
 
     -- Terminal real en el navegador: un shell dentro de un pseudo-terminal (pty) por conexión WebSocket.
@@ -99,7 +113,7 @@ serve on 8080
     -- Servidor → navegador: frames de texto con prefijo: "o" + salida cruda del pty (ANSI incluido, xterm.js
     -- la dibuja) | "c" + JSON de control ({type: hello|exit}).
     -- El shell vive lo que vive el socket: cerrar el panel lo mata (el runtime no deja huérfanos).
-    route "GET /api/term"
+    route "GET /api/term" requires auth
         socket
             let sh be term_shell()
             let p be proc_spawn(sh[0], sh[1], {"cwd": "workspace", "pty": true, "cols": 120, "rows": 32})
@@ -127,57 +141,57 @@ serve on 8080
                     ws_send(socket, "o" + as_text(ev["data"]))
             proc_close(p)
 
-    route "GET /api/update"
+    route "GET /api/update" requires auth
         give update.check()
 
-    route "POST /api/update"
+    route "POST /api/update" requires auth
         give {"result": update.apply()}
 
-    route "GET /api/git"
+    route "GET /api/git" requires auth
         give git.status()
 
-    route "GET /api/memory"
+    route "GET /api/memory" requires auth
         give {"dir": memo.dir(), "notes": memo.list()}
 
-    route "GET /api/memory/note"
+    route "GET /api/memory/note" requires auth
         when not contains(query, "name")
             give fail(400, "name required")
         give {"name": query.name, "content": memo.note_read(query.name)}
 
-    route "GET /api/proc"
+    route "GET /api/proc" requires auth
         give {"processes": proc.list()}
 
-    route "GET /api/proc/log"
+    route "GET /api/proc/log" requires auth
         when not contains(query, "name")
             give fail(400, "name required")
         let n be when contains(query, "tail") then number(query.tail) otherwise 200
         give {"name": query.name, "running": proc.alive(query.name), "log": proc.logs(query.name, n)}
 
-    route "GET /api/ports"
+    route "GET /api/ports" requires auth
         give {"ports": proc.listeners()}
 
-    route "POST /api/ports/kill"
+    route "POST /api/ports/kill" requires auth
         expect body {pid: number}
         let b be json of request
         give {"result": proc.kill_pid(b["pid"])}
 
-    route "POST /api/proc/stop"
+    route "POST /api/proc/stop" requires auth
         expect body {name: text}
         let b be json of request
         give {"result": proc.halt(b["name"])}
 
-    route "GET /api/file"
+    route "GET /api/file" requires auth
         when not contains(query, "path")
             give fail(400, "path required")
         give tree.file_content(query.path)
 
-    route "POST /api/approve"
+    route "POST /api/approve" requires auth
         expect body {id: text, decision: bool}
         let b be json of request
         state_set("approval:" + b["id"], when b["decision"] then "yes" otherwise "no")
         give {"ok": true}
 
-    route "POST /api/chat"
+    route "POST /api/chat" requires auth
         expect body {message: text}
         let b be json of request
         let message be b["message"]

@@ -5,6 +5,10 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
 
 # Synsema quick reference (v0.6.8)
 
+> Curated 10 KB summary for the agent (the full reference is ~450 KB and lives in the user's editor
+> skill). Kept in sync by hand with each `synsema update`; if `synsema --version` is newer than the
+> version above, trust the runtime's error messages over this file.
+
 ## Dev loop
 - `synsema check file.syn` (parse + validates every `use` import) · `synsema run file.syn` ·
   `synsema test file.syn` (runs `test "..."` blocks) · `synsema serve file.syn` (HTTP server) ·
@@ -36,7 +40,7 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   `{type: "stdout"|"stderr"|"exit", data}` or `nothing`; `proc_send(p, text)`, `proc_kill(p)`, `proc_close(p)`.
   `select({"a": handle, "b": handle}, secs)` waits on processes, sockets and bus at once (`ev["name"]`).
 - **Pseudo-terminal (v0.6.8+)**: `proc_spawn(cmd, args, {"pty": true, "cols": 120, "rows": 40})` for
-  y/N prompts, passwords, REPLs, TUIs. One `stdout` stream of raw bytes with ANSI (`line_mode` off);
+  y/N prompts, passwords, REPLs, TUIs. One `stdout` stream of TEXT chunks with ANSI (never split inside a UTF-8 char);
   `strip_ansi(text)` shows what a human sees; keys go with `proc_send` (Enter = `"\r"`, Ctrl-C = `bytes([3])`);
   `proc_resize(p, cols, rows)`. Web terminal = `socket` route + pty in one `select` (xterm.js renders).
 - Every live process dies with its interpreter (end of request / program) — no orphans.

@@ -42,6 +42,11 @@ watching a dev server), when something is denied for you (secrets, dangerous com
 should verify a result with their own eyes. Say exactly what to type, e.g. "run `!npm run dev` (or open
 the terminal button and run `npm run dev`), then tell me the URL".
 
+## Network exposure
+- The web server listens on all interfaces but every `/api/*` route (and the terminal socket) only
+  accepts loopback clients; others get 401 unless they present `LAMPSON_WEB_TOKEN`. If the user asks
+  to use Lampson from another machine, point them to that token — never suggest removing the check.
+
 ## Agents / modes
 - `build` (default): all tools. `plan`: read-only, produce a numbered plan. `review`: read + run
   tests, never edit. `explore`: read-only search. The user switches with `/agent <name>`.

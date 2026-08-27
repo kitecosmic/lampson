@@ -23,6 +23,9 @@ language itself — and every step is visible, in the terminal or in a web UI.
   and REPLs work); the output lands in the agent's context.
 - **Terminal in the browser**: the web UI opens a real shell (pty, cwd = your project) in the center pane
   — `>_ terminal` in the header. Synsema 0.6.8+.
+- **Local only**: the web API (chat with tools, terminal, process control) answers loopback clients
+  only; anything else gets 401. To let a script in from elsewhere, set `LAMPSON_WEB_TOKEN` in `.env`
+  and send `Authorization: Bearer <token>`.
 - **Sessions** persisted as JSON, including every tool call, result, error and denial.
 
 ## Install
