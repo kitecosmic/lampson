@@ -2,11 +2,12 @@
 --
 -- MIGAS:
 --   * en Windows `bash` a secas resuelve al de WSL y cuelga; usar Git Bash explícito (default) o cmd.
---   * `run()` se cuelga para siempre si el comando deja un descendiente vivo: en Windows los hijos
---     heredan TODOS los handles, incluido el pipe de stdout de Synsema, y run() espera su EOF (pasado el
---     timeout también). Por eso el comando corre vía lib/tools/bash_wrapper.sh, que cierra su stdout
---     ANTES de lanzar nada, aplica el timeout de verdad, mata el ÁRBOL, y devuelve la salida por archivo
---     en .lampson/tmp/. El timeout de run() queda solo como red de seguridad.
+--   * NO usar `run()` para el comando del modelo: se cuelga para siempre si el comando deja un
+--     descendiente vivo (Windows hereda el pipe de stdout) y su timeout mata solo al hijo directo.
+--     Desde 2026-08-27 el comando corre con `proc_spawn` (v0.6.9): eventos por línea hasta el exit o el
+--     plazo, stdin cerrado (EOF: nada se queda esperando teclado), y `proc_close` mata el ÁRBOL
+--     (Job Object / process group) — un nieto con el pipe abierto no cuelga (1 s de gracia). Adiós
+--     bash_wrapper.sh y archivos temporales.
 --   * el proceso hijo NO hereda el scope de Synsema (un `cat ../x` en bash funciona). El aislamiento del
 --     shell lo dan permission.syn (patrones) + el operador (contenedor si hace falta).
 use "./common.syn" as c
@@ -20,6 +21,56 @@ export task shell_config()
     let is_cmd be c.ends_with(lower(shell), "cmd.exe") or lower(shell) == "cmd"
     give {"shell": shell, "flag": env("LAMPSON_SHELL_FLAG", when is_cmd then "/c" otherwise "-c"), "is_cmd": is_cmd}
 
+-- comandos que son servidores/watchers: rechazarlos ANTES de correrlos. El timeout mata el árbol, pero
+-- un servidor lanzado acá dejó un huérfano con el puerto 3000 tomado y el `process` real se fue al 3001
+-- (2026-08-27). La descripción ya lo decía; el modelo lo intentó igual "con | head" — hay que impedirlo.
+let SERVER_RE be ".*((npm|pnpm|yarn|bun)( run)? (dev|start|serve|watch|preview)|npx (next|vite|nodemon|serve|http-server)|next (dev|start)|vite( |$)|nodemon|synsema serve|uvicorn|gunicorn|flask run|manage\\.py runserver|python3? -m http\\.server|rails s(erver)?|php -S|ng serve|cargo (run|watch)|go run|dotnet (run|watch)|tail -f).*"
+
+export task looks_like_server(command)
+    let cmd be trim(lower(replace_text(command, "\n", " ")))
+    when matches(cmd, "timeout [0-9]+.*")
+        give false
+    give matches(cmd, SERVER_RE)
+
+-- corre argv con plazo real: junta stdout+stderr por líneas, corta al plazo y mata el árbol
+export task run_capture(exe, argv, t)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let p be proc_spawn(exe, argv, {"cwd": c.ROOT, "stderr": "merge", "on_full": "drop_oldest"})
+    proc_close_stdin(p)
+    let deadline be now() + t
+    let lines be []
+    let size be 0
+    let cut be false
+    let code be nothing
+    let timed_out be false
+    while code == nothing and not timed_out
+        let left be deadline - now()
+        when left <= 0
+            set timed_out to true
+        otherwise
+            let ev be proc_recv(p, when left < 0.2 then 0.2 otherwise left)
+            when ev == nothing
+                set timed_out to now() >= deadline
+            otherwise when ev["type"] == "exit"
+                set code to ev["data"]["exit_code"]
+            otherwise when size < 1000000
+                set lines to append(lines, ev["data"])
+                set size to size + length(ev["data"]) + 1
+            otherwise
+                set cut to true
+    proc_close(p)
+    let out be join(lines, "\n")
+    when cut
+        set out to out + "\n[output truncated at 1 MB]"
+    when timed_out
+        give "ERROR: timeout after " + text(t) + "s — the command and its child processes were killed. For servers/watchers use the process tool. Output so far:\n" + out
+    when code != 0
+        set out to out + "\n[exit code " + text(code) + "]"
+    give out
+
 export task tool(command, timeout)
     require exec
     require time
@@ -27,28 +78,15 @@ export task tool(command, timeout)
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
+    when looks_like_server(command)
+        give "REFUSED: this looks like a server/watcher (`" + command + "`). bash kills its process tree at the timeout, and a dev server left half-killed keeps its port busy. Use the process tool instead: process(action=\"start\", name=\"dev\", command=\"...\"), then process(action=\"logs\") or just keep working — its new output is appended to every bash result. If it is really a one-shot command, wrap it with `timeout 30 ...` and explain why."
     let sc be shell_config()
     let t be when timeout == nothing then 120 otherwise floor(timeout)
     when t > 600
         set t to 600
     when t < 1
         set t to 1
-    let out be ""
-    when sc["is_cmd"]
-        -- cmd: sin wrapper (no hay bash); el timeout del runtime es lo único que hay
-        let r be run(sc["shell"], [sc["flag"], command], t, {"cwd": c.ROOT, "max_output": 1000000})
-        set out to r["stdout"]
-        when r["stderr"] != ""
-            set out to out + "\n[stderr]\n" + r["stderr"]
-        when r["exit_code"] != 0
-            set out to out + `\n[exit code {text(r["exit_code"])}]`
-    otherwise
-        -- bash: wrapper con plazo real + kill del árbol; comando por env, salida por archivo
-        let outfile be ".lampson/tmp/bash-" + text(floor(now() * 1000)) + ".txt"
-        write_file(outfile, "")
-        run(sc["shell"], ["lib/tools/bash_wrapper.sh", text(t), outfile], t + 15, {"cwd": ".", "env": {"LAMPSON_CMD": command, "LAMPSON_WS": c.ROOT}})
-        set out to read_file(outfile)
-        write_file(outfile, "")
+    let out be run_capture(sc["shell"], [sc["flag"], command], t)
     when trim(out) == ""
         set out to "(no output)"
     -- lo que pasó mientras tanto en los procesos gestionados (servidores) — el agente "ve la consola"

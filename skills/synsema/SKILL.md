@@ -3,7 +3,7 @@ name: synsema
 description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, live processes / pseudo-terminals, and the runtime traps that cost hours. Load before touching any .syn file.
 ---
 
-# Synsema quick reference (v0.6.8)
+# Synsema quick reference (v0.6.9)
 
 > Curated 10 KB summary for the agent (the full reference is ~450 KB and lives in the user's editor
 > skill). Kept in sync by hand with each `synsema update`; if `synsema --version` is newer than the
@@ -43,9 +43,23 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   y/N prompts, passwords, REPLs, TUIs. One `stdout` stream of TEXT chunks with ANSI (never split inside a UTF-8 char);
   `strip_ansi(text)` shows what a human sees; keys go with `proc_send` (Enter = `"\r"`, Ctrl-C = `bytes([3])`);
   `proc_resize(p, cols, rows)`. Web terminal = `socket` route + pty in one `select` (xterm.js renders).
-- Every live process dies with its interpreter (end of request / program) — no orphans.
+- **Tree kill (v0.6.9+)**: `proc_kill`/`proc_close` reach the WHOLE process tree (Job Object on Windows,
+  process group on unix) — `sh -c "npm run dev"` takes its `node` with it; `proc_stats(p)["tree"]` confirms.
+  `{"process_group": false}` deliberately detaches a daemon. A grandchild holding the pipe cannot hang you (1 s grace).
+- Every live process dies with its interpreter — **under `serve` that means the END OF THE REQUEST**: a
+  `proc_spawn` in a handler is gone when the handler returns. A process that must outlive requests lives
+  inside an `agent` spawned from the handler (own lifecycle; blackboard `share/observe` + `bus_*` are shared
+  with handlers). That is how lampson's `process` tool works (`lib/tools/proc.syn`).
+- **File watch (v0.6.9+)**: `let w be watch("src", {"interval": 0.2, "ignore": ["*.tmp"]})` → events
+  `{type: "create"|"modify"|"delete", path, is_dir}` via `watch_recv(w, secs)` or `select`; polling with a
+  snapshot (latency = interval), `watch_close(w)`. Gate: `file("src")` + `file("src/*")`.
 
 ## Traps verified on this machine (do not fight them)
+- Agents: an `agent` body sees ONLY its `spawn X with a = …` parameters and the builtins — not the
+  module's `let` constants nor `c.*` imports ("Undefined variable"). `stop` only inside loops. Under
+  `synsema test` the swarm is not wired (`spawn` does nothing, `agents()` undefined) → test agents with
+  `synsema run`. `synsema run` joins agents at exit: a `while true` supervisor must be told to stop (bus/signal).
+- `;` between statements is a lexer error (one statement per line).
 - `file("./*")` behaves like `"*"` (whole disk). Use a named dir scope: `file("workspace/*")`.
 - `http_post(url, MAP)` sends `text(map)`, not JSON → `http_post(url, json_encode(body), {"Content-Type": "application/json"})`.
 - Responses have `status, ok, body, headers` — no `json` key → `json_decode(body of r)`; on network error: `status 0` + `error`.

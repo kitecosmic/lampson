@@ -1,0 +1,74 @@
+-- proc_test.syn — procesos gestionados (supervisor-agente + proc_spawn). Corre con `synsema run`
+-- (NO `synsema test`: en modo test el swarm no está cableado y `spawn` no arranca nada). Lo lanza
+-- tests/run.ps1 / run.sh después de la suite unitaria. Sale con código 1 si algo falla.
+require exec
+require time
+require env("LAMPSON_*")
+require env("OS")
+require file(".lampson")
+require file(".lampson/*")
+require file("workspace")
+require file("workspace/*")
+use "./lib/tools/proc.syn" as proc
+use "./lib/tools/bash.syn" as bash
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+print("procesos gestionados: start → report ve líneas nuevas → halt mata el árbol")
+proc.halt("t_demo")
+let st be proc.start("t_demo", "for i in 1 2 3 4 5 6 7 8 9 10; do echo line-$i; sleep 1; done")
+check(contains(st, "status: running"), "start devuelve running: " + st)
+let r1 be proc.report()
+check(contains(r1, "t_demo") and contains(r1, "line-1"), "report ve line-1: " + r1)
+sleep(2)
+let r2 be proc.report()
+check(contains(r2, "line-") and not contains(r2, "line-1" + "\n"), "report solo trae líneas nuevas: " + r2)
+check(contains(proc.logs("t_demo", 2), "line-"), "logs tail")
+check(contains(proc.halt("t_demo"), "stopped"), "halt → stopped")
+sleep(1)
+check(proc.alive("t_demo") == false, "alive false tras halt")
+let bad be false
+try
+    proc.start("bad name!", "echo x")
+recover err
+    set bad to true
+check(bad, "nombre inválido → error")
+
+print("process: `a && cmd-nativo` sigue vivo, y halt mata el árbol nativo (tree-kill v0.6.9)")
+let native be when env("OS", "") == "Windows_NT" then "cmd.exe //c \"ping -n 30 127.0.0.1 >nul\"" otherwise "sleep 30"
+let st2 be proc.start("t_demo", "true && " + native)
+check(contains(st2, "status: running"), "start nativo running: " + st2)
+check(proc.alive("t_demo") == true, "alive true")
+check(contains(proc.halt("t_demo"), "stopped"), "halt nativo → stopped")
+sleep(1)
+check(proc.alive("t_demo") == false, "alive false")
+when env("OS", "") == "Windows_NT"
+    let r be run("C:\Program Files\Git\bin\bash.exe", ["-c", "tasklist //FI \"IMAGENAME eq ping.exe\" //NH"], 10)
+    check(not contains(lower(r["stdout"]), "ping.exe"), "ping.exe no sobrevivió al halt")
+
+print("un proceso que termina de verdad deja su exit code en el log")
+proc.start("t_demo", "echo hola; exit 3")
+sleep(1)
+check(contains(proc.logs("t_demo", 5), "[process exited with code 3]"), "log termina con exit code 3: " + proc.logs("t_demo", 5))
+check(proc.alive("t_demo") == false, "alive false tras exit")
+
+print("bash (proc_spawn): exit code, timeout con tree-kill, stdin cerrado")
+let o1 be bash.run_capture("C:\Program Files\Git\bin\bash.exe", ["-c", "echo uno; echo dos >&2; exit 4"], 10)
+check(contains(o1, "uno") and contains(o1, "dos") and contains(o1, "[exit code 4]"), "stdout+stderr+exit code: " + o1)
+let t0 be now()
+let o2 be bash.run_capture("C:\Program Files\Git\bin\bash.exe", ["-c", "echo antes; sleep 30; echo despues"], 2)
+check(contains(o2, "timeout after 2s") and contains(o2, "antes") and not contains(o2, "despues"), "timeout corta y conserva salida parcial: " + o2)
+check(now() - t0 < 6, "el timeout es real (" + text(floor(now() - t0)) + "s)")
+let o3 be bash.run_capture("C:\Program Files\Git\bin\bash.exe", ["-c", "cat; echo fin"], 5)
+check(contains(o3, "fin"), "stdin cerrado: cat no espera teclado")
+
+proc.halt_all()
+when length(failures) > 0
+    raise(text(length(failures)) + " fallos en proc_test")
+print("proc_test: todo OK")

@@ -30,6 +30,13 @@ elif [ ! -e "$here/workspace" ]; then
     echo "no hay workspace: corré lampson desde el directorio del proyecto, o --workspace /ruta" >&2; exit 1
 fi
 export LAMPSON_WORKSPACE="$(readlink -f "$here/workspace")"
+# skills externas globales (npx skills add -g → ~/.agents/skills; Claude Code → ~/.claude/skills), montadas bajo .lampson/
+mkdir -p "$here/.lampson"
+for pair in "skills-global:$HOME/.agents/skills" "skills-claude:$HOME/.claude/skills"; do
+    link="$here/.lampson/${pair%%:*}"; src="${pair#*:}"
+    [ -L "$link" ] && rm -f "$link"
+    [ -d "$src" ] && ln -s "$src" "$link"
+done
 echo "workspace -> $LAMPSON_WORKSPACE"
 cd "$here"
 if [ "$web" = 1 ]; then echo "web: http://127.0.0.1:8080"; exec synsema serve web.syn; else exec synsema run chat.syn; fi

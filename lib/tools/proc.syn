@@ -1,11 +1,21 @@
 -- lib/tools/proc.syn — procesos gestionados (servidores, watchers): start / logs / stop / list / report
 --
--- Estado en .lampson/proc/<name>.{cmd,log,pid,pos}. El log es un ARCHIVO, así que:
---   * el agente puede pedir `logs` en cualquier momento;
---   * `report()` devuelve las líneas NUEVAS desde la última vez (offset en .pos) — la tool bash lo
---     agrega a cada resultado, de modo que el agente ve lo que pasa en sus servidores sin que nadie
---     se lo cuente (el "ve la consola" que un humano tiene gratis);
---   * la UI web lista los procesos y muestra el log en vivo.
+-- DISEÑO (2026-08-27, nativo sobre proc_spawn — antes era bash + pidfiles, ver README "runtime notes"):
+--   * Cada proceso vive dentro de un AGENTE supervisor (`Sup`), que es lo único con ciclo de vida
+--     propio bajo `serve`: un proc_spawn hecho en un handler muere al terminar el request; uno hecho
+--     en un agente vive hasta que el agente termina (verificado en v0.6.9, run y serve).
+--   * El supervisor drena los eventos del proceso (select) al ARCHIVO .lampson/proc/<name>.log, así:
+--       - `report()` devuelve las líneas NUEVAS desde la última vez (offset en .pos) — la tool bash lo
+--         agrega a cada resultado: el agente "ve la consola" de sus servidores sin pedirla;
+--       - la UI web y `/logs` leen el mismo archivo;
+--       - el archivo es el spill: nada se pierde por tamaño de cola.
+--   * Estado vivo en el blackboard: "proc:<name>" = {status, pid, exit_code, started}. Se lee con
+--     observe desde cualquier handler/agente (misma máquina de estado que ve el modelo).
+--   * `stop` = bus_publish("proc.stop.<name>") → el supervisor hace proc_close = TERM → KILL a 2 s
+--     sobre el ÁRBOL (Job Object en Windows, process group en unix; v0.6.9+). Sin taskkill, sin ps.
+--   * Al cerrar Lampson (chat: /exit; web: Ctrl-C → agent_stop) los procesos mueren con él —
+--     el runtime no deja huérfanos. Es la decisión de opencode/deepseek; hermes es el único que persiste.
+--   * El comando corre en `bash -c` (Git Bash en Windows) para que el modelo tenga pipes y &&.
 use "./common.syn" as c
 
 export let DIR be ".lampson/proc"
@@ -33,17 +43,59 @@ task tail_lines(content, n)
         set lines to slice(lines, length(lines) - n, length(lines))
     give join(lines, "\n")
 
-export task alive(name)
+-- ---------- supervisor: un agente por proceso ----------
+-- Parámetros del spawn: name, command, sh (ejecutable del shell), cwd, log (path). OJO: un agente NO ve
+-- las constantes del módulo (DIR, c.*) — solo sus parámetros y las builtins. Estado → blackboard "proc:<name>";
+-- salida → .lampson/proc/<name>.log (una línea por evento, más "[process exited with code N]").
+agent Sup
     require exec
+    require time
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let key be "proc:" + name
+    let p be nothing
     try
-        let r be run(shell(), ["lib/tools/proc.sh", "alive", path(name, "pid")], 10, {"cwd": "."})
-        give trim(r["stdout"]) == "yes"
+        set p to proc_spawn(sh, ["-c", command], {"cwd": cwd, "stderr": "merge", "on_full": "drop_oldest"})
     recover err
+        append_file(log, "[cannot start: " + text(err) + "]\n[process exited with code -1]\n")
+        share {"status": "exited", "exit_code": -1, "pid": 0, "started": now()} as key
+    when p != nothing
+        share {"status": "running", "exit_code": nothing, "pid": proc_stats(p)["pid"], "started": now()} as key
+        let sub be bus_subscribe(["proc.stop." + name, "proc.stop_all"])
+        let open be true
+        while open
+            let ev be select({"p": p, "stop": sub}, 30)
+            when ev == nothing
+                set open to proc_status(p) == "running"
+            otherwise when ev["name"] == "stop"
+                proc_close(p)
+                append_file(log, "[process stopped by lampson]\n")
+                share {"status": "stopped", "exit_code": -1, "pid": 0, "started": nothing} as key
+                set open to false
+            otherwise when ev["type"] == "exit"
+                let code be ev["data"]["exit_code"]
+                append_file(log, "[process exited with code " + text(code) + "]\n")
+                share {"status": "exited", "exit_code": code, "pid": 0, "started": nothing} as key
+                set open to false
+            otherwise
+                append_file(log, ev["data"] + "\n")
+        proc_close(p)
+        bus_unsubscribe(sub)
+
+-- estado vivo de un proceso: {status, exit_code, pid, started} o nothing si nunca arrancó en ESTA sesión
+export task state(name)
+    observe "proc:" + name as st
+    give st
+
+export task alive(name)
+    let st be state(name)
+    when st == nothing
         give false
+    give st["status"] == "running"
 
 export task start(name, command)
     require exec
@@ -52,6 +104,8 @@ export task start(name, command)
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
     when not valid_name(name)
         raise("invalid process name '" + text(name) + "' (use letters, digits, - or _)")
     when alive(name)
@@ -59,11 +113,28 @@ export task start(name, command)
     write_file(path(name, "cmd"), command)
     write_file(path(name, "log"), "")
     write_file(path(name, "pos"), "0")
-    run(shell(), ["lib/tools/proc.sh", "start", path(name, "log"), path(name, "pid")], 20, {"cwd": ".", "env": {"LAMPSON_CMD": command, "LAMPSON_WS": c.ROOT}})
-    sleep(2)
+    -- la clave del blackboard puede tener el estado VIEJO (stopped/exited) de un arranque anterior:
+    -- marcar "starting" antes del spawn, el supervisor la pisa con running/exited
+    share {"status": "starting", "exit_code": nothing, "pid": 0, "started": now()} as "proc:" + name
+    spawn Sup with name = name, command = command, sh = shell(), cwd = c.ROOT, log = path(name, "log")
+    -- esperar a que el supervisor publique (running/exited) y hasta 3s a que salga algo (npm en Windows
+    -- tarda >2s en escribir una línea en frío); "EXITED" solo lo dice el supervisor, nunca un log vacío
+    let waited be 0
+    let log be ""
+    while waited < 20 and state(name)["status"] == "starting"
+        sleep(0.1)
+        set waited to waited + 1
+    set waited to 0
+    while waited < 6 and trim(log) == "" and alive(name)
+        sleep(0.5)
+        set waited to waited + 1
+        set log to read_file(path(name, "log"))
+    set log to read_file(path(name, "log"))
     let running be alive(name)
-    let head be "started '" + name + "': $ " + command + "\n" + (when running then "status: running" otherwise "status: EXITED within 2s (see log)") + "\nlog (first lines):\n"
-    give head + tail_lines(read_file(path(name, "log")), 30)
+    let status be when running then "status: running (pid " + text(state(name)["pid"]) + "; NEW log lines arrive with every bash result, or call logs)" otherwise "status: EXITED (the log ends with its exit code) — read it, fix the cause and start again with this tool; do NOT run the same command with bash"
+    when running and trim(log) == ""
+        set status to status + "\nlog: empty so far (cold start) — call logs in a few seconds"
+    give "started '" + name + "': $ " + command + "\n" + status + "\nlog (first lines):\n" + tail_lines(log, 30)
 
 export task logs(name, tail)
     require file(".lampson")
@@ -74,23 +145,31 @@ export task logs(name, tail)
     recover err
         give "no such process '" + text(name) + "'"
 
+-- stop cooperativo: aviso por bus → el supervisor mata el árbol; esperamos hasta 6s la confirmación
 export task halt(name)
-    require exec
-    require env("LAMPSON_*")
-    require env("OS")
-    require file(".lampson")
-    require file(".lampson/*")
+    require time
     when not alive(name)
         give "process '" + text(name) + "' is not running"
-    run(shell(), ["lib/tools/proc.sh", "stop", path(name, "pid")], 20, {"cwd": "."})
-    write_file(path(name, "pid"), "")
+    bus_publish("proc.stop." + name, {})
+    let waited be 0
+    while waited < 12 and alive(name)
+        sleep(0.5)
+        set waited to waited + 1
+    when alive(name)
+        give "stop requested for '" + name + "' but it is still running — check `list` again in a moment"
     give "stopped '" + name + "'"
+
+-- mata todos los gestionados (salida de lampson)
+export task halt_all()
+    require time
+    bus_publish("proc.stop_all", {})
+    let waited be 0
+    while waited < 10 and length(where(list(), (p) => p["running"])) > 0
+        sleep(0.3)
+        set waited to waited + 1
 
 -- [{name, running, command}]
 export task list()
-    require exec
-    require env("LAMPSON_*")
-    require env("OS")
     require file(".lampson")
     require file(".lampson/*")
     let out be []
@@ -140,6 +219,7 @@ export task listeners()
         set enriched to append(enriched, l)
     give sort_by(enriched, (x) => x["port"])
 
+-- matar un pid ajeno (huérfano de otra herramienta): taskkill /T o kill_tree, via proc.sh
 export task kill_pid(pid)
     require exec
     require env("LAMPSON_*")
@@ -147,11 +227,9 @@ export task kill_pid(pid)
     let r be run(shell(), ["lib/tools/proc.sh", "kill", text(floor(pid))], 20, {"cwd": "."})
     give trim(r["stdout"])
 
--- líneas nuevas de cada proceso desde la última llamada (y avisos de salida). "" si no hay nada.
+-- líneas nuevas de cada proceso desde la última llamada. "" si no hay nada.
+-- La salida del proceso ("[process exited with code N]") llega como línea nueva: es el aviso.
 export task report()
-    require exec
-    require env("LAMPSON_*")
-    require env("OS")
     require file(".lampson")
     require file(".lampson/*")
     let parts be []
@@ -166,17 +244,7 @@ export task report()
             set pos to 0
         let fresh be slice(log, pos, length(log))
         write_file(path(p["name"], "pos"), text(length(log)))
-        let status be when p["running"] then "running" otherwise "EXITED"
         when trim(fresh) != ""
+            let status be when p["running"] then "running" otherwise "EXITED"
             set parts to append(parts, "[process '" + p["name"] + "' (" + status + ") new output:\n" + c.truncate(fresh, MAX_REPORT) + "]")
-        otherwise when not p["running"]
-            -- solo avisar la salida una vez: marcamos con pos = -1... simple: si el pid file está vacío no avisar
-            let pid be ""
-            try
-                set pid to trim(read_file(path(p["name"], "pid")))
-            recover err
-                set pid to ""
-            when pid != ""
-                set parts to append(parts, "[process '" + p["name"] + "' has EXITED]")
-                write_file(path(p["name"], "pid"), "")
     give join(parts, "\n")

@@ -27,6 +27,9 @@ try {
     $env:LAMPSON_WORKSPACE = $tmp
     synsema test unit.test.syn
     $code = $LASTEXITCODE
+    # procesos gestionados: supervisor-agente + proc_spawn — corre con `run` (el swarm no existe bajo `test`)
+    synsema run proc_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
 } finally {
     # residuos de los tests fuera del workspace: notas de memoria del slug de prueba y sesiones test-*
     Get-ChildItem -LiteralPath (Join-Path $here "memory") -Directory -Filter "lampson-test-workspace-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force

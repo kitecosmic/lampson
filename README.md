@@ -143,7 +143,7 @@ lib/
   tools.syn          tool registry (allow-list) + JSON-Schema catalog + per-profile subsets
   tools/<x>.syn      one tool per file: read write edit ls find grep bash process skill
   tools/common.sh    shared shell helpers (kill process trees on Windows/unix)
-  tools/bash_wrapper.sh / proc.sh   real timeouts, detached processes, ports
+  tools/proc.sh        ports, command line of a pid, kill a foreign pid tree (the managed processes are native)
   agents.syn         profiles (build / plan / review / explore) + `delegate`
   permission.syn     evaluate(tool, args, mode) → allow | deny | ask
   prompt.syn         system prompt (rules, tools, environment, skills index, AGENTS.md of the project)
@@ -178,9 +178,23 @@ allow-list is a file you can read.
 
 ### Skills
 
-A folder with `SKILL.md` (`name:` + `description:` front matter). The system prompt carries only the
-index; the content enters the context when the model calls `skill(name)`. Search order:
-`skills/` (harness) < `workspace/skills/` (project) < `workspace/.lampson/skills/` (local).
+A folder with `SKILL.md` (`name:` + `description:` front matter) — the [Agent Skills](https://agentskills.io)
+format, so anything published on [skills.sh](https://skills.sh) works as-is. The system prompt carries only
+the index; the content enters the context when the model calls `skill(name)`. Search order (later wins):
+`~/.agents/skills`, `~/.claude/skills` (global) < `skills/` (harness) < `.claude/skills`, `.agents/skills`,
+`skills/` of the project < `.lampson/skills/` of the project (local, not committed).
+
+**Installing external skills** — there is no installer of its own; use the standard one and lampson
+picks the skill up on the next start (`/skills` lists them):
+
+```bash
+npx skills add anthropics/skills --skill frontend-design      # → ./.agents/skills (this project)
+npx skills add anthropics/skills --skill frontend-design -g   # → ~/.agents/skills (every project)
+npx skills list · npx skills update · npx skills remove
+```
+
+The home folders are mounted as junctions/symlinks under `.lampson/skills-global` and
+`.lampson/skills-claude` by `lampson.ps1` / `lampson.sh` (a capability cannot point at a dynamic path).
 
 ### Testing without an API key
 
@@ -201,9 +215,18 @@ Things that cost time and are handled in the code:
 - `http_post` with a map body sends `text(map)`, not JSON → always `json_encode` + `Content-Type`.
 - Responses expose `status, ok, body, headers` (no `json`); on network error `status 0` + `error`.
 - `number()` returns floats → `floor()` for every integer that goes on the wire.
-- `run()` hangs forever if the command leaves a descendant holding stdout (Windows inherits handles);
-  the timeout only kills the direct child → `bash_wrapper.sh` closes its stdout before spawning,
-  returns output through a file and kills the whole process tree.
+- `run()` hangs forever if the command leaves a descendant holding stdout (Windows inherits handles)
+  and its timeout only kills the direct child → the `bash` tool and the `process` tool use `proc_spawn`
+  (v0.6.9): events per line, real deadline, `proc_close` kills the whole tree (Job Object / process group).
+- Under `serve`, a `proc_spawn` made in a handler dies with the request. A managed process therefore lives
+  inside an `agent` (own lifecycle: verified under `run` and `serve`): state on the blackboard
+  (`proc:<name>`), stop via `bus_publish("proc.stop.<name>")`, output drained to `.lampson/proc/<name>.log`.
+  Processes die with lampson (`/exit` publishes `proc.stop_all`; Ctrl-C under serve → `agent_stop`).
+- Git Bash (MSYS) has two process trees: `bash -c "a && npm run dev"` execs its last command, so the
+  MSYS pid shows as `cmd`/`node` (never trust the name to decide liveness — compare the WINPID), and native
+  grandchildren (`npm.cmd → cmd → node`) are invisible to MSYS `ps` → `kill_tree` (foreign pids only) does
+  `taskkill /T /F` per WINPID. The managed log ends with `[process exited with code N]`; `bash` refuses
+  server-looking commands and points to `process`.
 - `localhost` may resolve to IPv6 while `serve` listens on IPv4 → use `127.0.0.1`.
 - Reserved words that bite: `reason task ask stop decide analyze generate show approve confirm`.
 - `and`/`or` do not short-circuit; a task named `run` shadows the builtin (and a module task named `read`/`write` breaks `read_file`/`write_file` calls in sibling tasks); modules cannot import `../`; `split(s, "")` is an error; `slice` past the end errors.

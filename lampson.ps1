@@ -58,6 +58,16 @@ if ($Workspace -ne "") {
 $target = (Get-Item -LiteralPath $mount -Force).Target
 if ($target -is [array]) { $target = $target[0] }
 
+# --- skills externas globales (npx skills add -g → ~/.agents/skills; las de Claude Code → ~/.claude/skills) ---
+# Se montan como junction bajo .lampson/ porque una capability no puede apuntar a una ruta dinámica (HOME).
+$skillMounts = @{ "skills-global" = (Join-Path $HOME ".agents\skills"); "skills-claude" = (Join-Path $HOME ".claude\skills") }
+New-Item -ItemType Directory -Force (Join-Path $here ".lampson") | Out-Null
+foreach ($k in $skillMounts.Keys) {
+    $link = Join-Path $here ".lampson\$k"; $src = $skillMounts[$k]
+    if (Test-Path -LiteralPath $link) { $li = Get-Item -LiteralPath $link -Force; if ($li.LinkType -eq "Junction") { $li.Delete() } }
+    if (Test-Path -LiteralPath $src -PathType Container) { New-Item -ItemType Junction -Path $link -Target $src | Out-Null }
+}
+
 # --- arrancar desde el directorio de lampson (ahí viven .env, lib/, skills/, .lampson/) ---
 # Push/Pop: si PowerShell ejecuta este .ps1 en la shell del usuario (pasa cuando lampson.ps1 y lampson.cmd
 # comparten nombre en el PATH), el cwd del usuario debe quedar como estaba al salir.

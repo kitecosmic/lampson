@@ -146,20 +146,16 @@ test "skills: índice, sección de prompt, carga por tool y prioridad workspace 
     run("C:\Program Files\Git\bin\bash.exe", ["-c", "rm -rf workspace/skills/lampson; rmdir workspace/skills 2>/dev/null; true"], 10)
     assert(not contains(skills.index()["lampson"], "nope"))
 
-test "procesos gestionados: start → report ve líneas nuevas → halt mata el árbol"
-    proc.halt("t_demo")
-    let st be proc.start("t_demo", "for i in 1 2 3 4 5 6 7 8 9 10; do echo line-$i; sleep 1; done")
-    assert(contains(st, "running"), st)
-    let r1 be proc.report()
-    assert(contains(r1, "t_demo") and contains(r1, "line-1"), r1)
-    sleep(2)
-    let r2 be proc.report()
-    assert(contains(r2, "line-") and not contains(r2, "line-1" + "\n"), r2)
-    assert(contains(proc.logs("t_demo", 2), "line-"))
-    assert(contains(proc.halt("t_demo"), "stopped"))
-    sleep(1)
-    assert_eq(proc.alive("t_demo"), false)
-    assert_error(() => proc.start("bad name!", "echo x"))
+-- Los tests de procesos gestionados (proc.start/halt/report) viven en tests/proc_test.syn y corren con
+-- `synsema run`: bajo `synsema test` el swarm no está cableado (spawn no arranca agentes, agents() no existe).
+
+test "bash rechaza servidores/watchers y manda al process tool"
+    let out be call_tool(REG["bash"], {"command": "cd app && npm run dev 2>&1 | head -50"})
+    assert(contains(out, "REFUSED") and contains(out, "process tool"), out)
+    assert(contains(call_tool(REG["bash"], {"command": "npx vite"}), "REFUSED"))
+    assert(contains(call_tool(REG["bash"], {"command": "python -m http.server 8000"}), "REFUSED"))
+    assert(not contains(call_tool(REG["bash"], {"command": "echo npm run build"}), "REFUSED"))
+    assert(not contains(call_tool(REG["bash"], {"command": "timeout 5 npm run dev; true"}), "REFUSED"))
 
 test "memoria por proyecto: slug estable, write/append/read/list, índice en el prompt"
     let sl be memo.slug()

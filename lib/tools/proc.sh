@@ -1,41 +1,14 @@
-# proc.sh — procesos de larga duración gestionados por lampson (servidores, watchers)
+# proc.sh — consultas al sistema que Synsema no tiene nativas (puertos, línea de comando, matar un pid ajeno)
 #
-#   bash lib/tools/proc.sh start <logfile> <pidfile>   (env: LAMPSON_CMD, LAMPSON_WS)
-#   bash lib/tools/proc.sh alive <pidfile>             → yes | no
-#   bash lib/tools/proc.sh stop  <pidfile>
-#   bash lib/tools/proc.sh ports                       → "port pid name" por línea (>=1024, sin sistema)
-#   bash lib/tools/proc.sh info <pid>                  → línea de comando del proceso
+#   bash lib/tools/proc.sh ports        → "port pid name" por línea (>=1024, sin sistema)
+#   bash lib/tools/proc.sh info <pid>   → línea de comando del proceso
+#   bash lib/tools/proc.sh kill <pid>   → mata el árbol de un pid AJENO (huérfano de otra herramienta)
 #
-# start cierra stdout/stderr/stdin ANTES de lanzar (Windows hereda handles: si no, el pipe de Synsema
-# queda abierto y run() se cuelga), lanza el comando con su salida en <logfile> y guarda "PID|stamp".
+# Los procesos gestionados (start/stop/alive) ya NO pasan por acá: viven en un agente supervisor con
+# proc_spawn / proc_close (lib/tools/proc.syn, v0.6.9: tree-kill nativo). 2026-08-27.
 . "$(dirname "$0")/common.sh"
 ACTION="$1"
 case "$ACTION" in
-    start)
-        LOG="$(abs "$2")"; PIDF="$(abs "$3")"
-        exec > /dev/null 2>&1 < /dev/null
-        cd "${LAMPSON_WS:-workspace}" || exit 0
-        if is_win || ! command -v setsid >/dev/null 2>&1; then
-            bash -c "$LAMPSON_CMD" > "$LOG" 2>&1 < /dev/null &
-        else
-            setsid bash -c "$LAMPSON_CMD" > "$LOG" 2>&1 < /dev/null &
-        fi
-        PID=$!
-        sleep 0.2
-        echo "$PID|$(proc_stamp "$PID")" > "$PIDF"
-        ;;
-    alive)
-        IFS='|' read -r PID STAMP < "$(abs "$2")" 2>/dev/null
-        if pid_alive "$PID" "$STAMP"; then echo yes; else echo no; fi
-        ;;
-    stop)
-        PIDF="$(abs "$2")"; IFS='|' read -r PID STAMP < "$PIDF" 2>/dev/null
-        if pid_alive "$PID" "$STAMP"; then
-            kill_tree "$PID"
-            is_win || kill -9 -- "-$PID" 2>/dev/null   # grupo de sesión (setsid) en unix
-        fi
-        echo stopped
-        ;;
     ports)
         if is_win; then
             # netstat + tasklist → "port pid name"

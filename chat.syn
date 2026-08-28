@@ -574,4 +574,6 @@ while running
                 print(dim("  ─── " + summary))
             session.save(sid, messages, {"title": session.title_of(messages)})
     flush()
+-- los procesos gestionados (servidores) mueren con lampson: aviso por bus y espera corta
+proc.halt_all()
 print("bye · sesión " + sid)

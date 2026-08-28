@@ -8,15 +8,29 @@
 --   ...instrucciones...
 --
 -- Se buscan en (prioridad de abajo hacia arriba, el nombre repetido gana el más específico):
---   skills/<name>/SKILL.md                 -- del harness (enseñan a usar lampson y Synsema)
---   workspace/skills/<name>/SKILL.md       -- del proyecto (committeables)
+--   .lampson/skills-global/<name>/SKILL.md     -- ~/.agents/skills  (junction que crea lampson.ps1/sh; `npx skills add -g`)
+--   .lampson/skills-claude/<name>/SKILL.md     -- ~/.claude/skills  (idem; las de Claude Code también sirven acá)
+--   skills/<name>/SKILL.md                     -- del harness (enseñan a usar lampson y Synsema)
+--   workspace/.claude/skills/<name>/SKILL.md   -- del proyecto, instaladas para Claude Code
+--   workspace/.agents/skills/<name>/SKILL.md   -- del proyecto, canónico de `npx skills add owner/repo` (skills.sh)
+--   workspace/skills/<name>/SKILL.md           -- del proyecto (committeables)
 --   workspace/.lampson/skills/<name>/SKILL.md  -- locales al proyecto (no committeadas)
+--
+-- Skills externas (2026-08-27): el estándar "Agent Skills" (agentskills.io) es el mismo formato que usamos
+-- (SKILL.md + frontmatter name/description), así que NO hay instalador propio: `npx skills add owner/repo
+-- --skill x` deja la skill en ./.agents/skills (o ~/.agents/skills con -g) y Lampson la ve en el próximo
+-- arranque. Las carpetas de HOME no se pueden declarar como capability con ruta dinámica → se MONTAN
+-- bajo .lampson/ (mismo truco que workspace/).
 --
 -- El system prompt lleva SOLO el índice (name + description); el contenido entra al contexto
 -- cuando el modelo llama a la tool `skill(name)`. Así el prompt no crece con cada skill.
 
 let ROOTS be [
+    {"dir": ".lampson/skills-global", "source": "global"},
+    {"dir": ".lampson/skills-claude", "source": "global"},
     {"dir": "skills", "source": "harness"},
+    {"dir": "workspace/.claude/skills", "source": "project"},
+    {"dir": "workspace/.agents/skills", "source": "project"},
     {"dir": "workspace/skills", "source": "project"},
     {"dir": "workspace/.lampson/skills", "source": "local"}
 ]
@@ -63,6 +77,8 @@ export task index()
     require file.read("skills/*")
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     let acc be {}
     each r in ROOTS
         set acc to scan_root(r, acc)
@@ -84,6 +100,8 @@ export task load(name)
     require file.read("skills/*")
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     let idx be index()
     when not contains(idx, name)
         raise("unknown skill '" + name + "'. Available: " + join(sort_by(keys(idx), (n) => n), ", "))

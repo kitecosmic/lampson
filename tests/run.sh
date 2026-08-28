@@ -20,3 +20,7 @@ trap restore EXIT
 
 cd "$here"
 LAMPSON_WORKSPACE="$tmp" synsema test unit.test.syn
+code=$?
+# procesos gestionados: supervisor-agente + proc_spawn — corre con `run` (el swarm no existe bajo `test`)
+LAMPSON_WORKSPACE="$tmp" synsema run proc_test.syn || code=1
+exit "${code:-0}"
