@@ -29,6 +29,7 @@ use "./lib/tools/memo.syn" as memo
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
 use "./lib/tools/todo.syn" as todo
+use "./lib/prompt.syn" as prompt
 
 let REG be tools.registry()
 
@@ -106,6 +107,14 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-v4-flash")
     assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
     assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
+
+test "prompt: método en 5 pasos, límites duros y entorno interpolado"
+    let p be prompt.build({"cwd": "C:/x", "os": "Windows_NT", "shell": "bash", "date": "2026-08-28", "model": "m", "provider": "p"}, agents.addendum_for("build"))
+    assert(contains(p, "# Method") and contains(p, "1. PLAN.") and contains(p, "5. VERIFY AND REPORT."), "método")
+    assert(contains(p, "after 16 read/ls/find/grep are refused") and contains(p, "[exit code: N]") and contains(p, "mcp_<server>_<tool>"), "límites y tools")
+    assert(contains(p, "Workspace root") and contains(p, "C:/x") and contains(p, "m via p") and contains(p, "# Mode"), "entorno")
+    -- el núcleo pesa ~7k chars (≈1.7k tokens); el resto es el índice de skills (22 globales en esta máquina) + memoria
+    assert(length(p) < 40000, "tamaño: " + text(length(p)))
 
 test "usage: tokens de caché al 10% en el costo (DeepSeek y OpenAI)"
     assert_eq(provider.cached_of({"prompt_tokens": 1000, "prompt_cache_hit_tokens": 800}), 800)
