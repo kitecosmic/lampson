@@ -24,6 +24,9 @@ use "./tools/process.syn" as t_process
 use "./tools/memo.syn" as t_memo
 use "./tools/todo.syn" as t_todo
 use "./skills.syn" as skills
+use "./mcp.syn" as mcp
+use "./lamps.syn" as lamps
+use "./lsp.syn" as lsp
 
 -- la task de la tool skill (su SPEC está en tools/skill.syn)
 task skill_tool(name, action, source, scope)
@@ -47,6 +50,111 @@ task skill_tool(name, action, source, scope)
         give join(lines, "\n")
     give skills.load(name)
 
+-- la task de la tool mcp (mcp.syn está un nivel arriba de tools/, así que vive acá, como skill_tool).
+-- add/remove SIEMPRE piden aprobación (permission.syn): conectar un server = ejecutar un comando de terceros.
+task mcp_tool(action, name, command, env, scope)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    when action == "add"
+        give mcp.add_server(name, command, env, scope)
+    when action == "remove"
+        give mcp.remove_server(name)
+    let sm be mcp.summary()
+    when length(sm) == 0
+        give "no MCP servers connected. Config files: " + mcp.GLOBAL_CONFIG + " (global) · " + mcp.PROJECT_CONFIG + " (this project)"
+    let lines be []
+    each ms in sm
+        set lines to append(lines, ms["name"] + " (" + ms["scope"] + ", " + ms["status"] + "): " + text(length(ms["tools"])) + " tools" + (when ms["error"] != nothing then " · " + text(ms["error"]) otherwise ""))
+    give join(lines, "\n")
+
+let MCP_SPEC be {
+    "name": "mcp",
+    "description": "Manage MCP (Model Context Protocol) servers. action=list (default): connected servers and their status. action=add: connect a server — name plus the full command line that starts it (e.g. command='npx -y @modelcontextprotocol/server-github'); scope=global (default) makes it available in every project (lampson/.lampson/mcp.json), scope=project only in this one (workspace/.lampson/mcp.json); env = extra environment variables the server needs (tokens, keys). action=remove: disconnect and delete it from the config. add/remove always ask the user for approval. A connected server's tools appear in your catalog as mcp_<server>_<tool> from the NEXT turn. Propose add when the user asks to connect/install an MCP or a task clearly needs one.",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["list", "add", "remove"], "description": "Default: list"},
+        "name": {"type": "string", "description": "add/remove: server name (letters, digits, - or _)"},
+        "command": {"type": "string", "description": "add only: full command line that starts the server (quotes allowed)"},
+        "env": {"type": "object", "description": "add only: environment variables for the server, e.g. {\"GITHUB_TOKEN\": \"…\"}"},
+        "scope": {"type": "string", "enum": ["global", "project"], "description": "add only: global (default, every project) or project"}
+    }, "required": ["action"]}
+}
+
+-- la task de la tool lamp (lamps.syn vive un nivel arriba de tools/, como mcp). enable/disable piden humano
+-- SIEMPRE (permission.syn): encender = autorizar código a correr con las capacidades de su manifiesto.
+task lamp_tool(action, name, manifest, files)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    when action == "create"
+        give lamps.create(name, manifest, files)
+    when action == "enable"
+        give lamps.set_enabled(name, true)
+    when action == "disable"
+        give lamps.set_enabled(name, false)
+    let sm be lamps.summary()
+    when length(sm) == 0
+        give "no lamps found. A lamp is a folder with a lamp.json manifest: " + lamps.GLOBAL_DIR + "/<name>/ (global) or " + lamps.PROJECT_DIR + "/<name>/ (this project; you can create it with write). See the lampson skill for the manifest format."
+    let lines be []
+    each l in sm
+        set lines to append(lines, l["name"] + " (" + l["scope"] + ", " + l["kind"] + ", " + (when l["enabled"] then "ON" otherwise "off") + "): " + (when l["error"] != nothing then "BROKEN — " + text(l["error"]) otherwise text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["description"] != "" then " — " + l["description"] otherwise "")))
+    give join(lines, "\n")
+
+let LAMP_SPEC be {
+    "name": "lamp",
+    "description": "Lamps are tool plugins you can build for this project: a folder with a lamp.json manifest plus code — a Synsema program (kind=syn) run under a capability ceiling, or any executable (kind=exec). Consider one when a task needs a reusable custom tool (a project-specific query, generator, checker) that plain bash would repeat clumsily. action=list (default): every lamp found, on/off, its tools. action=create: write a PROJECT lamp (name + manifest + files) — it validates the manifest and runs `synsema check` on a syn entry, but does NOT run or enable it. action=enable / disable: turn one on or off — ALWAYS asks the user (enabling authorizes its code to run with the manifest's capabilities). An enabled lamp's tools appear in your catalog as lamp_<lamp>_<tool> from the NEXT turn. Manifest: {\"description\", \"kind\": \"syn\"|\"exec\", \"entry\": \"lamp.syn\" (syn) | \"command\": \"python lamp.py\" (exec), \"caps\": \"file.read=workspace/*\" (syn, optional extra ceiling over stdout,time,env=LAMP_*), \"timeout\": 60, \"tools\": [{\"name\", \"description\", \"parameters\": JSON Schema, \"readonly\": bool}]}. Inside the code read LAMP_TOOL and LAMP_ARGS (JSON) from env and print the result to stdout (a .syn needs `require env(\"LAMP_*\")`). Lamp names: letters, digits, - (no _).",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["list", "create", "enable", "disable"], "description": "Default: list"},
+        "name": {"type": "string", "description": "create/enable/disable: lamp name"},
+        "manifest": {"type": "object", "description": "create only: the lamp.json content (name is filled in)"},
+        "files": {"type": "object", "description": "create only: {\"lamp.syn\": \"<code>\", …} — files written into the lamp folder", "additionalProperties": {"type": "string"}}
+    }, "required": ["action"]}
+}
+
+-- la tool lsp (lib/lsp.syn): navegación semántica. Solo lectura → permission la permite siempre.
+task lsp_tool(op, path, line, character, server, scope)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    -- op=add: el agente propone un preset y el humano aprueba (permission.syn: ask siempre, como mcp add)
+    when op == "add"
+        give lsp.add_server(server, nothing, nothing, when scope == nothing then "global" otherwise scope)
+    when op == "list"
+        let sm be lsp.summary()
+        when length(sm) == 0
+            give "no language servers configured. Presets: " + join(keys(lsp.PRESETS), ", ") + " — propose op=add with server=<preset> (the user approves)."
+        give join(apply(sm, (x) => x["name"] + " (" + x["scope"] + ", " + x["status"] + "): " + join(x["extensions"], " ") + (when x["error"] != nothing then " · " + text(x["error"]) otherwise "")), "\n")
+    give lsp.query(op, path, line, character)
+
+let LSP_SPEC be {
+    "name": "lsp",
+    "description": "Semantic code navigation through the project's language server (same engine as the editor). Use it when grep is ambiguous or before a change that needs exact definitions/usages, and to see a file's structure WITHOUT reading it: op=symbols lists every function/class/variable with line ranges — then read only the range you need. op=definition: where the symbol under the cursor is defined. op=references: every usage (declaration included). op=implementation: implementations of an interface/abstract member. op=hover: type signature and docs. Positions are 1-based line and character, like the editor; put the cursor ON the identifier (an off-symbol position returns nothing). The server for a file is chosen by extension; if none is configured for that extension, propose op=add with server=<preset> (typescript, python, rust, go, css, html) — it always asks the user for approval and needs nothing installed (npx fetches it); op=list shows what is configured. The first query of a session starts the server (a few seconds).",
+    "parameters": {"type": "object", "properties": {
+        "op": {"type": "string", "enum": ["symbols", "definition", "references", "implementation", "hover", "list", "add"]},
+        "server": {"type": "string", "description": "add only: preset name (typescript | python | rust | go | css | html)"},
+        "scope": {"type": "string", "enum": ["global", "project"], "description": "add only: global (default, every project) or project"},
+        "path": {"type": "string", "description": "File path relative to the workspace root"},
+        "line": {"type": "integer", "description": "1-based line (not for symbols)"},
+        "character": {"type": "integer", "description": "1-based column of the identifier (not for symbols)"}
+    }, "required": ["op"]}
+}
+
 -- Allow-list nombre → task. El modelo solo devuelve NOMBRES; el loop decide si se ejecuta.
 export task registry()
     give {
@@ -60,10 +168,13 @@ export task registry()
         "process": t_process.tool,
         "memory": t_memo.tool,
         "todo": t_todo.tool,
-        "skill": skill_tool
+        "skill": skill_tool,
+        "mcp": mcp_tool,
+        "lamp": lamp_tool,
+        "lsp": lsp_tool
     }
 
-export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC]
+export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, LAMP_SPEC]
 
 -- Subconjuntos (para perfiles de agente): registry/catálogo filtrados por nombre.
 export task registry_subset(names)

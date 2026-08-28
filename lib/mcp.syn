@@ -86,7 +86,14 @@ agent McpSup
     try
         set p to proc_spawn(command, args, {"cwd": cwd, "env": envs, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
     recover err
-        share {"status": "error", "tools": [], "error": "cannot start: " + text(err), "started": now()} as key
+        -- Windows: `npx`/`npm` son .cmd — proc_spawn no pasa por el shell, así que se reintenta con la extensión
+        when env("OS", "") == "Windows_NT" and contains(text(err), "not found") and not contains(lower(command), ".")
+            try
+                set p to proc_spawn(command + ".cmd", args, {"cwd": cwd, "env": envs, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
+            recover err2
+                share {"status": "error", "tools": [], "error": "cannot start: " + text(err2), "started": now()} as key
+        otherwise
+            share {"status": "error", "tools": [], "error": "cannot start: " + text(err), "started": now()} as key
     when p != nothing
         let seq be 0
         let pending be nothing
@@ -184,6 +191,122 @@ export task start_all(wait_s)
 
 export task stop_all()
     bus_publish("mcp.stop_all", {})
+
+-- ---------- conectar / desconectar servers (usuario: web o /mcp add · modelo: tool `mcp`, con aprobación) ----------
+
+-- "npx -y @modelcontextprotocol/server-github" → {command, args[]}; respeta comillas simples y dobles
+-- (rutas de Windows con espacios). No hay expansión de nada: los tokens van tal cual al spawn.
+export task parse_command(line)
+    let toks be []
+    let cur be ""
+    let quote be ""
+    let i be 0
+    let n be length(text(line))
+    while i < n
+        let ch be slice(text(line), i, i + 1)
+        when quote != ""
+            when ch == quote
+                set quote to ""
+            otherwise
+                set cur to cur + ch
+        otherwise when ch == "\"" or ch == "'"
+            set quote to ch
+        otherwise when ch == " " or ch == "\t"
+            when cur != ""
+                set toks to append(toks, cur)
+                set cur to ""
+        otherwise
+            set cur to cur + ch
+        set i to i + 1
+    when cur != ""
+        set toks to append(toks, cur)
+    when length(toks) == 0
+        give {"command": "", "args": []}
+    give {"command": toks[0], "args": slice(toks, 1, length(toks))}
+
+task config_path(scope)
+    give when scope == "project" then PROJECT_CONFIG otherwise GLOBAL_CONFIG
+
+-- alta (o reemplazo) en el mcp.json del scope + arranque del supervisor; devuelve una línea de estado.
+-- El archivo queda en el formato estándar {"mcpServers": {...}} — editable a mano y compatible copy-paste.
+export task add_server(name, command_line, env_map, scope)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    when not valid_name(name)
+        raise("invalid server name '" + text(name) + "' (letters, digits, - or _, max 32)")
+    let parsed be parse_command(command_line)
+    when parsed["command"] == ""
+        raise("empty command")
+    let sc be when scope == "project" then "project" otherwise "global"
+    let path be config_path(sc)
+    let doc be {"mcpServers": {}}
+    try
+        set doc to json_decode(read_file(path))
+    recover err
+        set doc to {"mcpServers": {}}
+    when not contains(doc, "mcpServers")
+        set doc["mcpServers"] to {}
+    let entry be {"command": parsed["command"], "args": parsed["args"]}
+    when env_map != nothing
+        when length(keys(env_map)) > 0
+            set entry["env"] to env_map
+    let servers_map be doc["mcpServers"]
+    set servers_map[name] to entry
+    set doc["mcpServers"] to servers_map
+    write_file(path, json_encode(doc))
+    -- reconexión: si ya había un supervisor con este nombre, apagarlo antes de arrancar el nuevo
+    let st be state(name)
+    when st != nothing
+        when st["status"] == "ready" or st["status"] == "starting"
+            bus_publish("mcp.stop." + name, {})
+            let w be 0
+            while w < 20 and state(name)["status"] == "ready"
+                sleep(0.1)
+                set w to w + 1
+    start_all(10)
+    let after be state(name)
+    when after == nothing
+        give "added '" + name + "' (" + sc + ") to " + path + " but it did not start — check the command"
+    when after["status"] == "ready"
+        give "connected '" + name + "' (" + sc + "): " + text(length(after["tools"])) + " tools — available as mcp_" + name + "_<tool> from the next turn"
+    give "added '" + name + "' (" + sc + ") but status is " + after["status"] + (when after["error"] != nothing then ": " + text(after["error"]) otherwise "")
+
+-- baja: lo saca del archivo donde esté (de ambos si aparece dos veces) y apaga su supervisor;
+-- las tools mcp_<name>_* desaparecen del catálogo en el próximo turno
+export task remove_server(name)
+    require time
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    when not valid_name(name)
+        raise("invalid server name")
+    let removed be []
+    each pth in [PROJECT_CONFIG, GLOBAL_CONFIG]
+        try
+            let doc be json_decode(read_file(pth))
+            when contains(doc, "mcpServers")
+                when contains(doc["mcpServers"], name)
+                    let kept be {}
+                    each k in keys(doc["mcpServers"])
+                        when k != name
+                            set kept[k] to doc["mcpServers"][k]
+                    set doc["mcpServers"] to kept
+                    write_file(pth, json_encode(doc))
+                    set removed to append(removed, pth)
+        recover err
+            set removed to removed
+    bus_publish("mcp.stop." + name, {})
+    when length(removed) == 0
+        give "no server named '" + name + "' in " + PROJECT_CONFIG + " or " + GLOBAL_CONFIG
+    give "removed '" + name + "' (" + join(removed, ", ") + ") and stopped its supervisor"
 
 -- [{name, scope, status, error, tools: n}]
 export task summary()

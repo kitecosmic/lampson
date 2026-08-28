@@ -9,6 +9,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
+require file.read("lamps")
+require file.read("lamps/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -28,6 +30,7 @@ use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
+use "./lib/lamps.syn" as lamps
 use "./lib/tools/todo.syn" as todo
 use "./lib/prompt.syn" as prompt
 
@@ -88,6 +91,26 @@ test "tools MCP: ask por defecto, yolo permite, strict deniega; describe_call le
     assert_eq(permission.describe_call("mcp_github_create_issue", {"title": "x"}), "mcp_github_create_issue {\"title\": \"x\"}")
     assert_eq(length(mcp.servers()), 0)
 
+test "tool mcp (admin): add/remove piden humano siempre (ask incluso en yolo, deny en strict); list nunca"
+    let madd be {"action": "add", "name": "github", "command": "npx -y @modelcontextprotocol/server-github", "scope": "global"}
+    assert_eq(permission.evaluate("mcp", madd, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("mcp", madd, "yolo")["decision"], "ask")
+    assert_eq(permission.evaluate("mcp", madd, "strict")["decision"], "deny")
+    assert_eq(permission.evaluate("mcp", {"action": "remove", "name": "github"}, "yolo")["decision"], "ask")
+    assert_eq(permission.evaluate("mcp", {"action": "list"}, "strict")["decision"], "allow")
+    assert_eq(permission.evaluate("mcp", {}, "strict")["decision"], "allow")
+    assert(contains(permission.describe_call("mcp", madd), "mcp add github") and contains(permission.describe_call("mcp", madd), "npx -y"), permission.describe_call("mcp", madd))
+    assert(contains(call_tool(REG["mcp"], {"action": "list"}), "no MCP servers connected"))
+
+test "mcp.parse_command: tokens simples y comillas (rutas de Windows con espacios)"
+    let p1 be mcp.parse_command("npx -y @modelcontextprotocol/server-github")
+    assert_eq(p1["command"], "npx")
+    assert_eq(join(p1["args"], "|"), "-y|@modelcontextprotocol/server-github")
+    let p2 be mcp.parse_command("\"C:\\Program Files\\node\\node.exe\" server.js --port 3001")
+    assert_eq(p2["command"], "C:\\Program Files\\node\\node.exe")
+    assert_eq(join(p2["args"], "|"), "server.js|--port|3001")
+    assert_eq(mcp.parse_command("   ")["command"], "")
+
 test "describe_call"
     assert_eq(permission.describe_call("bash", {"command": "ls"}), "$ ls")
     assert_eq(permission.describe_call("read", {"path": "a.txt"}), "read a.txt")
@@ -109,7 +132,7 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
 
 test "prompt: método en 5 pasos, límites duros y entorno interpolado"
-    let p be prompt.build({"cwd": "C:/x", "os": "Windows_NT", "shell": "bash", "date": "2026-08-28", "model": "m", "provider": "p"}, agents.addendum_for("build"))
+    let p be prompt.build({"ui": "terminal", "cwd": "C:/x", "os": "Windows_NT", "shell": "bash", "date": "2026-08-28", "model": "m", "provider": "p"}, agents.addendum_for("build"))
     assert(contains(p, "# Method") and contains(p, "1. PLAN.") and contains(p, "5. VERIFY AND REPORT."), "método")
     assert(contains(p, "after 16 read/ls/find/grep are refused") and contains(p, "[exit code: N]") and contains(p, "mcp_<server>_<tool>"), "límites y tools")
     assert(contains(p, "Workspace root") and contains(p, "C:/x") and contains(p, "m via p") and contains(p, "# Mode"), "entorno")
@@ -223,6 +246,28 @@ test "loop: JSON canónico, spill cabeza+cola, recibos y poda de resultados viej
     let small be loop.prune_results([{"role": "user", "content": "u"}, old])
     assert_eq(small[1]["content"], big)
 
+test "prune: histéresis 2× — bajo el umbral NO reescribe nada (el historial queda byte-estable → prompt cache)"
+    -- ~20k tokens de resultados: sobre PROTECT_TOKENS (16k) pero bajo 2× → el prefijo no se toca
+    let mid be repeat_text("y", 80000)
+    let msgs be [{"role": "user", "content": "u"}, {"role": "assistant", "content": "", "tool_calls": []}, {"role": "tool", "tool_call_id": "1", "name": "read", "content": mid}]
+    let out be loop.prune_results(msgs)
+    assert_eq(out[2]["content"], mid)
+    -- y una vez podado, repodar sin resultados nuevos es un no-op (los recibos son chicos)
+    let big2 be repeat_text("z", 170000)
+    let two be loop.prune_results(msgs + [{"role": "assistant", "content": "", "tool_calls": []}, {"role": "tool", "tool_call_id": "2", "name": "bash", "content": big2}])
+    assert(contains(two[2]["content"], "result pruned"), two[2]["content"])
+    let again be loop.prune_results(two)
+    assert_eq(again[2]["content"], two[2]["content"])
+
+test "session.from_other_run + proc.resume_note: sesión de otra corrida avisa el estado real de procesos"
+    share {"id": "run-A"} as "lampson:run"
+    assert_eq(session.from_other_run({"meta": {"run": "run-A"}, "messages": []}), false)
+    assert_eq(session.from_other_run({"meta": {"run": "run-B"}, "messages": []}), true)
+    assert_eq(session.from_other_run({"meta": {}, "messages": []}), true)
+    let note be proc.resume_note()
+    when note != ""
+        assert(starts_with(note, "[harness]") and contains(note, "do NOT survive a restart"), note)
+
 test "tope de exploración: aviso a la mitad, rechazo al tope, reset con una acción"
     let cap be 16
     let v be loop.explore_verdict(0, "read", cap)
@@ -277,7 +322,7 @@ test "perfiles: plan no ve write/edit/bash; subagentes no ven delegate"
     let review be agents.registry_for("review")
     assert(contains(review, "bash") and not contains(review, "edit") and not contains(review, "delegate"))
     assert(contains(agents.registry_for("worker"), "edit") and not contains(agents.registry_for("worker"), "delegate"))
-    assert(contains(agents.PROFILES, "worker") and length(agents.names()) == 5)
+    assert(contains(agents.PROFILES, "worker") and length(agents.names()) == 4 and length(keys(agents.PROFILES)) == 5)
     assert_eq(length(agents.catalog_for("build")), length(tools.CATALOG) + 1)
 
 test "skills: índice, sección de prompt, carga por tool y prioridad workspace > harness"
@@ -361,3 +406,91 @@ test "estimate_tokens y with_mode"
     let opts be loop.default_opts({}, [], nothing)
     assert_eq(loop.with_mode(opts, "yolo")["permission_mode"], "yolo")
     assert_eq(opts["max_steps"], 40)
+
+-- ---------- lámparas ----------
+
+test "lamps: descubrir, encender (humano), catálogo lamp_<lámpara>_<tool>, correr bajo techo, apagar"
+    let ldir be "workspace/.lampson/lamps/hello"
+    write_file(ldir + "/lamp.json", json_encode({"name": "hello", "description": "saluda", "kind": "syn", "entry": "lamp.syn", "timeout": 20, "tools": [{"name": "greet", "description": "greets", "parameters": {"type": "object", "properties": {"who": {"type": "string"}}}, "readonly": true}]}))
+    write_file(ldir + "/lamp.syn", "require env(\"LAMP_*\")\nlet a be json_decode(env(\"LAMP_ARGS\", \"{}\"))\nprint(\"hello \" + text(a[\"who\"]) + \" via \" + env(\"LAMP_TOOL\", \"\"))\n")
+    -- apagada por defecto: existe pero no entra al catálogo
+    let found be where(lamps.summary(), (l) => l["name"] == "hello")
+    assert_eq(length(found), 1)
+    assert(not found[0]["enabled"])
+    assert(not contains(lamps.names(false), "lamp_hello_greet"))
+    -- encender = permiso humano SIEMPRE para el agente (ask en yolo, deny en strict); list nunca
+    assert_eq(permission.evaluate("lamp", {"action": "enable", "name": "hello"}, "yolo")["decision"], "ask")
+    assert_eq(permission.evaluate("lamp", {"action": "enable", "name": "hello"}, "strict")["decision"], "deny")
+    assert_eq(permission.evaluate("lamp", {"action": "list"}, "strict")["decision"], "allow")
+    assert(contains(lamps.set_enabled("hello", true), "ON"))
+    assert(contains(lamps.names(false), "lamp_hello_greet"))
+    assert(contains(lamps.names(true), "lamp_hello_greet"))
+    -- la tool de la lámpara: ask por defecto, yolo permite, strict deniega
+    assert_eq(permission.evaluate("lamp_hello_greet", {"who": "x"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("lamp_hello_greet", {"who": "x"}, "yolo")["decision"], "allow")
+    assert_eq(permission.evaluate("lamp_hello_greet", {"who": "x"}, "strict")["decision"], "deny")
+    -- corre como proceso hijo bajo `synsema run --cap-set …`, args por env
+    let out be lamps.call("lamp_hello_greet", {"who": "ana"})
+    assert(contains(out, "hello ana via greet"), "salida de la lámpara: " + out)
+    -- una lámpara que pide MÁS de lo que su manifiesto autoriza falla contra el techo, no escala
+    write_file(ldir + "/lamp.syn", "require file.read(\"workspace/*\")\nprint(read_file(\"workspace/.lampson/lamps/hello/lamp.json\"))\n")
+    let denied be lamps.call("lamp_hello_greet", {})
+    assert(contains(denied, "ERROR") and contains(lower(denied), "ceiling"), "techo: " + denied)
+    -- la tool `lamp` del modelo lista y el registry/catálogo del perfil build las incluye
+    assert(contains(call_tool(REG["lamp"], {"action": "list"}), "hello (project, syn, ON)"))
+    assert_eq(agents.registry_for("build")["lamp_hello_greet"], "lamp")
+    assert(contains(lamps.set_enabled("hello", false), "OFF"))
+    assert(not contains(lamps.names(false), "lamp_hello_greet"))
+    -- el harness crea la lámpara solo (como cordis_define): escribe, valida y chequea, pero NO enciende
+    let cr be call_tool(REG["lamp"], {"action": "create", "name": "made-by-agent", "manifest": {"kind": "syn", "entry": "main.syn", "tools": [{"name": "ping", "description": "pong"}]}, "files": {"main.syn": "require env(\"LAMP_*\")\nprint(\"pong \" + env(\"LAMP_TOOL\", \"\"))\n"}})
+    assert(contains(cr, "created") and contains(cr, "synsema check OK") and contains(cr, "OFF"), cr)
+    assert_eq(permission.evaluate("lamp", {"action": "create", "name": "made-by-agent"}, "ask")["decision"], "allow")
+    assert(not contains(lamps.names(false), "lamp_made-by-agent_ping"))
+    assert(contains(lamps.set_enabled("made-by-agent", true), "ON"))
+    assert(contains(lamps.call("lamp_made-by-agent_ping", {}), "pong ping"))
+    assert(contains(lamps.set_enabled("made-by-agent", false), "OFF"))
+    -- código que no compila: creada pero el check falla y lo dice
+    let bad be call_tool(REG["lamp"], {"action": "create", "name": "bad-syntax", "manifest": {"entry": "x.syn", "tools": [{"name": "t"}]}, "files": {"x.syn": "let be be be\n"}})
+    assert(contains(bad, "FAILED"), bad)
+    assert_error(() => call_tool(REG["lamp"], {"action": "create", "name": "bad_name", "manifest": {"tools": []}, "files": {}}))
+    -- manifiesto roto: se lista como rota y no se puede encender
+    write_file("workspace/.lampson/lamps/broken/lamp.json", "{\"kind\": \"exec\"}")
+    let br be where(lamps.summary(), (l) => l["name"] == "broken")
+    assert(length(br) == 1 and br[0]["error"] != nothing)
+    assert_error(() => lamps.set_enabled("broken", true))
+
+test "lsp: tool de solo lectura (allow en strict), describe_call, worker oculto del selector"
+    assert_eq(permission.evaluate("lsp", {"op": "symbols", "path": "a.ts"}, "strict")["decision"], "allow")
+    assert_eq(permission.evaluate("lsp", {"op": "add", "server": "typescript"}, "yolo")["decision"], "ask")
+    assert_eq(permission.evaluate("lsp", {"op": "add", "server": "typescript"}, "strict")["decision"], "deny")
+    assert_eq(permission.describe_call("lsp", {"op": "add", "server": "typescript", "scope": "project"}), "lsp add typescript (project)")
+    assert(contains(call_tool(REG["lsp"], {"op": "list"}), "no language servers configured"))
+    assert_error(() => call_tool(REG["lsp"], {"op": "add", "server": "nope"}))
+    assert_eq(permission.describe_call("lsp", {"op": "definition", "path": "src/a.ts", "line": 2, "character": 12}), "lsp definition src/a.ts:2:12")
+    assert(contains(keys(agents.registry_for("plan")), "lsp") and contains(keys(agents.registry_for("explore")), "lsp"))
+    assert(not contains(agents.names(), "worker") and contains(agents.names(), "build"))
+    assert(length(where(tools.CATALOG, (t) => t["name"] == "lsp")) == 1)
+
+test "spill: el modelo puede releer .lampson/spill/<call>.txt con read y grep (vive en la raíz, no en el workspace)"
+    write_file(".lampson/spill/call_test_x.txt", "linea uno\nAGUJA aqui\nlinea tres\n")
+    assert(contains(call_tool(REG["read"], {"path": ".lampson/spill/call_test_x.txt", "offset": 2, "limit": 1}), "AGUJA"))
+    assert(contains(call_tool(REG["grep"], {"pattern": "AGUJA", "path": ".lampson/spill/call_test_x.txt"}), ":2:"))
+    assert_error(() => call_tool(REG["read"], {"path": ".lampson/spill/../config.json"}))
+
+test "lamps exec: el comando corre desde el workspace y un archivo de la carpeta de la lámpara se resuelve solo"
+    let cr be call_tool(REG["lamp"], {"action": "create", "name": "exec-demo", "manifest": {"kind": "exec", "command": "node hi.js", "tools": [{"name": "hi", "description": "hi"}]}, "files": {"hi.js": "console.log('hi ' + process.env.LAMP_TOOL + ' cwd=' + require('path').basename(process.cwd()) + ' args=' + process.env.LAMP_ARGS)"}})
+    assert(contains(cr, "created") and contains(cr, "resolved automatically"), cr)
+    lamps.set_enabled("exec-demo", true)
+    let out be lamps.call("lamp_exec-demo_hi", {"x": 1})
+    assert(contains(out, "hi hi") and contains(out, "args={\"x\": 1}"), out)
+    lamps.set_enabled("exec-demo", false)
+    -- eliminar: solo lámparas del proyecto; borra la carpeta y la saca del estado
+    assert(contains(lamps.remove("exec-demo"), "deleted"))
+    assert_eq(length(where(lamps.summary(), (l) => l["name"] == "exec-demo")), 0)
+    assert_error(() => lamps.remove("example-hello"))
+    assert_error(() => lamps.remove("exec-demo"))
+
+test "env_info: la UI (web|terminal) llega al prompt para que el modelo no diga /lamps en la web"
+    share {"kind": "web"} as "lampson:ui"
+    let p be prompt.build(agents.env_info(provider.config()), "")
+    assert(contains(p, "from the web UI") and contains(p, "Never tell a web user to type a slash command"))

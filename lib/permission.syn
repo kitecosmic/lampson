@@ -86,7 +86,35 @@ export task evaluate(name, args, mode)
         when mode == "strict"
             give {"decision": "deny", "reason": "strict mode (MCP tool)"}
         give {"decision": "ask", "reason": "MCP tool " + name}
-    when name == "skill" and is_install(args)
+    when name == "lsp" and contains(args, "op") and text(args["op"]) == "add"
+        -- configurar un language server = el harness va a correr un comando (npx …) del preset: humano siempre
+        when mode == "strict"
+            give {"decision": "deny", "reason": "strict mode (adds an LSP server)"}
+        give {"decision": "ask", "reason": "configures LSP server '" + (when contains(args, "server") then text(args["server"]) otherwise "?") + "' (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ") — it will run the preset command on the first query"}
+    when starts_with(name, "lamp_")
+        -- tool de una lámpara (código del usuario/agente, un proceso por llamada): como las MCP
+        when mode == "yolo"
+            give {"decision": "allow", "reason": "yolo mode (lamp tool)"}
+        when mode == "strict"
+            give {"decision": "deny", "reason": "strict mode (lamp tool)"}
+        give {"decision": "ask", "reason": "lamp tool " + name}
+    when name == "lamp"
+        -- encender una lámpara = autorizar código a correr con las capacidades de su manifiesto: humano SIEMPRE
+        let act be when contains(args, "action") then text(args["action"]) otherwise "list"
+        when act == "enable" or act == "disable"
+            when mode == "strict"
+                give {"decision": "deny", "reason": "strict mode (" + act + " lamp)"}
+            give {"decision": "ask", "reason": act + "s lamp '" + (when contains(args, "name") then text(args["name"]) otherwise "?") + "'"}
+        give {"decision": "allow", "reason": "read-only tool"}
+    when name == "mcp"
+        -- conectar un server MCP = ejecutar un comando de terceros con env propio: humano siempre, incluso en yolo
+        let act be when contains(args, "action") then text(args["action"]) otherwise "list"
+        when act == "add" or act == "remove"
+            when mode == "strict"
+                give {"decision": "deny", "reason": "strict mode (" + act + " MCP server)"}
+            give {"decision": "ask", "reason": act + "s MCP server '" + (when contains(args, "name") then text(args["name"]) otherwise "?") + "'" + (when act == "add" then " → runs: " + (when contains(args, "command") then text(args["command"]) otherwise "?") otherwise "")}
+        give {"decision": "allow", "reason": "read-only tool"}
+    when name == "skill" and is_install(args)
         -- instala instrucciones/scripts de terceros FUERA del workspace (~/.agents/skills): humano siempre, incluso en yolo
         when mode == "strict"
             give {"decision": "deny", "reason": "strict mode (installs a third-party skill)"}
@@ -101,8 +129,22 @@ task one_line(s, max)
     give t
 
 export task describe_call(name, args)
-    when starts_with(name, "mcp_")
+    when starts_with(name, "mcp_") or starts_with(name, "lamp_")
         give name + " " + one_line(json_encode(args), 160)
+    when name == "lsp" and contains(args, "op") and text(args["op"]) == "add"
+        give "lsp add " + (when contains(args, "server") then text(args["server"]) otherwise "?") + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
+    when name == "lsp"
+        give "lsp " + (when contains(args, "op") then text(args["op"]) otherwise "?") + " " + (when contains(args, "path") then text(args["path"]) otherwise "?") + (when contains(args, "line") then ":" + text(args["line"]) + (when contains(args, "character") then ":" + text(args["character"]) otherwise "") otherwise "")
+    when name == "lamp"
+        let lact be when contains(args, "action") then text(args["action"]) otherwise "list"
+        give "lamp " + lact + (when lact != "list" then " " + (when contains(args, "name") then text(args["name"]) otherwise "?") otherwise "") + (when lact == "create" and contains(args, "files") then " [" + join(keys(args["files"]), ", ") + "]" otherwise "")
+    when name == "mcp"
+        let act be when contains(args, "action") then text(args["action"]) otherwise "list"
+        when act == "add"
+            give "mcp add " + (when contains(args, "name") then text(args["name"]) otherwise "?") + "  $ " + one_line(when contains(args, "command") then text(args["command"]) otherwise "?", 120) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
+        when act == "remove"
+            give "mcp remove " + (when contains(args, "name") then text(args["name"]) otherwise "?")
+        give "mcp list"
     when name == "skill" and is_install(args)
         give "skill install " + text(args["source"]) + " --skill " + text(args["name"]) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "bash"

@@ -1,27 +1,40 @@
--- lib/tools/todo.syn — lista de tareas del agente (reemplazo total), por proyecto
+-- lib/tools/todo.syn — lista de tareas del agente (reemplazo total), POR SESIÓN
 --
--- Diseño (deepseek-harness tool-todo + hermes todo_tool): el modelo manda la lista ENTERA cada vez (nada de
--- merges ambiguos), como máximo UNA tarea in_progress (se valida en código y la llamada falla si no), y la
--- lista NO se re-inyecta en cada paso — los tres harnesses coinciden: gasta tokens y compite con el prompt.
--- Sí se re-inyecta al COMPACTAR el contexto (lib/loop.syn), y solo los items pending/in_progress: incluir los
--- completados hace que el modelo rehaga trabajo terminado (hermes todo_tool.py:136). Persistida en
--- .lampson/todo/<proyecto>.json (fuera del repo); la UI web y /todo la muestran.
+-- Diseño (deepseek-harness tool-todo + hermes todo_tool + opencode session/todo): el modelo manda la lista
+-- ENTERA cada vez (nada de merges ambiguos), como máximo UNA tarea in_progress (se valida en código y la
+-- llamada falla si no), y la lista NO se re-inyecta en cada paso — los tres harnesses coinciden: gasta tokens
+-- y compite con el prompt. Sí se re-inyecta al COMPACTAR el contexto (lib/loop.syn), y solo los items
+-- pending/in_progress: incluir los completados hace que el modelo rehaga trabajo terminado (hermes
+-- todo_tool.py:136).
+--
+-- Alcance = la SESIÓN, como en los tres (opencode la guarda por sessionID; hermes/deepseek la atan al agente
+-- de la sesión): es un andamio de planificación del trabajo en curso, no un tracker del proyecto. Sesión
+-- nueva → lista vacía; /resume de una sesión → vuelve SU lista. Antes (2026-08-28) era por proyecto y la
+-- lista de un pedido viejo reaparecía "apagada" en el siguiente y se pisaba sin que nadie la cerrara.
+-- Persistida en .lampson/todo/<session_id>.json; la sesión actual la comparte el entry en el blackboard
+-- "lampson:session" (chat.syn / web.syn) porque la tool no recibe contexto de sesión.
 use "./common.syn" as c
-use "./memo.syn" as memo
 
 export let DIR be ".lampson/todo"
 let STATES be ["pending", "in_progress", "completed", "cancelled"]
 
-task path()
-    require env("LAMPSON_*")
-    give DIR + "/" + memo.slug() + ".json"
+-- id de la sesión actual (blackboard); sin entry (tests) → "default"
+export task current()
+    observe "lampson:session" as s
+    when s == nothing
+        give "default"
+    give s["id"]
 
-export task load()
-    require env("LAMPSON_*")
+task path(sid)
+    give DIR + "/" + sid + ".json"
+
+-- lista de una sesión (sid == nothing → la actual)
+export task load(sid)
     require file(".lampson")
     require file(".lampson/*")
+    let id be when sid == nothing then current() otherwise sid
     try
-        give json_decode(read_file(path()))
+        give json_decode(read_file(path(id)))
     recover err
         give []
 
@@ -43,20 +56,18 @@ export task format(items)
 
 -- texto para re-inyectar tras una compaction: solo lo activo; "" si no hay nada activo
 export task active_text()
-    require env("LAMPSON_*")
     require file(".lampson")
     require file(".lampson/*")
-    let active be where(load(), (it) => it["status"] == "pending" or it["status"] == "in_progress")
+    let active be where(load(nothing), (it) => it["status"] == "pending" or it["status"] == "in_progress")
     when length(active) == 0
         give ""
     give "[Your active task list was preserved across context compression — completed items omitted]\n" + format(active)
 
 export task tool(items)
-    require env("LAMPSON_*")
     require file(".lampson")
     require file(".lampson/*")
     when items == nothing
-        let cur be load()
+        let cur be load(nothing)
         give when length(cur) == 0 then "(empty task list)" otherwise format(cur)
     let clean be []
     let in_progress be 0
@@ -71,12 +82,12 @@ export task tool(items)
         set clean to append(clean, {"content": trim(text(it["content"])), "status": st})
     when in_progress > 1
         raise("at most ONE item may be in_progress at a time (you sent " + text(in_progress) + "): finish or cancel the others first")
-    write_file(path(), json_encode(clean))
+    write_file(path(current()), json_encode(clean))
     give when length(clean) == 0 then "(empty task list)" otherwise format(clean)
 
 export let SPEC be {
     "name": "todo",
-    "description": "Your task list for this project. Send the WHOLE list every time (it replaces the previous one); with no items it just returns the current list. Statuses: pending, in_progress (at most ONE at a time), completed, cancelled. Use it for any task with 3+ steps: write the plan first, mark an item in_progress when you start it, and completed only after it is verified done — never on intent; if something fails, cancel it and add a revised item. The list is shown to the user and preserved across context compression; it is not re-sent to you every step, so keep it current yourself.",
+    "description": "Your task list for the current session. Send the WHOLE list every time (it replaces the previous one); with no items it just returns the current list. Statuses: pending, in_progress (at most ONE at a time), completed, cancelled. Use it for any task with 3+ steps: write the plan first, mark an item in_progress when you start it, and completed only after it is verified done — never on intent; if something fails, cancel it and add a revised item. The list is shown to the user and preserved across context compression; it is not re-sent to you every step, so keep it current yourself. A new session starts with an empty list.",
     "parameters": {"type": "object", "properties": {
         "items": {"type": "array", "items": {"type": "object", "properties": {
             "content": {"type": "string"},

@@ -23,6 +23,7 @@
 use "./provider.syn" as provider
 use "./permission.syn" as permission
 use "./mcp.syn" as mcp
+use "./lamps.syn" as lamps
 use "./tools/todo.syn" as todo
 
 let MAX_ERRORS_PER_TURN be 8
@@ -121,13 +122,19 @@ export task receipt(m)
     let where_full be when length(saved) > 0 then " · " + saved[0] otherwise ""
     give "[" + text(m["name"]) + " result pruned: " + status + " · " + text(length(split(out, "\n"))) + " lines/" + text(length(out)) + " chars" + where_full + " — re-run the tool only if you really need the content again]"
 
--- reemplaza por recibos los tool results anteriores a los últimos PROTECT_TOKENS tokens de resultados
+-- reemplaza por recibos los tool results anteriores a los últimos PROTECT_TOKENS tokens de resultados.
+-- HISTÉRESIS 2× (2026-08-28): podar en cada paso movía la frontera y reescribía UN mensaje viejo por
+-- request — cada reescritura invalida el prompt cache del proveedor desde ese punto (visto en la traza:
+-- hits alternando 44k/11k con DeepSeek, y turnos enteros sin un solo hit). Ahora se poda recién cuando
+-- hay 2×PROTECT_TOKENS de resultados vivos, y de una sola vez: entre podas el historial queda
+-- byte-estable y el prefijo cachea (misma lección que hermes: "anything that mutates past context
+-- invalidates that cache and multiplies cost").
 export task prune_results(msgs)
     let total be 0
     each m in msgs
         when m["role"] == "tool"
             set total to total + floor(length(text(m["content"])) / 4)
-    when total <= PROTECT_TOKENS
+    when total <= PROTECT_TOKENS * 2
         give msgs
     let acc be 0
     let cut be length(msgs)
@@ -273,6 +280,9 @@ task execute(tc, opts, on_event)
         -- tools MCP: no son tasks Synsema (args libres); el registry las marca con "mcp"
         when registry[name] == "mcp"
             give text(mcp.call(name, args))
+        -- tools de lámparas: un proceso hijo por llamada (lib/lamps.syn)
+        when registry[name] == "lamp"
+            give text(lamps.call(name, args))
         let result be call_tool(registry[name], args)
         give text(result)
     recover err

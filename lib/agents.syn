@@ -32,6 +32,7 @@ use "./loop.syn" as loop
 use "./provider.syn" as provider
 use "./prompt.syn" as prompt
 use "./mcp.syn" as mcp
+use "./lamps.syn" as lamps
 
 export let DIR be ".lampson/agents"
 let MAX_TASKS be 6
@@ -39,27 +40,27 @@ let PARALLEL be 4
 
 export let PROFILES be {
     "build": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "memory", "todo", "skill", "delegate"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "bash", "process", "memory", "todo", "skill", "mcp", "lamp", "delegate"],
         "steps": 40,
         "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context; several independent questions can go in one delegate call (they run in parallel)."
     },
     "plan": {
-        "tools": ["read", "ls", "find", "grep", "memory", "todo", "skill", "delegate"],
+        "tools": ["read", "ls", "find", "grep", "lsp", "memory", "todo", "skill", "delegate"],
         "steps": 30,
         "addendum": "You are in PLAN mode: READ-ONLY. You cannot edit files or run commands (those tools are not available). Investigate the codebase, then answer with a concrete, numbered implementation plan: files to touch, what changes in each, risks, and how to verify. Do not write code beyond short illustrative snippets."
     },
     "review": {
-        "tools": ["read", "ls", "find", "grep", "bash", "process", "memory", "skill"],
+        "tools": ["read", "ls", "find", "grep", "lsp", "bash", "process", "memory", "skill"],
         "steps": 25,
         "addendum": "You are a REVIEWER: read-only on files (no write/edit), but you may run commands (tests, linters, git diff). Find real bugs, missing error handling, security issues and violations of the project's conventions. Report findings as a list with file:line, severity and a suggested fix. Do not modify files."
     },
     "explore": {
-        "tools": ["read", "ls", "find", "grep", "memory", "skill"],
+        "tools": ["read", "ls", "find", "grep", "lsp", "memory", "skill"],
         "steps": 20,
         "addendum": "You are an EXPLORER: read-only. Locate the code relevant to the question (files, functions, line numbers) and report it concisely with paths and short excerpts. Do not propose changes."
     },
     "worker": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "memory", "todo", "skill"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "bash", "process", "memory", "todo", "skill"],
         "steps": 40,
         "addendum": "You are a WORKER sub-agent: implement exactly the scoped task you were given (read, edit, run tests), then report what you changed (files) and how you verified it. Stay inside the scope; if something outside it is needed, report it instead of doing it."
     }
@@ -67,8 +68,10 @@ export let PROFILES be {
 
 let CHILD_NOTE be "\n\n# Sub-agent rules\n- You are a delegated sub-agent. Your permission scope was fixed when you started and you cannot ask the user: a denied action stays denied — do not retry it; state the limitation in your report so the delegating agent can handle it.\n- Your final message is your REPORT: concrete, with paths and line numbers (or test output) the parent can verify. No questions."
 
+-- perfiles que el usuario puede elegir (selector web, /agent). `worker` es interno: el perfil de los
+-- subagentes que `build` lanza con delegate (sin delegate ni mcp para que un hijo no delegue a su vez).
 export task names()
-    give keys(PROFILES)
+    give where(keys(PROFILES), (n) => n != "worker")
 
 export task profile(name)
     when contains(PROFILES, name)
@@ -102,6 +105,8 @@ export task registry_for(name)
         set reg["delegate"] to delegate
     each m in mcp.names(mcp_readonly_only(name))
         set reg[m] to "mcp"
+    each m in lamps.names(mcp_readonly_only(name))
+        set reg[m] to "lamp"
     give reg
 
 export task catalog_for(name)
@@ -114,7 +119,7 @@ export task catalog_for(name)
     let cat be tools.catalog_subset(p["tools"])
     when contains(p["tools"], "delegate")
         set cat to append(cat, DELEGATE_SPEC)
-    give cat + mcp.catalog(mcp_readonly_only(name))
+    give cat + mcp.catalog(mcp_readonly_only(name)) + lamps.catalog(mcp_readonly_only(name))
 
 -- Info de entorno para el system prompt (compartida por chat.syn / web.syn / delegate)
 export task env_info(cfg)
@@ -122,7 +127,11 @@ export task env_info(cfg)
     require env("OS")
     require time
     let sc be tools.shell_config()
+    -- desde dónde habla el usuario (blackboard "lampson:ui", lo comparte el entry): el modelo NO debe decirle
+    -- "/lamps" a alguien que está en la web (2026-08-28)
+    observe "lampson:ui" as ui
     give {
+        "ui": when ui == nothing then "terminal" otherwise text(ui["kind"]),
         "cwd": env("LAMPSON_WORKSPACE", "./workspace"),
         "os": env("OS", "unix"),
         "shell": sc["shell"],

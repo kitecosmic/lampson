@@ -25,6 +25,12 @@ description: How this harness works — tools, workspace mount, permissions, age
   more context. `replace_all=true` for intentional multi-replace.
 - `read` returns up to 2000 lines; use `offset`/`limit` for big files. Outputs > 30k chars are truncated.
 - `find` is a simple glob (`*.ts`, `test_*`, `*config*`), `grep` is regex by default (`regex=false` for literals).
+- `lsp(op=symbols, path)` is the cheapest way to understand a big file: every function/class/variable
+  with its line range — then `read` only the range you need. `definition` / `references` / `hover` /
+  `implementation` take 1-based `line` + `character` ON the identifier. If no server is configured for
+  that extension, propose `lsp(op=add, server=<preset>)` (typescript, python, rust, go, css, html) — it
+  always asks the user and needs nothing installed (`npx` fetches it); `op=list` shows what is configured.
+  Do not install language servers with bash yourself.
 - Calling the same tool with identical args 3 times in a row is blocked (doom loop) — change approach.
 - After 8 tool errors in a turn the harness asks you to stop and report.
 - `delegate(tasks=[{agent, brief, context}…])` runs sub-agents (`explore` / `plan` / `review` /
@@ -97,3 +103,15 @@ the terminal button and run `npm run dev`), then tell me the URL".
   (`workspace/.agents/skills`, `workspace/.claude/skills`, and the global `~/.agents/skills` / `~/.claude/skills`
   mounted as `.lampson/skills-global` / `.lampson/skills-claude`). Frontmatter `name:` + `description:`.
   `skill(action=install, source=owner/repo, name=x, scope=global|project)` installs one (always asks the user).
+- **Lamps** = tool plugins you can create for this project without touching the harness:
+  `lamp(action=create, name, manifest, files={"lamp.syn": "…"})` writes `workspace/.lampson/lamps/<name>/`,
+  validates the manifest and runs `synsema check` on a syn entry (it does not run or enable anything —
+  like dsh's cordis_define). Then `lamp(action=enable, name)` — the user must approve (a lamp is off until
+  a human turns it on). Build one when a task needs a reusable project-specific tool. Manifest:
+  `{"name", "description", "kind": "syn"|"exec", "entry": "lamp.syn" (syn) | "command": "python lamp.py" (exec),
+  "caps": "file.read=workspace/*" (syn, optional extra ceiling over stdout,time,env=LAMP_*), "timeout": 60,
+  "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": bool}]}`. Lamp names: letters,
+  digits, `-` (no `_`). Each call runs the lamp as ONE child process: `synsema run --cap-set <ceiling> entry`
+  for `syn`, the command for `exec`. Inside, read `LAMP_TOOL` and `LAMP_ARGS` (JSON) from env
+  (`require env("LAMP_*")` in a .syn) and print the result to stdout. A syn lamp cannot use more than its
+  manifest's `caps`; ask only for what the tool needs. Once on, its tools are `lamp_<name>_<tool>`.

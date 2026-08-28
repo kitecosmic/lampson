@@ -4,6 +4,8 @@ use "./common.syn" as c
 export task tool(path, offset, limit)
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     let off be when offset == nothing then 1 otherwise floor(offset)
     let lim be when limit == nothing then 2000 otherwise floor(limit)
     let real be c.ws(path)

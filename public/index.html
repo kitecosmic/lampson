@@ -70,6 +70,68 @@
   .pill { font:400 11.5px/1 var(--mono); color:var(--ink-3); letter-spacing:.02em; white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis; flex:none; cursor:pointer; border-bottom:1px dashed transparent; }
   .pill:hover { color:var(--ink); border-bottom-color:var(--rule-2); }
   .pill.nokey { color:var(--rubric); }
+  .pill.on { color:var(--accent); }
+  /* ---- lámparas: modal grande, lista + detalle ---- */
+  .modal .box.lampsbox { width:min(1100px, 94vw); height:min(760px, 90vh); display:flex; flex-direction:column; padding:14px 18px 12px; }
+  .lampsbox .lhead { display:flex; align-items:center; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--rule); }
+  .lampsbox .lhead h3 { margin:0; font:600 16px/1.2 var(--serif); }
+  .lampsbox .lhead .ds { color:var(--ink-3); font:400 11.5px/1 var(--mono); }
+  .lampsbox .lghost { font:400 13px/1 var(--mono); width:26px; height:26px; border:1px solid var(--rule); background:transparent; color:var(--ink-3); border-radius:var(--r); cursor:pointer; }
+  .lampsbox .lghost:hover { color:var(--ink); border-color:var(--rule-2); }
+  .lampsbox .lbody { flex:1; min-height:0; display:grid; grid-template-columns:260px minmax(0,1fr); grid-template-areas:"list detail"; gap:0; }
+  .lampsbox .llist { grid-area:list; }
+  .lampsbox .ldetail { grid-area:detail; }
+  .lampsbox .llist { display:flex; flex-direction:column; border-right:1px solid var(--rule); padding:10px 12px 8px 0; min-height:0; }
+  .lampsbox .llist input { font:400 12px/1.4 var(--mono); height:30px; box-sizing:border-box; background:transparent; color:var(--ink); border:1px solid var(--rule); border-radius:var(--r); padding:0 8px; margin:0 0 8px; width:100%; }
+  .lampsbox .llist input:focus { outline:none; border-color:var(--accent); }
+  .lampsbox #lampsItems { flex:1; overflow:auto; min-height:0; }
+  .lampsbox .li { display:grid; grid-template-columns:14px 1fr; gap:8px; align-items:start; padding:7px 8px; border-radius:var(--r); cursor:pointer; font:400 12px/1.35 var(--mono); }
+  .lampsbox .li:hover { background:var(--paper-2, rgba(127,127,127,.08)); }
+  .lampsbox .li.sel { background:var(--paper-2, rgba(127,127,127,.12)); box-shadow:inset 2px 0 0 var(--accent); }
+  .lampsbox .li .dot { color:var(--ink-3); margin-top:1px; }
+  .lampsbox .li.on .dot { color:var(--accent); }
+  .lampsbox .li.broken .dot { color:var(--rubric); }
+  .lampsbox .li .nm { color:var(--ink); font-weight:600; }
+  .lampsbox .li .meta { color:var(--ink-3); font-size:11px; }
+  .lampsbox .lcount { color:var(--ink-3); font:400 11px/1 var(--mono); padding-top:8px; border-top:1px solid var(--rule); }
+  .lampsbox .ldetail { overflow:auto; min-height:0; padding:12px 4px 8px 18px; font:400 12.5px/1.5 var(--mono); }
+  .lampsbox .ldetail .none { color:var(--ink-3); font:400 13px/1.6 var(--serif); max-width:520px; }
+  .lampsbox .dhead { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .lampsbox .dhead .nm { font:600 18px/1.2 var(--mono); color:var(--ink); }
+  .lampsbox .dhead .meta { color:var(--ink-3); font-size:11.5px; }
+  .lampsbox .sw { display:inline-flex; align-items:center; gap:6px; margin-left:auto; cursor:pointer; user-select:none; font:400 11.5px/1 var(--mono); color:var(--ink-3); }
+  .lampsbox .sw input { accent-color:var(--accent); width:16px; height:16px; margin:0; }
+  .lampsbox .sw.on { color:var(--accent); }
+  .lampsbox .ddesc { color:var(--ink-2); font:400 13px/1.5 var(--serif); margin:8px 0 4px; max-width:70ch; }
+  .lampsbox .dcap { color:var(--ink-3); font-size:11.5px; margin-bottom:12px; word-break:break-all; }
+  .lampsbox .dcap b { color:var(--rubric); font-weight:600; }
+  .lampsbox .dcap.err { color:var(--rubric); }
+  .lampsbox .off-note { color:var(--ink-3); font:400 12px/1.5 var(--serif); border:1px dashed var(--rule-2); border-radius:var(--r); padding:8px 10px; margin:8px 0 12px; }
+  .lampsbox .tool { border:1px solid var(--rule); border-radius:var(--r); padding:10px 12px; margin-bottom:10px; }
+  .lampsbox .tool .th { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .lampsbox .tool .th code { font-weight:600; color:var(--ink); }
+  .lampsbox .tool .th .ds { color:var(--ink-3); font:400 12px/1.4 var(--serif); }
+  .lampsbox .lf { display:grid; grid-template-columns:120px 1fr; gap:2px 10px; align-items:center; margin-top:8px; }
+  .lampsbox .lf .lk { color:var(--ink); }
+  .lampsbox .lf .req { color:var(--rubric); font-size:10.5px; }
+  .lampsbox .lf .ds { grid-column:2; color:var(--ink-3); font:400 11.5px/1.4 var(--serif); }
+  .lampsbox .lf input, .lampsbox .lf select, .lampsbox .lf textarea { font:400 12px/1.4 var(--mono); background:transparent; color:var(--ink); border:1px solid var(--rule); border-radius:var(--r); padding:4px 6px; width:100%; max-width:420px; }
+  .lampsbox .lf textarea { grid-column:2; min-height:56px; resize:vertical; }
+  .lampsbox .tool .go { margin-top:10px; display:flex; align-items:center; gap:10px; }
+  .lampsbox .tool .go button { font:400 12px/1 var(--mono); padding:5px 10px; }
+  .lampsbox .tool .go .st { color:var(--ink-3); font-size:11.5px; }
+  .lampsbox .tool pre.out { margin-top:8px; max-height:38vh; overflow:auto; font:400 11.5px/1.45 var(--mono); border:1px solid var(--rule); border-radius:var(--r); padding:8px; white-space:pre-wrap; }
+  .lampsbox .dfoot { display:flex; align-items:center; gap:12px; margin-top:14px; padding-top:10px; border-top:1px solid var(--rule); color:var(--ink-3); font-size:11.5px; }
+  .lampsbox .dfoot .del { margin-left:auto; cursor:pointer; color:var(--rubric); }
+  .lampsbox .dfoot .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
+  .lampsbox .dfoot .del.ask .no { cursor:pointer; }
+  .lampsbox .lhelp { flex:1; overflow:auto; padding:14px 6px; font:400 13.5px/1.6 var(--serif); color:var(--ink-2); max-width:78ch; }
+  .lampsbox .lhelp h4 { margin:0 0 8px; font:600 15px/1.3 var(--serif); color:var(--ink); }
+  .lampsbox .lhelp b { color:var(--ink); font-weight:600; }
+  .lampsbox .lhelp ul { margin:4px 0 12px 18px; padding:0; display:grid; gap:4px; }
+  .lampsbox .err { color:var(--rubric); font:400 11.5px/1.4 var(--mono); min-height:14px; }
+  .pill.new { animation: lampglow 1.2s ease-in-out 3; }
+  @keyframes lampglow { 0%,100% { color:var(--ink-3); } 50% { color:var(--accent); } }
   .gitchip { display:none; align-items:center; gap:8px; font:400 11.5px/1 var(--mono); color:var(--ink-2); max-width:45%; flex:none; }
   .gitchip .br { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .gitchip b { font-weight:600; }
@@ -249,11 +311,28 @@
   .modal label { display:flex; align-items:center; gap:12px; font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0 0 10px; }
   .modal input { flex:1; font:400 13px/1.4 var(--mono); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:7px 10px; }
   .modal input:focus { outline:none; border-color:var(--rule-2); box-shadow:0 0 0 3px var(--accent-bg); }
+  .modal select { flex:1; font:400 13px/1.4 var(--mono); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:7px 10px; }
   .modal .btns { display:flex; gap:8px; align-items:center; margin-top:14px; }
   .modal .err { color:var(--rubric); font:400 12px/1.4 var(--mono); }
+  /* el modal de lámparas usa formularios propios: anular las reglas genéricas del modal (label uppercase en
+     flex, input/select con flex:1 — el buscador crecía a toda la columna) con mayor especificidad */
+  .modal .box.lampsbox .llist input { flex:none; height:30px; padding:0 8px; background:transparent; }
+  .modal .box.lampsbox label.lf { display:grid; grid-template-columns:120px minmax(0,1fr); gap:2px 10px; align-items:center; margin:8px 0 0; font:400 12px/1.4 var(--mono); text-transform:none; letter-spacing:0; color:var(--ink); }
+  .modal .box.lampsbox label.lf .lk { color:var(--ink); }
+  .modal .box.lampsbox label.lf .ds { grid-column:2; color:var(--ink-3); font:400 11.5px/1.4 var(--serif); text-transform:none; letter-spacing:0; }
+  .modal .box.lampsbox label.lf input, .modal .box.lampsbox label.lf select, .modal .box.lampsbox label.lf textarea { flex:none; width:100%; max-width:420px; padding:4px 6px; font:400 12px/1.4 var(--mono); background:transparent; }
+  .modal .box.lampsbox label.lf textarea { grid-column:2; }
+  .modal .box.lampsbox label.sw { display:inline-flex; margin:0 0 0 auto; gap:6px; font:400 11.5px/1 var(--mono); text-transform:none; letter-spacing:0; }
+  .modal .box.lampsbox label.sw input { flex:none; width:16px; height:16px; padding:0; }
+  .modal .box.lampsbox .tool .th { display:grid; grid-template-columns:auto 1fr auto; gap:8px 10px; align-items:baseline; }
+  .modal .box.lampsbox .tool .th .ds { text-transform:none; }
+  .modal .box.lampsbox .lhead .eyebrow { margin:0; }
   .s .del { margin-left:auto; color:var(--ink-3); visibility:hidden; font-size:11px; padding:0 4px; }
   .s:hover .del { visibility:visible; }
   .s .del:hover { color:var(--rubric); }
+  .p .del { margin-left:auto; color:var(--ink-3); visibility:hidden; font-size:11px; padding:0 4px; cursor:pointer; }
+  .p:hover .del { visibility:visible; }
+  .p .del:hover { color:var(--rubric); }
   .del.ask, .s:hover .del.ask { visibility:visible; color:var(--ink-2); font:400 11px/1.4 var(--mono); white-space:nowrap; }
   .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
   .del.ask .no { color:var(--ink-2); cursor:pointer; }
@@ -277,6 +356,7 @@
     <span class="hpath" id="hpath"></span>
     <select id="agent" title="perfil de agente: qué tools puede usar"></select>
     <select id="perm" title="qué pasa con un comando peligroso (rm -rf, git push --force, sudo…)"><option value="ask">permisos: preguntar</option><option value="yolo">permisos: permitir todo</option><option value="strict">permisos: denegar</option></select>
+    <span class="pill" id="lamps" title="lámparas: plugins de tools que vos encendés · clic para ver y activar">lámparas</span>
     <span class="pill" id="model" title="proveedor y modelo · clic para cambiarlos o cargar una API key">…</span>
   </div>
 </header>
@@ -301,6 +381,10 @@
     <h2 title="servers MCP conectados: globales (lampson/.lampson/mcp.json, valen para todos los proyectos) y del proyecto (.lampson/mcp.json)"><span class="caret">▸</span>MCP<span class="cnt" id="mcpCount"></span></h2>
     <div class="body" id="mcpBox"></div>
   </section>
+  <section class="sec" data-sec="lsp">
+    <h2 title="language servers: el agente los usa para ver la estructura de un archivo sin leerlo (symbols) y navegar con precisión (definition, references, hover). Arrancan en la primera consulta"><span class="caret">▸</span>LSP<span class="cnt" id="lspCount"></span></h2>
+    <div class="body" id="lspBox"></div>
+  </section>
   <section class="sec" data-sec="memory">
     <h2 title="notas que el agente guarda sobre este proyecto con la tool memory"><span class="caret">▸</span>Memoria<span class="cnt" id="memCount"></span></h2>
     <div class="body" id="memory"></div>
@@ -319,6 +403,63 @@
     <div id="viewer"><div class="vh"><b id="vpath"></b><span id="vmeta"></span><span class="spacer"></span><span class="x" id="vclose">✕ cerrar</span></div><pre id="vbody"></pre></div>
     <div id="log"></div>
     <div id="termpane"><div class="vh"><span class="st"></span><b>terminal</b><span id="tmeta"></span><span class="spacer"></span><span class="x" id="tclose">✕ cerrar</span></div><div id="xterm"></div></div>
+  </div>
+  <div id="mcpAdd" class="modal" style="display:none">
+    <div class="box">
+      <p class="eyebrow">mcp</p>
+      <h3>Conectar un server MCP</h3>
+      <p class="lead">El comando arranca el server por stdio (formato Claude Code/Cursor). Queda guardado en <code id="mcpAddFile">.lampson/mcp.json</code> y sus tools entran al catálogo del agente como <code>mcp_&lt;server&gt;_&lt;tool&gt;</code>.</p>
+      <label>nombre <input id="mcpName" spellcheck="false" autocomplete="off" placeholder="github"></label>
+      <label>comando <input id="mcpCmd" spellcheck="false" autocomplete="off" placeholder="npx -y @modelcontextprotocol/server-github"></label>
+      <label>env <input id="mcpEnv" spellcheck="false" autocomplete="off" placeholder="opcional: GITHUB_TOKEN=… · separá con espacios"></label>
+      <label>alcance <select id="mcpScope"><option value="global">global — todos los proyectos</option><option value="project">proyecto — solo este repo</option></select></label>
+      <div class="btns"><button class="primary" id="mcpGo">Conectar</button><button id="mcpCancel">Cancelar</button><span class="err" id="mcpErr"></span></div>
+    </div>
+  </div>
+  <div id="lampsModal" class="modal" style="display:none">
+    <div class="box lampsbox">
+      <div class="lhead"><span class="eyebrow" style="margin:0">lámparas</span><h3>Lámparas</h3><span class="ds" id="lampsSub"></span><span class="spacer"></span><button class="lghost" id="lampsHelp" title="¿qué es una lámpara?">?</button><button class="lghost" id="lampsClose" title="cerrar (Esc)">✕</button></div>
+      <div class="lbody" id="lampsBody">
+        <div class="llist">
+          <input id="lampsSearch" placeholder="buscar lámpara o tool…" spellcheck="false" autocomplete="off">
+          <div id="lampsItems"></div>
+          <div class="lcount" id="lampsCount"></div>
+        </div>
+        <div class="ldetail" id="lampsDetail"></div>
+      </div>
+      <div class="lhelp" id="lampsHelpBox" style="display:none">
+        <h4>Herramientas hechas a medida para este proyecto</h4>
+        <p>Una lámpara es una tool que el agente (o vos) escribe para <em>este</em> repo: una carpeta con <code>lamp.json</code> y el código — en Synsema (corre bajo un techo de capacidades que no puede superar) o en cualquier lenguaje (<code>python</code>, <code>node</code>, un binario). A diferencia de un script suelto, el modelo la ve en su catálogo con parámetros tipados, vos la podés correr desde acá, y queda en el repo para la próxima sesión.</p>
+        <p><b>Pedila en el chat</b> — <i>«hacé una lámpara que liste los endpoints del backend»</i>. El agente la escribe en <code id="lampsProject">.lampson/lamps/</code>, la valida y te pide encenderla acá.</p>
+        <p><b>Encendida = existe</b> — apagada, el agente ni la ve. Al encenderla, sus tools entran al catálogo como <code>lamp_&lt;lámpara&gt;_&lt;tool&gt;</code> desde el próximo turno. Las globales viven en <code id="lampsGlobal">lamps/</code> y valen para todos los proyectos.</p>
+        <p><b>Ejemplos</b></p>
+        <ul>
+          <li><b>Consultas del proyecto</b> — <code>endpoints()</code> que parsea tus rutas y devuelve método + path + handler; <code>env_keys()</code> usadas vs. definidas en <code>.env.example</code>.</li>
+          <li><b>Generadores con tus convenciones</b> — <code>new_component(name)</code> que crea el <code>.tsx</code> + test + story con tu plantilla exacta.</li>
+          <li><b>Checkers</b> — <code>check_i18n()</code> claves faltantes por idioma; <code>lint_styles()</code> colores hardcodeados fuera de tus tokens.</li>
+          <li><b>Datos locales</b> — <code>db_schema()</code> / <code>query(sql)</code> contra tu SQLite con techo <code>db=./dev.db</code>.</li>
+          <li><b>Integraciones sin MCP</b> — <code>deploy_status()</code> contra tu API con techo <code>net=api.x.com</code>.</li>
+        </ul>
+        <p><button class="primary" id="lampsHelpBack">← volver a las lámparas</button></p>
+      </div>
+      <span class="err" id="lampsErr"></span>
+    </div>
+  </div>
+  <div id="lspAdd" class="modal" style="display:none">
+    <div class="box">
+      <p class="eyebrow">lsp</p>
+      <h3>Agregar un language server</h3>
+      <p class="lead">El mismo proceso que usa tu editor para «ir a definición». El agente lo usa para ver la estructura de un archivo sin leerlo entero (<code>symbols</code>) y para navegar sin ambigüedad (<code>definition</code>, <code>references</code>, <code>hover</code>). No se instala nada acá: elegí un preset (con <code>npx</code> se baja solo) o poné tu comando. Arranca en la primera consulta.</p>
+      <label>preset <select id="lspPreset"></select></label>
+      <div id="lspCustom" style="display:none">
+        <label>nombre <input id="lspName" spellcheck="false" autocomplete="off" placeholder="mylang"></label>
+        <label>comando <input id="lspCmd" spellcheck="false" autocomplete="off" placeholder="my-language-server --stdio"></label>
+        <label>extensiones <input id="lspExt" spellcheck="false" autocomplete="off" placeholder=".ml=ocaml .mli=ocaml"></label>
+      </div>
+      <p class="lead" id="lspInstall"></p>
+      <label>alcance <select id="lspScope"><option value="global">global — todos los proyectos</option><option value="project">proyecto — solo este repo</option></select></label>
+      <div class="btns"><button class="primary" id="lspGo">Agregar</button><button id="lspCancel">Cancelar</button><span class="err" id="lspErr"></span></div>
+    </div>
   </div>
   <div id="setup" class="modal" style="display:none">
     <div class="box">
@@ -420,12 +561,29 @@ function showPane(which) { // 'log' | 'viewer' | 'term'
   log.style.display = which === 'log' ? '' : 'none';
   $('#viewer').style.display = which === 'viewer' ? 'block' : 'none';
   $('#termpane').style.display = which === 'term' ? 'flex' : 'none';
+  // volver al chat = al final de la conversación (el viewer de archivos deja el scroll de #stage arriba)
+  if (which === 'log') $('#stage').scrollTop = $('#stage').scrollHeight;
 }
 function openTerm() {
   if (term) { showPane('term'); termFit.fit(); term.focus(); return; }
   showPane('term'); procOpen = null; clearInterval(procTimer);
   term = new Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'), fontSize: 13, lineHeight: 1.25, theme: termTheme(), scrollback: 5000, allowProposedApi: true });
   termFit = new FitAddon.FitAddon(); term.loadAddon(termFit); term.open($('#xterm')); termFit.fit();
+  // URLs clickeables (npm run dev imprime http://localhost:3000): link provider mínimo con la API nativa
+  // de xterm v5 — el addon web-links no está vendorizado y no hace falta para http/https
+  const TERM_URL_RE = /https?:\/\/[^\s"'`<>()\[\]{}]*[^\s"'`<>()\[\]{}.,;:!?]/g;
+  term.registerLinkProvider({
+    provideLinks(y, cb) {
+      const line = term.buffer.active.getLine(y - 1);
+      if (!line) return cb(undefined);
+      const text = line.translateToString(true);
+      const links = []; let m; TERM_URL_RE.lastIndex = 0;
+      while ((m = TERM_URL_RE.exec(text))) {
+        links.push({ range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } }, text: m[0], activate: (_e, uri) => window.open(uri, '_blank') });
+      }
+      cb(links.length ? links : undefined);
+    }
+  });
   $('#tmeta').textContent = 'conectando…';
   termWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/term'); termWs.binaryType = 'arraybuffer';
   const send = (o) => { if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify(o)); };
@@ -742,7 +900,7 @@ connectEvents();
 
 // ---- lista de tareas del agente ----
 async function loadTodo() {
-  let r; try { r = await (await fetch('/api/todo')).json(); } catch (e) { return; }
+  let r; try { r = await (await fetch('/api/todo' + (session ? '?session=' + encodeURIComponent(session) : ''))).json(); } catch (e) { return; }
   const box = $('#todoBox'); box.innerHTML = '';
   const items = r.items || []; const open = items.filter(i => i.status === 'pending' || i.status === 'in_progress').length;
   $('#todoCount').textContent = items.length ? (open ? `${open} · ${items.length}` : `${items.length}`) : ''; autoSec('todo', open > 0);
@@ -752,21 +910,221 @@ async function loadTodo() {
 }
 
 // ---- servers MCP ----
+let mcpFiles = { global: '.lampson/mcp.json', project: '' };
 async function loadMcp() {
   let r; try { r = await (await fetch('/api/mcp')).json(); } catch (e) { return; }
+  mcpFiles = { global: r.global || '.lampson/mcp.json', project: r.project || '' };
   const box = $('#mcpBox'); box.innerHTML = '';
   const list = r.servers || []; const ready = list.filter(s => s.status === 'ready').length;
   $('#mcpCount').textContent = list.length ? (ready ? `${ready} ● · ${list.length}` : `${list.length}`) : ''; autoSec('mcp', list.some(s => s.status === 'error'));
-  if (!list.length) { box.innerHTML = `<div class="p none">ninguno · global: <code>${esc(r.global || '')}</code> · proyecto: <code>${esc(r.project || '')}</code></div>`; return; }
+  if (!list.length) { const e = document.createElement('div'); e.className = 'p none'; e.style.cursor = 'default'; e.textContent = 'sin servers conectados'; box.appendChild(e); }
   for (const sv of list) {
     const d = document.createElement('div'); d.className = 'p' + (sv.status === 'ready' ? ' run' : ''); d.style.cursor = 'default';
     d.title = `${sv.scope} · $ ${sv.command}` + (sv.error ? `
 ${sv.error}` : '') + (sv.tools.length ? `
 tools: ${sv.tools.join(', ')}` : '');
-    d.innerHTML = `<span class="st"></span><span class="nm">${esc(sv.name)}</span><span class="cm">${esc(sv.status)} · ${sv.tools.length} tools${sv.error ? ' · ' + esc(sv.error) : ''}</span>`;
+    d.innerHTML = `<span class="st"></span><span class="nm">${esc(sv.name)}</span><span class="cm">${esc(sv.status)} · ${sv.tools.length} tools${sv.error ? ' · ' + esc(sv.error) : ''}</span><span class="del" title="quitar este server (lo saca del mcp.json y apaga su proceso)">✕</span>`;
+    d.querySelector('.del').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del'), '¿quitar?', async () => { await fetch('/api/mcp/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: sv.name }) }); loadMcp(); }); };
     box.appendChild(d);
   }
+  const add = document.createElement('div'); add.className = 'p'; add.innerHTML = `<span class="nm" style="color:var(--accent)">+ conectar un server…</span>`;
+  add.title = 'también podés editar a mano ' + mcpFiles.global + ' (global) o ' + mcpFiles.project + ' (proyecto), o pedírselo al agente';
+  add.onclick = openMcpAdd;
+  box.appendChild(add);
 }
+function openMcpAdd() {
+  $('#mcpErr').textContent = ''; $('#mcpName').value = ''; $('#mcpCmd').value = ''; $('#mcpEnv').value = '';
+  $('#mcpAddFile').textContent = $('#mcpScope').value === 'project' ? mcpFiles.project : mcpFiles.global;
+  $('#mcpAdd').style.display = 'flex'; $('#mcpName').focus();
+}
+$('#mcpScope').onchange = () => { $('#mcpAddFile').textContent = $('#mcpScope').value === 'project' ? mcpFiles.project : mcpFiles.global; };
+$('#mcpCancel').onclick = () => { $('#mcpAdd').style.display = 'none'; };
+$('#mcpGo').onclick = async () => {
+  const name = $('#mcpName').value.trim(), command = $('#mcpCmd').value.trim();
+  if (!name || !command) { $('#mcpErr').textContent = 'falta nombre o comando'; return; }
+  const env = {};
+  for (const tok of $('#mcpEnv').value.trim().split(/\s+/).filter(Boolean)) { const i = tok.indexOf('='); if (i > 0) env[tok.slice(0, i)] = tok.slice(i + 1); }
+  $('#mcpErr').textContent = 'conectando…';
+  try {
+    const r = await fetch('/api/mcp/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, command, env, scope: $('#mcpScope').value }) });
+    const d = await r.json();
+    if (!r.ok) { $('#mcpErr').textContent = d.error || ('error ' + r.status); return; }
+    $('#mcpAdd').style.display = 'none'; add('meta', '⌁ ' + esc(d.result || 'server conectado'));
+    loadMcp();
+  } catch (e) { $('#mcpErr').textContent = String(e.message || e); }
+};
+
+// ---- language servers (LSP): sección del sidebar + modal para agregar (preset o comando) ----
+let lspPresets = {};
+async function loadLsp() {
+  let r; try { r = await (await fetch('/api/lsp')).json(); } catch (e) { return; }
+  lspPresets = r.presets || {};
+  const box = $('#lspBox'); box.innerHTML = '';
+  const list = r.servers || []; const ready = list.filter(s => s.status === 'ready').length;
+  $('#lspCount').textContent = list.length ? (ready ? `${ready} ● · ${list.length}` : `${list.length}`) : ''; autoSec('lsp', list.some(s => s.status === 'error' || s.status === 'exited'));
+  if (!list.length) { const e = document.createElement('div'); e.className = 'p none'; e.style.cursor = 'default'; e.textContent = 'sin language servers'; box.appendChild(e); }
+  for (const sv of list) {
+    const d = document.createElement('div'); d.className = 'p' + (sv.status === 'ready' ? ' run' : ''); d.style.cursor = 'default';
+    d.title = `${sv.scope} · $ ${sv.command}` + (sv.error ? `\n${sv.error}` : '');
+    d.innerHTML = `<span class="st"></span><span class="nm">${esc(sv.name)}</span><span class="cm">${esc(sv.status)} · ${esc((sv.extensions || []).join(' '))}${sv.error ? ' · ' + esc(sv.error) : ''}</span><span class="del" title="quitar este server de la config">✕</span>`;
+    d.querySelector('.del').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del'), '¿quitar?', async () => { await fetch('/api/lsp/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: sv.name }) }); loadLsp(); }); };
+    box.appendChild(d);
+  }
+  const add = document.createElement('div'); add.className = 'p'; add.innerHTML = `<span class="nm" style="color:var(--accent)">+ agregar un language server…</span>`;
+  add.title = 'preset (typescript, python, rust, go, css, html) o tu propio comando · también podés editar ' + (r.global || '.lampson/lsp.json');
+  add.onclick = openLspAdd;
+  box.appendChild(add);
+}
+function openLspAdd() {
+  const sel = $('#lspPreset'); sel.innerHTML = '';
+  for (const k of Object.keys(lspPresets)) { const o = document.createElement('option'); o.value = k; o.textContent = `${k} — ${Object.keys(lspPresets[k].languages || {}).join(' ')}`; sel.appendChild(o); }
+  const custom = document.createElement('option'); custom.value = ''; custom.textContent = 'otro — mi propio comando'; sel.appendChild(custom);
+  $('#lspErr').textContent = ''; $('#lspName').value = ''; $('#lspCmd').value = ''; $('#lspExt').value = '';
+  lspPresetChanged(); $('#lspAdd').style.display = 'flex';
+}
+function lspPresetChanged() {
+  const k = $('#lspPreset').value; const p = lspPresets[k];
+  $('#lspCustom').style.display = k ? 'none' : '';
+  $('#lspInstall').textContent = p ? `$ ${p.command} ${(p.args || []).join(' ')}` + (p.install ? ` · si no está instalado: ${p.install}` : '') : '';
+}
+$('#lspPreset').onchange = lspPresetChanged;
+$('#lspCancel').onclick = () => { $('#lspAdd').style.display = 'none'; };
+$('#lspGo').onclick = async () => {
+  const k = $('#lspPreset').value;
+  const body = { scope: $('#lspScope').value };
+  if (k) { body.name = k; }
+  else {
+    body.name = $('#lspName').value.trim(); body.command = $('#lspCmd').value.trim(); body.languages = {};
+    for (const tok of $('#lspExt').value.trim().split(/\s+/).filter(Boolean)) { const i = tok.indexOf('='); if (i > 0) body.languages[tok.slice(0, i)] = tok.slice(i + 1); }
+    if (!body.name || !body.command || !Object.keys(body.languages).length) { $('#lspErr').textContent = 'falta nombre, comando o extensiones (.ext=languageId)'; return; }
+  }
+  $('#lspErr').textContent = 'guardando…';
+  try {
+    const r = await fetch('/api/lsp/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { $('#lspErr').textContent = d.error || ('error ' + r.status); return; }
+    $('#lspAdd').style.display = 'none'; add('meta', '⌁ ' + esc(d.result || 'server agregado'));
+    loadLsp();
+  } catch (e) { $('#lspErr').textContent = String(e.message || e); }
+};
+
+// ---- lámparas (plugins de tools): pill en la barra superior + modal lista/detalle ----
+// Pensado para muchas lámparas: buscador (nombre, descripción, tools), lista compacta a la izquierda, la
+// elegida a la derecha con su switch, sus tools (formulario generado del schema) y acciones. La explicación
+// vive detrás de «?» para no saturar. Cerrar: ✕, Esc o clic fuera del cuadro.
+let lampsData = [], lampSel = null, lampsMeta = { global: 'lamps/', project: '.lampson/lamps/' };
+async function loadLamps() {
+  let r; try { r = await (await fetch('/api/lamps')).json(); } catch (e) { return; }
+  lampsData = r.lamps || []; lampsMeta = { global: r.global || 'lamps/', project: r.project || '.lampson/lamps/' };
+  const on = lampsData.filter(l => l.enabled).length;
+  const pill = $('#lamps'); pill.textContent = lampsData.length ? `lámparas ${on}/${lampsData.length}` : 'lámparas'; pill.classList.toggle('on', on > 0);
+  $('#lampsGlobal').textContent = lampsMeta.global; $('#lampsProject').textContent = lampsMeta.project;
+  $('#lampsSub').textContent = lampsData.length ? `${on} encendida${on === 1 ? '' : 's'} · ${lampsData.length} en total` : '';
+  if (lampSel && !lampsData.some(l => l.name === lampSel)) lampSel = null;
+  renderLampList();
+}
+function lampMatches(l, q) {
+  if (!q) return true;
+  const hay = [l.name, l.description || '', l.scope, l.kind, ...(l.tools || [])].join(' ').toLowerCase();
+  return q.split(/\s+/).every(t => hay.includes(t));
+}
+function renderLampList() {
+  const q = ($('#lampsSearch').value || '').trim().toLowerCase();
+  const list = lampsData.filter(l => lampMatches(l, q));
+  const box = $('#lampsItems'); box.innerHTML = '';
+  if (!lampsData.length) { box.innerHTML = '<div class="none" style="padding:8px;color:var(--ink-3);font:400 12px/1.5 var(--serif)">ninguna todavía</div>'; }
+  else if (!list.length) { box.innerHTML = '<div class="none" style="padding:8px;color:var(--ink-3);font:400 12px/1.5 var(--serif)">nada coincide con la búsqueda</div>'; }
+  if (list.length && (!lampSel || !list.some(l => l.name === lampSel))) lampSel = list[0].name;
+  for (const l of list) {
+    const d = document.createElement('div'); d.className = 'li' + (l.enabled ? ' on' : '') + (l.error ? ' broken' : '') + (l.name === lampSel ? ' sel' : '');
+    d.innerHTML = `<span class="dot">${l.error ? '!' : (l.enabled ? '●' : '○')}</span><div><div class="nm">${esc(l.name)}</div><div class="meta">${esc(l.scope)} · ${esc(l.kind)} · ${(l.tools || []).length} tool${(l.tools || []).length === 1 ? '' : 's'}${l.error ? ' · rota' : ''}</div></div>`;
+    d.onclick = () => { lampSel = l.name; renderLampList(); };
+    box.appendChild(d);
+  }
+  $('#lampsCount').textContent = q ? `${list.length} de ${lampsData.length}` : `${lampsData.length} lámpara${lampsData.length === 1 ? '' : 's'}`;
+  renderLampDetail();
+}
+function lampField(k, p, required) {
+  const def = p.default !== undefined ? p.default : ''; const req = required.includes(k) ? ' <span class="req">(obligatorio)</span>' : '';
+  let input;
+  if (Array.isArray(p.enum)) input = `<select data-k="${esc(k)}">${p.enum.map(v => `<option value="${esc(String(v))}" ${String(v) === String(def) ? 'selected' : ''}>${esc(String(v))}</option>`).join('')}</select>`;
+  else if (p.type === 'boolean') input = `<select data-k="${esc(k)}"><option value="false" ${def === true ? '' : 'selected'}>no</option><option value="true" ${def === true ? 'selected' : ''}>sí</option></select>`;
+  else if (p.type === 'object' || p.type === 'array') input = `<textarea data-k="${esc(k)}" data-json="1" spellcheck="false" placeholder="JSON">${esc(def === '' ? (p.type === 'array' ? '[]' : '{}') : JSON.stringify(def, null, 1))}</textarea>`;
+  else input = `<input data-k="${esc(k)}" type="${p.type === 'integer' || p.type === 'number' ? 'number' : 'text'}" value="${esc(String(def))}" placeholder="${esc(p.type || 'texto')}">`;
+  return `<label class="lf"><span class="lk">${esc(k)}${req}</span>${input}${p.description ? `<span class="ds">${esc(p.description)}</span>` : ''}</label>`;
+}
+function renderLampDetail() {
+  const box = $('#lampsDetail'); box.innerHTML = '';
+  const l = lampsData.find(x => x.name === lampSel);
+  if (!l) {
+    box.innerHTML = lampsData.length ? '<div class="none">elegí una lámpara de la lista</div>' : `<div class="none">Todavía no hay lámparas.<br><br>Pedile una al agente en el chat — <i>«hacé una lámpara que liste los endpoints del backend»</i> — o creá una carpeta con <code>lamp.json</code> en <code>${esc(lampsMeta.project)}</code> (proyecto) o <code>${esc(lampsMeta.global)}</code> (global). El botón <b>?</b> de arriba explica qué son y para qué sirven.</div>`;
+    return;
+  }
+  const specs = l.tool_specs || [];
+  const cap = l.error ? `<div class="dcap err">rota: ${esc(l.error)}</div>` : (l.kind === 'syn' ? `<div class="dcap">techo de capacidades: ${esc(l.caps)}</div>` : `<div class="dcap"><b>sin techo</b> (exec) · $ ${esc(l.command)}</div>`);
+  box.innerHTML = `<div class="dhead"><span class="nm">${esc(l.name)}</span><span class="meta">${esc(l.scope)} · ${esc(l.kind)}</span><label class="sw ${l.enabled ? 'on' : ''}" title="${l.error ? 'no se puede encender: está rota' : (l.enabled ? 'apagar' : 'encender')}"><input type="checkbox" ${l.enabled ? 'checked' : ''} ${l.error ? 'disabled' : ''}>${l.enabled ? 'encendida' : 'apagada'}</label></div>`
+    + (l.description ? `<div class="ddesc">${esc(l.description)}</div>` : '') + cap
+    + (l.enabled || l.error ? '' : `<div class="off-note">Apagada: el agente no la ve y no se puede correr. Encendela con el switch — el código va a poder ejecutarse${l.kind === 'exec' ? ' <b>sin techo de capacidades</b> (es un ejecutable)' : ' bajo el techo de arriba'}.</div>`)
+    + specs.map((t, i) => {
+        const props = (t.parameters && t.parameters.properties) || {}; const required = (t.parameters && t.parameters.required) || [];
+        return `<div class="tool" data-i="${i}"><div class="th"><code>${esc(t.name)}</code>${t.description ? `<span class="ds">${esc(t.description)}</span>` : ''}<span class="ds" style="margin-left:auto">lamp_${esc(l.name)}_${esc(t.name)}</span></div>`
+          + (Object.keys(props).length ? Object.keys(props).map(k => lampField(k, props[k], required)).join('') : '<div class="ds" style="margin-top:6px;color:var(--ink-3)">no toma parámetros</div>')
+          + (l.enabled ? `<div class="go"><button class="primary run">▶ correr</button><span class="st"></span></div><pre class="out" style="display:none"></pre>` : '')
+          + `</div>`;
+      }).join('')
+    + `<div class="dfoot"><span>${esc(l.dir || '')}</span>${l.scope === 'project' ? '<span class="del">eliminar</span>' : '<span title="las globales se borran a mano">global · se borra a mano</span>'}</div>`;
+  box.querySelector('.sw input').onchange = async (ev) => {
+    $('#lampsErr').textContent = '';
+    try {
+      const rr = await fetch('/api/lamps/toggle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: l.name, enabled: ev.target.checked }) });
+      const dd = await rr.json(); if (!rr.ok) { $('#lampsErr').textContent = dd.error || ('error ' + rr.status); ev.target.checked = !ev.target.checked; return; }
+      add('meta', '☼ ' + esc(dd.result || ''));
+    } catch (e) { $('#lampsErr').textContent = String(e.message || e); }
+    loadLamps();
+  };
+  for (const tdiv of box.querySelectorAll('.tool')) {
+    const t = specs[Number(tdiv.dataset.i)]; const props = (t.parameters && t.parameters.properties) || {}; const required = (t.parameters && t.parameters.required) || [];
+    const b = tdiv.querySelector('button.run'); if (!b) continue;
+    b.onclick = async () => {
+      const st = tdiv.querySelector('.st'), out = tdiv.querySelector('.out'); const args = {};
+      for (const el of tdiv.querySelectorAll('[data-k]')) {
+        const k = el.dataset.k, p = props[k] || {}; let v = el.value;
+        if (el.dataset.json) { if (!v.trim()) continue; try { v = JSON.parse(v); } catch (e) { st.textContent = `${k}: JSON inválido`; return; } }
+        else if (p.type === 'boolean') v = v === 'true';
+        else if (p.type === 'integer' || p.type === 'number') { if (v === '') { if (required.includes(k)) { st.textContent = `${k} es obligatorio`; return; } continue; } v = Number(v); }
+        else if (v === '') { if (required.includes(k)) { st.textContent = `${k} es obligatorio`; return; } continue; }
+        args[k] = v;
+      }
+      st.textContent = 'corriendo…'; out.style.display = 'none'; b.disabled = true;
+      try {
+        const rr = await fetch('/api/lamps/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tool: 'lamp_' + l.name + '_' + t.name, args }) });
+        const dd = await rr.json(); st.textContent = rr.ok ? '' : (dd.error || 'error ' + rr.status);
+        if (rr.ok) { out.textContent = dd.output; out.style.display = ''; }
+      } catch (e) { st.textContent = String(e.message || e); }
+      b.disabled = false;
+    };
+  }
+  const del = box.querySelector('.dfoot .del');
+  if (del) del.onclick = () => inlineConfirm(del, `¿borrar ${l.name} del disco?`, async () => {
+    $('#lampsErr').textContent = '';
+    try {
+      const rr = await fetch('/api/lamps/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: l.name }) });
+      const dd = await rr.json(); if (!rr.ok) { $('#lampsErr').textContent = dd.error || ('error ' + rr.status); return; }
+      add('meta', '☼ ' + esc(dd.result || '')); lampSel = null;
+    } catch (e) { $('#lampsErr').textContent = String(e.message || e); }
+    loadLamps();
+  });
+}
+function openLamps() { $('#lampsErr').textContent = ''; $('#lampsHelpBox').style.display = 'none'; $('#lampsBody').style.display = ''; $('#lampsModal').style.display = 'flex'; loadLamps().then(() => $('#lampsSearch').focus()); }
+function closeLamps() { $('#lampsModal').style.display = 'none'; }
+$('#lamps').onclick = openLamps;
+if (location.hash === '#lamps') setTimeout(openLamps, 400); // deep link: abre el panel al cargar
+$('#lampsClose').onclick = closeLamps;
+$('#lampsModal').addEventListener('click', (e) => { if (e.target === $('#lampsModal')) closeLamps(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#lampsModal').style.display !== 'none') closeLamps(); });
+$('#lampsSearch').addEventListener('input', renderLampList);
+$('#lampsHelp').onclick = () => { const h = $('#lampsHelpBox'); const show = h.style.display === 'none'; h.style.display = show ? '' : 'none'; $('#lampsBody').style.display = show ? 'none' : ''; };
+$('#lampsHelpBack').onclick = () => { $('#lampsHelpBox').style.display = 'none'; $('#lampsBody').style.display = ''; };
 
 // ---- traza legible de una sesión (.lampson/trace/<sid>.log) ----
 async function openTrace(id) {
@@ -791,18 +1149,20 @@ async function loadSessions() {
   }
 }
 async function open(id) {
-  session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log');
+  session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log'); loadTodo();
   const r = await fetch('/api/sessions/' + id); if (!r.ok) { session = ''; empty(); return loadSessions(); }
   const d = await r.json();
   const queue = []; // pasos sin resultado todavía, en orden (varias tool calls por turno)
   for (const m of d.messages) {
-    if (m.role === 'user') { queue.length = 0; add('user', esc(m.content) + imagesHtml(m.images)); }
+    // los avisos del harness viajan con role user (lo exige el wire) pero no los escribió el usuario:
+    // al recargar se muestran como meta (✉), igual que en vivo — nunca con la etiqueta "vos"
+    if (m.role === 'user') { queue.length = 0; const t = String(m.content || ''); if (t.startsWith('[harness]') || t.startsWith('[Context compacted')) add('meta', '✉ ' + esc(t.split('\n')[0].slice(0, 160))); else add('user', esc(m.content) + imagesHtml(m.images)); }
     else if (m.role === 'assistant') { if (m.content) add('assistant', md(m.content)); for (const c of (m.tool_calls || [])) { const el = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(c))}`); wireMore(el); queue.push(el); } }
     else if (m.role === 'tool') { const out = String(m.content); const bad = /^(ERROR|DENIED)/.test(out); const el = queue.shift() || add('step', '<span class="ic">→</span>'); const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   }
   loadSessions();
 }
-$('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); loadSessions(); };
+$('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); loadSessions(); loadTodo(); };
 
 // ---- imágenes pegadas / arrastradas al composer ----
 // Se reducen en el navegador (lado mayor ≤ 1568 px, el límite útil de los modelos con visión) y viajan como
@@ -871,16 +1231,20 @@ function handle(chunk, thinking) {
   const data = chunk.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('\n'); if (!data) return;
   let ev; try { ev = JSON.parse(data); } catch { return; }
   const k = ev.kind, d = ev.data;
-  if (k === 'session') { session = d; localStorage.setItem('lampson.session', d); }
+  if (k === 'session') { const changed = d !== session; session = d; localStorage.setItem('lampson.session', d); if (changed) loadTodo(); }
   else if (k === 'assistant') add('assistant', md(d));
-  else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); if (d.name === 'delegate') { setTimeout(loadAgents, 800); setTimeout(loadAgents, 4000); } if (d.name === 'todo') setTimeout(loadTodo, 300); }
+  else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); if (d.name === 'delegate') { setTimeout(loadAgents, 800); setTimeout(loadAgents, 4000); } if (d.name === 'todo') setTimeout(loadTodo, 300); if (d.name === 'lamp') setTimeout(loadLamps, 300); if (d.name === 'lsp') setTimeout(loadLsp, 1500); }
   else if (k === 'inbox') { add('meta', '✉ ' + esc(String(d).split('\n')[0].slice(0, 160))); loadAgents(); }
-  else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out); const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
+  else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out);
+    // lámpara recién creada: avisar en el chat con un acceso directo al switch (el modelo no sabe cómo se enciende en esta UI)
+    if (d.call && d.call.name === 'lamp' && /^lamp '([^']+)' created/.test(out)) { const nm = out.match(/^lamp '([^']+)' created/)[1]; const m = add('meta', `☼ lámpara <b>${esc(nm)}</b> creada — está apagada: <a href="#" class="lampgo">encenderla en «lámparas»</a>`); m.querySelector('.lampgo').onclick = (ev) => { ev.preventDefault(); $('#lamps').click(); }; $('#lamps').classList.add('new'); setTimeout(() => $('#lamps').classList.remove('new'), 4000); } const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }
   else if (k === 'approval_result') { const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === d.id); if (el) el.querySelector('.btns').innerHTML = d.approved ? '<span style="color:var(--str)">✓ permitido</span>' : (d.timeout ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
   else if (k === 'mode') { $('#agent').value = d.agent; $('#perm').value = d.permission; if (d.has_key === false) { add('denied', `‼ no hay API key para ${esc(d.provider)} — cargala en la ventana de modelo (clic en «${esc(d.provider)} · ${esc(d.model)}» arriba)`); } }
   else if (k === 'tool_denied') { const el = pending || add('step', '<span class="ic">✗</span>'); el.insertAdjacentHTML('beforeend', `<span class="denied"> ✗ ${esc(d.reason)}</span>`); }
-  else if (k === 'error') { add('denied', '‼ ' + esc(d)); if (/model/i.test(String(d))) add('meta', `el proveedor rechazó el nombre del modelo (${esc(cfg.model || '')}) — clic en «${esc(cfg.provider || '')} · ${esc(cfg.model || '')}» arriba: la lista de modelos válidos aparece al elegir el proveedor`); }
+  // el hint de "modelo inválido" solo cuando el error realmente habla de eso ("/model/ a secas" saltaba
+  // con cualquier error que mencione al modelo, p.ej. "the model used its whole output budget")
+  else if (k === 'error') { add('denied', '‼ ' + esc(d)); if (/(invalid|unknown|no such|not exist|not found|unsupported).{0,30}model|model.{0,30}(invalid|unknown|does not exist|not found|unsupported)/i.test(String(d))) add('meta', `el proveedor rechazó el nombre del modelo (${esc(cfg.model || '')}) — clic en «${esc(cfg.provider || '')} · ${esc(cfg.model || '')}» arriba: la lista de modelos válidos aparece al elegir el proveedor`); }
   else if (k === 'compact') add('meta', '⧗ compactando contexto (~' + d.before + ' tokens)');
   else if (k === 'done') { if (d.stopped !== 'user_command') add('meta', `${d.steps} paso${d.steps === 1 ? '' : 's'} · ${d.usage.input + d.usage.output} tokens · ${d.stopped}`); }
   log.appendChild(thinking); $('#stage').scrollTop = $('#stage').scrollHeight;
@@ -888,7 +1252,7 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if ((!t && !attachments.length) || busy) return; $('#in').value = ''; send(t || '(imagen adjunta)'); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadTodo(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadLsp(); loadLamps(); loadTodo(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, events ? 60000 : 10000);
 setInterval(() => { if (!events && ($('#agentCount').textContent.includes('●') || busy)) loadAgents(); }, 5000);
 </script>

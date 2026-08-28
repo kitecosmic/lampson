@@ -1,0 +1,503 @@
+-- lib/lsp.syn — cliente LSP (Language Server Protocol) por stdio: navegación semántica para el modelo
+--
+-- Por qué: grep encuentra TEXTO; un language server sabe cuál de los cinco `parse` es el que importa este
+-- archivo, quién usa `colors.primary`, dónde se define un tipo, y el índice de símbolos de un archivo sin
+-- leerlo entero. Es el mismo proceso que tu editor ya corre (tsserver, pyright, rust-analyzer…).
+--
+-- Diseño (deepseek-harness packages/lsp: lsp-stdio + tool-lsp): el harness NO instala servers — el usuario
+-- declara uno por lenguaje (o elige un preset) y se lanza LAZY en la primera consulta. Cinco operaciones
+-- cerradas (definition, references, implementation, hover, symbols), sin escape hatch JSON-RPC. Cada consulta
+-- abre el documento de forma transitoria (didOpen → request → didClose): el server ve siempre el disco.
+--
+-- Config (misma idea que mcp.json):
+--   .lampson/lsp.json              GLOBAL   {"servers": {"typescript": {"command": "npx", "args": ["--yes",
+--   workspace/.lampson/lsp.json    PROYECTO   "typescript-language-server", "--stdio"], "languages": {".ts": "typescript", …}}}}
+--   PRESETS abajo: /lsp add typescript · python · rust · go · css · html.
+--
+-- Arquitectura = la de lib/mcp.syn: un agente supervisor `LspSup` por server (proc_spawn, line_mode=false
+-- porque LSP enmarca con "Content-Length: N\r\n\r\n" + JSON, no una línea por mensaje), estado en el
+-- blackboard "lsp:<server>", requests por bus "lsp.req.<server>" / "lsp.res.<server>.<id>". Los requests
+-- que el SERVER manda al cliente (workspace/configuration, client/registerCapability, window/*) se
+-- responden con null para que no se trabe; las notificaciones (diagnostics) se ignoran.
+
+use "./tools/common.syn" as c
+
+export let GLOBAL_CONFIG be ".lampson/lsp.json"
+export let PROJECT_CONFIG be "workspace/.lampson/lsp.json"
+let CALL_TIMEOUT be 60
+let START_WAIT be 25
+
+-- presets: nombre → {command, args, languages}. `npx --yes` baja el server si no está (npm cache).
+export let PRESETS be {
+    "typescript": {"command": "npx", "args": ["--yes", "-p", "typescript", "-p", "typescript-language-server", "typescript-language-server", "--stdio"], "languages": {".ts": "typescript", ".tsx": "typescriptreact", ".js": "javascript", ".jsx": "javascriptreact", ".mjs": "javascript", ".cjs": "javascript"}, "install": "npm i -g typescript typescript-language-server (or let npx fetch it)"},
+    "python": {"command": "npx", "args": ["--yes", "pyright", "--stdio"], "languages": {".py": "python"}, "install": "pip install pyright · or npm i -g pyright"},
+    "rust": {"command": "rust-analyzer", "args": [], "languages": {".rs": "rust"}, "install": "rustup component add rust-analyzer"},
+    "go": {"command": "gopls", "args": [], "languages": {".go": "go"}, "install": "go install golang.org/x/tools/gopls@latest"},
+    "css": {"command": "npx", "args": ["--yes", "-p", "vscode-langservers-extracted", "vscode-css-language-server", "--stdio"], "languages": {".css": "css", ".scss": "scss", ".less": "less"}, "install": "npm i -g vscode-langservers-extracted"},
+    "html": {"command": "npx", "args": ["--yes", "-p", "vscode-langservers-extracted", "vscode-html-language-server", "--stdio"], "languages": {".html": "html", ".htm": "html"}, "install": "npm i -g vscode-langservers-extracted"}
+}
+
+let SYMBOL_KINDS be {"1": "file", "2": "module", "3": "namespace", "4": "package", "5": "class", "6": "method", "7": "property", "8": "field", "9": "constructor", "10": "enum", "11": "interface", "12": "function", "13": "variable", "14": "constant", "15": "string", "16": "number", "17": "boolean", "18": "array", "19": "object", "20": "key", "21": "null", "22": "enum member", "23": "struct", "24": "event", "25": "operator", "26": "type parameter"}
+
+task valid_name(name)
+    when name == nothing or name == ""
+        give false
+    give matches(text(name), "[a-zA-Z0-9_-]{1,32}")
+
+task read_config(path, scope)
+    let out be []
+    try
+        let doc be json_decode(read_file(path))
+        when contains(doc, "servers")
+            each name in keys(doc["servers"])
+                let s be doc["servers"][name]
+                let disabled be contains(s, "disabled") and s["disabled"] == true
+                when valid_name(name) and contains(s, "command") and contains(s, "languages") and not disabled
+                    set out to append(out, {"name": name, "command": text(s["command"]), "args": when contains(s, "args") then s["args"] otherwise [], "env": when contains(s, "env") then s["env"] otherwise {}, "languages": s["languages"], "cwd": when contains(s, "cwd") then text(s["cwd"]) otherwise "", "scope": scope})
+    recover err
+        give out
+    give out
+
+-- servers configurados: proyecto pisa a global por nombre. LAMPSON_LSP_CONFIG = un archivo extra (tests).
+export task servers()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let by_name be {}
+    each s in read_config(GLOBAL_CONFIG, "global")
+        set by_name[s["name"]] to s
+    each s in read_config(PROJECT_CONFIG, "project")
+        set by_name[s["name"]] to s
+    when env("LAMPSON_LSP_CONFIG", "") != ""
+        each s in read_config(env("LAMPSON_LSP_CONFIG", ""), "extra")
+            set by_name[s["name"]] to s
+    let out be []
+    each n in sort_by(keys(by_name), (x) => x)
+        set out to append(out, by_name[n])
+    give out
+
+-- ---------- rutas y URIs ----------
+-- raíz REAL del proyecto (lampson.ps1 exporta LAMPSON_WORKSPACE = destino de la junction); los servers
+-- resuelven realpaths, así que el rootUri y los uri de los documentos tienen que ser los reales.
+export task root_path()
+    require env("LAMPSON_*")
+    let r be replace_text(env("LAMPSON_WORKSPACE", "workspace"), "\\", "/")
+    when c.ends_with(r, "/")
+        set r to slice(r, 0, length(r) - 1)
+    give r
+
+export task to_uri(path)
+    let p be replace_text(replace_text(path, "\\", "/"), " ", "%20")
+    when matches(p, "[A-Za-z]:/.*")
+        give "file:///" + p
+    give "file://" + p
+
+export task from_uri(uri)
+    let u be text(uri)
+    when starts_with(u, "file:///")
+        set u to slice(u, 8, length(u))
+    otherwise when starts_with(u, "file://")
+        set u to slice(u, 7, length(u))
+    give replace_text(replace_text(replace_text(u, "%3A", ":"), "%3a", ":"), "%20", " ")
+
+-- uri del server → ruta relativa al workspace (o absoluta si cae fuera)
+export task relativize(uri, root)
+    let p be from_uri(uri)
+    let lp be lower(p)
+    let lr be lower(root)
+    when starts_with(lp, lr + "/")
+        give slice(p, length(root) + 1, length(p))
+    when lp == lr
+        give "."
+    give p
+
+task ext_of(path)
+    let parts be split(replace_text(path, "\\", "/"), "/")
+    let base be parts[length(parts) - 1]
+    let segs be split(base, ".")
+    when length(segs) < 2
+        give ""
+    give "." + lower(segs[length(segs) - 1])
+
+-- server para un archivo (por extensión) o nothing
+export task server_for(path)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let ext be ext_of(path)
+    each s in servers()
+        when contains(s["languages"], ext)
+            give {"server": s, "language": s["languages"][ext]}
+    give nothing
+
+-- ---------- supervisor: un agente por server ----------
+-- (un agente no ve el módulo: todo va por spawn y los literales viven acá adentro)
+agent LspSup
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let key be "lsp:" + name
+    let args be json_decode(args_json)
+    let envs be json_decode(env_json)
+    share {"status": "starting", "error": nothing, "started": now()} as key
+    let p be nothing
+    try
+        set p to proc_spawn(command, args, {"cwd": cwd, "env": envs, "stderr": "separate", "line_mode": false, "on_full": "drop_oldest"})
+    recover err
+        -- Windows: `npx`/`npm`/`pyright` son .cmd — proc_spawn no pasa por el shell, así que se reintenta con la extensión
+        when env("OS", "") == "Windows_NT" and contains(text(err), "not found") and not contains(lower(command), ".")
+            try
+                set p to proc_spawn(command + ".cmd", args, {"cwd": cwd, "env": envs, "stderr": "separate", "line_mode": false, "on_full": "drop_oldest"})
+            recover err2
+                share {"status": "error", "error": "cannot start: " + text(err2), "started": now()} as key
+        otherwise
+            share {"status": "error", "error": "cannot start: " + text(err), "started": now()} as key
+    when p != nothing
+        let seq be 0
+        let buf be ""
+        let inbox be []
+        let sub be bus_subscribe(["lsp.req." + name, "lsp.stop." + name, "lsp.stop_all"])
+        task send(msg)
+            let body be json_encode(msg)
+            proc_send(p, "Content-Length: " + text(length(bytes(body))) + "\r\n\r\n" + body)
+        -- saca de `buf` todos los mensajes completos → inbox. Content-Length cuenta BYTES; los chunks son
+        -- texto (nunca partidos dentro de un carácter), así que recortamos por chars y ajustamos por bytes.
+        task drain()
+            let more be true
+            while more
+                let parts be split(buf, "\r\n\r\n")
+                when length(parts) < 2
+                    set more to false
+                otherwise
+                    let header be parts[0]
+                    let rest be join(slice(parts, 1, length(parts)), "\r\n\r\n")
+                    let n be -1
+                    each hl in split(header, "\r\n")
+                        when starts_with(lower(hl), "content-length:")
+                            set n to floor(number(trim(slice(hl, 15, length(hl)))))
+                    when n < 0
+                        -- basura antes de un header: descartar hasta el separador
+                        set buf to rest
+                    otherwise when length(bytes(rest)) < n
+                        set more to false
+                    otherwise
+                        let k be n
+                        when k > length(rest)
+                            set k to length(rest)
+                        while length(bytes(slice(rest, 0, k))) > n
+                            set k to k - 1
+                        let body be slice(rest, 0, k)
+                        set buf to slice(rest, k, length(rest))
+                        try
+                            set inbox to append(inbox, json_decode(body))
+                        recover e2
+                            set inbox to inbox
+        -- requests del SERVER hacia el cliente: contestar null para que siga; notificaciones: ignorar
+        task handle_server(m)
+            when contains(m, "method") and contains(m, "id")
+                let res be nothing
+                when m["method"] == "workspace/configuration"
+                    set res to apply(m["params"]["items"], (it) => nothing)
+                send({"jsonrpc": "2.0", "id": m["id"], "result": res})
+        -- request síncrona: manda y espera la respuesta con ese id; atiende lo del server mientras tanto
+        task rpc(method, params, timeout)
+            set seq to seq + 1
+            let id be seq
+            send({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+            let deadline be now() + timeout
+            let answer be nothing
+            while answer == nothing and now() < deadline
+                -- primero lo que ya está en el inbox
+                let keep be []
+                each m in inbox
+                    when answer == nothing and contains(m, "id") and not contains(m, "method") and text(m["id"]) == text(id)
+                        set answer to when contains(m, "error") then {"error": text(m["error"]["message"])} otherwise {"result": when contains(m, "result") then m["result"] otherwise nothing}
+                    otherwise
+                        handle_server(m)
+                set inbox to keep
+                when answer == nothing
+                    let ev be proc_recv(p, deadline - now())
+                    when ev == nothing
+                        set answer to {"error": "timeout waiting for " + method}
+                    otherwise when ev["type"] == "exit"
+                        set answer to {"error": "server exited with code " + text(ev["data"]["exit_code"])}
+                    otherwise when ev["type"] == "stdout"
+                        set buf to buf + ev["data"]
+                        drain()
+            give answer
+        task notify(method, params)
+            send({"jsonrpc": "2.0", "method": method, "params": params})
+        let init be rpc("initialize", {"processId": nothing, "rootUri": root_uri, "rootPath": root_path, "workspaceFolders": [{"uri": root_uri, "name": "workspace"}], "clientInfo": {"name": "lampson", "version": "0.1"}, "capabilities": {"textDocument": {"hover": {"contentFormat": ["markdown", "plaintext"]}, "documentSymbol": {"hierarchicalDocumentSymbolSupport": true}, "definition": {"linkSupport": true}, "implementation": {"linkSupport": true}}, "workspace": {"configuration": true}}}, 60)
+        when init == nothing or contains(init, "error")
+            share {"status": "error", "error": "initialize failed: " + (when init == nothing then "no answer" otherwise init["error"]), "started": now()} as key
+            proc_close(p)
+        otherwise
+            notify("initialized", {})
+            share {"status": "ready", "error": nothing, "started": now()} as key
+            bus_publish("lsp." + name, {"name": name, "status": "ready"})
+            let open be true
+            while open
+                let ev be select({"p": p, "bus": sub}, 60)
+                when ev == nothing
+                    set open to proc_status(p) == "running"
+                otherwise when ev["name"] == "bus"
+                    when ev["topic"] == "lsp.req." + name
+                        let r be ev["data"]
+                        when r["kind"] == "notify"
+                            notify(r["method"], r["params"])
+                        otherwise
+                            let ans be rpc(r["method"], r["params"], 60)
+                            bus_publish("lsp.res." + name + "." + text(r["id"]), when ans == nothing then {"error": "no answer"} otherwise ans)
+                    otherwise
+                        set open to false
+                otherwise when ev["type"] == "exit"
+                    share {"status": "exited", "error": "server exited with code " + text(ev["data"]["exit_code"]), "started": now()} as key
+                    bus_publish("lsp." + name, {"name": name, "status": "exited"})
+                    set open to false
+                otherwise when ev["type"] == "stdout"
+                    set buf to buf + ev["data"]
+                    drain()
+                    each m in inbox
+                        handle_server(m)
+                    set inbox to []
+                otherwise when ev["type"] == "stderr"
+                    bus_publish("lsp." + name, {"name": name, "status": "ready", "line": ev["data"]})
+            when open == false and proc_status(p) == "running"
+                rpc("shutdown", nothing, 5)
+                notify("exit", nothing)
+            proc_close(p)
+            observe key as st
+            when st["status"] == "ready"
+                share {"status": "stopped", "error": nothing, "started": now()} as key
+        bus_unsubscribe(sub)
+
+export task state(name)
+    observe "lsp:" + name as st
+    give st
+
+-- arranque LAZY: en la primera consulta a ese server; espera hasta START_WAIT a que esté listo
+task ensure(s)
+    let st be state(s["name"])
+    when st == nothing or (st["status"] != "ready" and st["status"] != "starting")
+        let root be root_path()
+        spawn LspSup with name = s["name"], command = s["command"], args_json = json_encode(s["args"]), env_json = json_encode(s["env"]), cwd = (when s["cwd"] == "" then root otherwise s["cwd"]), root_path = root, root_uri = to_uri(root)
+    let waited be 0
+    while waited < START_WAIT * 10 and (state(s["name"]) == nothing or state(s["name"])["status"] == "starting")
+        sleep(0.1)
+        set waited to waited + 1
+    let fin be state(s["name"])
+    when fin == nothing or fin["status"] != "ready"
+        raise("LSP server '" + s["name"] + "' is not ready (" + (when fin == nothing then "no state" otherwise fin["status"] + (when fin["error"] != nothing then ": " + text(fin["error"]) otherwise "")) + "). Command: " + s["command"] + " " + join(s["args"], " "))
+    give fin
+
+export task stop_all()
+    bus_publish("lsp.stop_all", {})
+
+task request(server, method, params)
+    let id be text(floor(now() * 1000000))
+    let sub be bus_subscribe("lsp.res." + server + "." + id)
+    bus_publish("lsp.req." + server, {"id": id, "kind": "request", "method": method, "params": params})
+    let ev be bus_recv(sub, CALL_TIMEOUT + 5)
+    bus_unsubscribe(sub)
+    when ev == nothing
+        raise("LSP request timed out (" + method + ")")
+    let ans be ev["data"]
+    when contains(ans, "error")
+        raise("LSP error: " + text(ans["error"]))
+    give ans["result"]
+
+task notify(server, method, params)
+    bus_publish("lsp.req." + server, {"id": "0", "kind": "notify", "method": method, "params": params})
+
+-- ---------- la consulta ----------
+-- op: definition | references | implementation | hover | symbols. line/character 1-based (como el editor).
+export task query(op, path, line, character)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let found be server_for(path)
+    when found == nothing
+        let have be apply(servers(), (s) => s["name"] + " (" + join(keys(s["languages"]), " ") + ")")
+        raise("no LSP server configured for '" + ext_of(path) + "' files. Configured: " + (when length(have) == 0 then "none" otherwise join(have, ", ")) + ". The user can add one with /lsp add <typescript|python|rust|go|css|html> or in " + GLOBAL_CONFIG)
+    let s be found["server"]
+    ensure(s)
+    let real be c.ws(path)
+    let content be read_file(real)
+    let root be root_path()
+    let uri be to_uri(root + "/" + c.unws(real))
+    notify(s["name"], "textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": found["language"], "version": 1, "text": content}})
+    let out be ""
+    try
+        when op == "symbols"
+            set out to render_symbols(request(s["name"], "textDocument/documentSymbol", {"textDocument": {"uri": uri}}), root)
+        otherwise
+            when line == nothing or character == nothing
+                raise("line and character are required for " + op)
+            let pos be {"line": floor(line) - 1, "character": floor(character) - 1}
+            when op == "hover"
+                set out to render_hover(request(s["name"], "textDocument/hover", {"textDocument": {"uri": uri}, "position": pos}))
+            otherwise when op == "references"
+                set out to render_locations(request(s["name"], "textDocument/references", {"textDocument": {"uri": uri}, "position": pos, "context": {"includeDeclaration": true}}), root)
+            otherwise when op == "implementation"
+                set out to render_locations(request(s["name"], "textDocument/implementation", {"textDocument": {"uri": uri}, "position": pos}), root)
+            otherwise when op == "definition"
+                set out to render_locations(request(s["name"], "textDocument/definition", {"textDocument": {"uri": uri}, "position": pos}), root)
+            otherwise
+                raise("unknown op '" + text(op) + "' (definition | references | implementation | hover | symbols)")
+    recover err
+        notify(s["name"], "textDocument/didClose", {"textDocument": {"uri": uri}})
+        raise(err)
+    notify(s["name"], "textDocument/didClose", {"textDocument": {"uri": uri}})
+    give c.truncate(out, c.MAX_OUTPUT)
+
+-- ---------- render ----------
+task line_text(rel, line1)
+    try
+        give trim(read_file(c.ws(rel), line1, 1))
+    recover err
+        give ""
+
+task render_locations(result, root)
+    when result == nothing
+        give "no results (is the cursor on a symbol? line/character are 1-based)"
+    let list be when type_of(result) == "list" then result otherwise [result]
+    when length(list) == 0
+        give "no results (is the cursor on a symbol? line/character are 1-based)"
+    let lines be []
+    let n be 0
+    each loc in list
+        when n < 100
+            let uri be when contains(loc, "targetUri") then loc["targetUri"] otherwise loc["uri"]
+            let range be when contains(loc, "targetSelectionRange") then loc["targetSelectionRange"] otherwise (when contains(loc, "targetRange") then loc["targetRange"] otherwise loc["range"])
+            let rel be relativize(uri, root)
+            let l1 be floor(range["start"]["line"]) + 1
+            let c1 be floor(range["start"]["character"]) + 1
+            set lines to append(lines, rel + ":" + text(l1) + ":" + text(c1) + "  " + line_text(rel, l1))
+        set n to n + 1
+    when n > 100
+        set lines to append(lines, "[" + text(n - 100) + " more omitted]")
+    give join(lines, "\n")
+
+task render_hover(result)
+    when result == nothing or not contains(result, "contents")
+        give "no hover info at that position"
+    let cts be result["contents"]
+    when type_of(cts) == "list"
+        give join(apply(cts, (x) => when type_of(x) == "text" then x otherwise text(x["value"])), "\n")
+    when type_of(cts) == "text"
+        give cts
+    give text(cts["value"])
+
+task render_symbols(result, root)
+    when result == nothing or length(result) == 0
+        give "no symbols"
+    let lines be []
+    -- DocumentSymbol (jerárquico) o SymbolInformation (plano con location)
+    when contains(result[0], "location")
+        each si in result
+            let l1 be floor(si["location"]["range"]["start"]["line"]) + 1
+            set lines to append(lines, text(l1) + "  " + kind_name(si["kind"]) + " " + si["name"] + (when contains(si, "containerName") and si["containerName"] != nothing then " (in " + text(si["containerName"]) + ")" otherwise ""))
+        give join(lines, "\n")
+    each ds in result
+        set lines to lines + symbol_lines(ds, "")
+    give join(lines, "\n")
+
+task symbol_lines(ds, indent)
+    let l1 be floor(ds["range"]["start"]["line"]) + 1
+    let l2 be floor(ds["range"]["end"]["line"]) + 1
+    let out be [text(l1) + (when l2 != l1 then "-" + text(l2) otherwise "") + "  " + indent + kind_name(ds["kind"]) + " " + ds["name"] + (when contains(ds, "detail") and ds["detail"] != nothing and ds["detail"] != "" then "  " + text(ds["detail"]) otherwise "")]
+    when contains(ds, "children") and ds["children"] != nothing
+        each ch in ds["children"]
+            set out to out + symbol_lines(ch, indent + "  ")
+    give out
+
+task kind_name(k)
+    let ks be text(floor(k))
+    give when contains(SYMBOL_KINDS, ks) then SYMBOL_KINDS[ks] otherwise "symbol"
+
+-- ---------- config: agregar / quitar (usuario: /lsp, web) ----------
+task config_path(scope)
+    give when scope == "project" then PROJECT_CONFIG otherwise GLOBAL_CONFIG
+
+-- add_server("typescript", nothing, nothing, "global") usa el preset; add_server("mylang", "cmd args…",
+-- {".x": "xlang"}, scope) uno propio
+export task add_server(name, command_line, languages, scope)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    when not valid_name(name)
+        raise("invalid server name (letters, digits, - or _)")
+    let entry be nothing
+    when (command_line == nothing or trim(text(command_line)) == "") and contains(PRESETS, name)
+        let pr be PRESETS[name]
+        set entry to {"command": pr["command"], "args": pr["args"], "languages": pr["languages"]}
+    otherwise
+        when command_line == nothing or trim(text(command_line)) == ""
+            raise("no preset named '" + name + "' (presets: " + join(keys(PRESETS), ", ") + "); give a command line")
+        when languages == nothing or length(keys(languages)) == 0
+            raise("languages required for a custom server: {\".ext\": \"languageId\"}")
+        let toks be where(split(trim(text(command_line)), " "), (x) => x != "")
+        set entry to {"command": toks[0], "args": slice(toks, 1, length(toks)), "languages": languages}
+    let path be config_path(scope)
+    let doc be {"servers": {}}
+    try
+        set doc to json_decode(read_file(path))
+    recover err
+        set doc to {"servers": {}}
+    when not contains(doc, "servers")
+        set doc["servers"] to {}
+    set doc["servers"][name] to entry
+    write_file(path, json_encode(doc))
+    give "LSP server '" + name + "' configured (" + (when scope == "project" then "project" otherwise "global") + "): " + entry["command"] + " " + join(entry["args"], " ") + " for " + join(keys(entry["languages"]), " ") + " — starts on the first query" + (when contains(PRESETS, name) then ". If it is not installed: " + PRESETS[name]["install"] otherwise "")
+
+export task remove_server(name)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let removed be false
+    each path in [GLOBAL_CONFIG, PROJECT_CONFIG]
+        try
+            let doc be json_decode(read_file(path))
+            when contains(doc, "servers") and contains(doc["servers"], name)
+                let srv be {}
+                each k in keys(doc["servers"])
+                    when k != name
+                        set srv[k] to doc["servers"][k]
+                set doc["servers"] to srv
+                write_file(path, json_encode(doc))
+                set removed to true
+        recover err
+            set removed to removed
+    when not removed
+        raise("no LSP server named '" + name + "' in the config")
+    bus_publish("lsp.stop." + name, {})
+    give "LSP server '" + name + "' removed"
+
+-- resumen para UI/terminal
+export task summary()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let out be []
+    each s in servers()
+        let st be state(s["name"])
+        set out to append(out, {"name": s["name"], "scope": s["scope"], "command": s["command"] + " " + join(s["args"], " "), "extensions": keys(s["languages"]), "status": when st == nothing then "idle" otherwise st["status"], "error": when st == nothing then nothing otherwise st["error"]})
+    give out

@@ -4,6 +4,8 @@ use "./common.syn" as c
 export task tool(pattern, path, glob, regex)
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     let rx be when regex == nothing then true otherwise regex
     let opts be when glob == nothing then {"regex": rx, "max_results": 200} otherwise {"regex": rx, "max_results": 200, "glob": glob}
     let r be grep(c.ws(path), pattern, opts)

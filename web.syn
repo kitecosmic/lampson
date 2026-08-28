@@ -30,6 +30,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
+require file.read("lamps")
+require file.read("lamps/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -49,6 +51,8 @@ use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
+use "./lib/lamps.syn" as lamps
+use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
 
 let APPROVAL_TIMEOUT be 180
@@ -104,6 +108,11 @@ task lampson_subagent(spec_json)
 
 -- servers MCP: supervisores (agentes) lanzados al arrancar; los handlers leen su estado del blackboard
 mcp.start_all(8)
+
+-- marca de corrida (blackboard): session.save la estampa en meta.run; reanudar una sesión guardada por
+-- OTRA corrida dispara la nota de procesos muertos (proc.resume_note) para que el modelo no los crea vivos
+share {"id": text(now())} as "lampson:run"
+share {"kind": "web"} as "lampson:ui"
 
 serve on 8080
     max_streams 50
@@ -212,10 +221,86 @@ serve on 8080
         give provider.list_models(cfg)
 
     route "GET /api/todo" requires auth
-        give {"items": todo.load()}
+        -- ?session=<id> → la lista de esa sesión; sin query, la de la sesión en curso
+        when contains(query, "session") and matches(query.session, "[A-Za-z0-9_-]{1,40}")
+            give {"items": todo.load(query.session)}
+        give {"items": todo.load(nothing)}
 
     route "GET /api/mcp" requires auth
         give {"servers": mcp.summary(), "global": mcp.GLOBAL_CONFIG, "project": mcp.PROJECT_CONFIG}
+
+    -- conectar un server MCP desde la UI: se escribe en el mcp.json del scope y arranca su supervisor
+    route "POST /api/mcp/add" requires auth
+        expect body {name: text, command: text}
+        let b be json of request
+        let scope be when contains(b, "scope") then lower(text(b["scope"])) otherwise "global"
+        let envm be when contains(b, "env") then b["env"] otherwise {}
+        try
+            give {"ok": true, "result": mcp.add_server(text(b["name"]), text(b["command"]), envm, scope), "servers": mcp.summary()}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/mcp/remove" requires auth
+        expect body {name: text}
+        let b be json of request
+        try
+            give {"ok": true, "result": mcp.remove_server(text(b["name"])), "servers": mcp.summary()}
+        recover err
+            give fail(400, text(err))
+
+    -- language servers (navegación semántica): listar, agregar (preset o comando propio), quitar
+    route "GET /api/lsp" requires auth
+        give {"servers": lsp.summary(), "presets": lsp.PRESETS, "global": lsp.GLOBAL_CONFIG, "project": lsp.PROJECT_CONFIG}
+
+    route "POST /api/lsp/add" requires auth
+        expect body {name: text}
+        let b be json of request
+        let scope be when contains(b, "scope") then lower(text(b["scope"])) otherwise "global"
+        let cmd be when contains(b, "command") then text(b["command"]) otherwise nothing
+        let langs be when contains(b, "languages") then b["languages"] otherwise nothing
+        try
+            give {"ok": true, "result": lsp.add_server(text(b["name"]), cmd, langs, scope), "servers": lsp.summary()}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/lsp/remove" requires auth
+        expect body {name: text}
+        let b be json of request
+        try
+            give {"ok": true, "result": lsp.remove_server(text(b["name"])), "servers": lsp.summary()}
+        recover err
+            give fail(400, text(err))
+
+    -- lámparas (plugins de tools): listar y encender/apagar desde la barra superior de la UI
+    route "GET /api/lamps" requires auth
+        give {"lamps": lamps.summary(), "global": lamps.GLOBAL_DIR, "project": lamps.PROJECT_DIR}
+
+    -- el usuario corre una tool de una lámpara encendida él mismo (sin pasar por el modelo)
+    route "POST /api/lamps/run" requires auth
+        expect body {tool: text}
+        let b be json of request
+        let args be when contains(b, "args") then b["args"] otherwise {}
+        try
+            give {"ok": true, "output": lamps.call(text(b["tool"]), args)}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/lamps/remove" requires auth
+        expect body {name: text}
+        let b be json of request
+        try
+            give {"ok": true, "result": lamps.remove(text(b["name"])), "lamps": lamps.summary()}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/lamps/toggle" requires auth
+        expect body {name: text}
+        let b be json of request
+        let on be contains(b, "enabled") and b["enabled"] == true
+        try
+            give {"ok": true, "result": lamps.set_enabled(text(b["name"]), on), "lamps": lamps.summary()}
+        recover err
+            give fail(400, text(err))
 
     route "GET /api/agents" requires auth
         agents.prune(10, 1800)
@@ -330,12 +415,23 @@ serve on 8080
             let messages be [ctx["system"]]
             when sid != ""
                 when session.exists(sid)
-                    let prev be session.load(sid)["messages"]
+                    let prev_doc be session.load(sid)
+                    let prev be prev_doc["messages"]
                     set messages to [ctx["system"]] + slice(prev, 1, length(prev))
+                    -- sesión guardada por otra corrida de lampson: sus procesos ya no viven — decírselo
+                    -- al modelo con el estado real (una sola vez: el próximo save re-estampa meta.run)
+                    when session.from_other_run(prev_doc)
+                        let note be proc.resume_note(sid)
+                        when note != ""
+                            set messages to append(messages, {"role": "user", "content": note})
+                            trace.event(sid, "inbox", note, "")
+                            send {"kind": "inbox", "data": note, "tag": ""} as "event"
                 otherwise
                     set sid to ""
             when sid == ""
                 set sid to session.new_id()
+            -- sesión actual (blackboard): la tool todo guarda su lista por sesión (lib/tools/todo.syn)
+            share {"id": sid} as "lampson:session"
             send {"kind": "session", "data": sid} as "event"
             send {"kind": "mode", "data": {"agent": ctx["profile"], "permission": mode, "provider": ctx["cfg"]["provider"], "model": ctx["cfg"]["model"], "has_key": ctx["cfg"]["has_key"]}} as "event"
             when starts_with(trim(message), "!")

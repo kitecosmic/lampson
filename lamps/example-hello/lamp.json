@@ -1,0 +1,16 @@
+{
+  "name": "example-hello",
+  "description": "Example lamp: a Synsema program run under a capability ceiling. Copy this folder to make your own.",
+  "kind": "syn",
+  "entry": "lamp.syn",
+  "caps": "",
+  "timeout": 20,
+  "tools": [
+    {
+      "name": "greet",
+      "description": "Greets someone (demo). Returns a short text.",
+      "parameters": {"type": "object", "properties": {"who": {"type": "string", "description": "name to greet"}}, "required": ["who"]},
+      "readonly": true
+    }
+  ]
+}

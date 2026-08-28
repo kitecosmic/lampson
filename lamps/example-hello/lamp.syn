@@ -1,0 +1,19 @@
+-- lamps/example-hello/lamp.syn — la lámpara de ejemplo
+--
+-- Lampson la corre así por cada llamada: synsema run --cap-set stdout,time,env=LAMP_* lamp.syn
+-- El techo (--cap-set) sale del manifiesto (lamp.json → "caps") que el humano aprobó al encenderla;
+-- pedir más acá (p. ej. `require net`) falla con "above the host ceiling".
+-- Entrada por env: LAMP_TOOL (qué tool), LAMP_ARGS (sus args en JSON), LAMP_DIR, LAMP_WORKSPACE.
+-- Salida: lo que imprimas por stdout vuelve al modelo como resultado de la tool.
+intent: "example lamp for lampson: greet"
+
+require env("LAMP_*")
+
+let tool be env("LAMP_TOOL", "")
+let args be json_decode(env("LAMP_ARGS", "{}"))
+
+when tool == "greet"
+    let who be when contains(args, "who") then text(args["who"]) otherwise "world"
+    print("hello, " + who + "! (from the example-hello lamp, running under a capability ceiling)")
+otherwise
+    print("ERROR: unknown tool '" + tool + "'")

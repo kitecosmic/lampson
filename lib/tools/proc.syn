@@ -118,6 +118,9 @@ export task start(name, command)
     write_file(path(name, "cmd"), command)
     write_file(path(name, "log"), "")
     write_file(path(name, "pos"), "0")
+    -- dueño: la corrida y la sesión que lo arrancaron (blackboard). list() solo muestra lo que corre o lo
+    -- de ESTA sesión en ESTA corrida: un proceso terminado de otra sesión/corrida ya no aparece
+    write_file(path(name, "owner"), json_encode(owner()))
     -- la clave del blackboard puede tener el estado VIEJO (stopped/exited) de un arranque anterior:
     -- marcar "starting" antes del spawn, el supervisor la pisa con running/exited
     share {"status": "starting", "exit_code": nothing, "pid": 0, "started": now()} as "proc:" + name
@@ -173,7 +176,61 @@ export task halt_all()
         sleep(0.3)
         set waited to waited + 1
 
--- [{name, running, command}]
+-- Nota para el modelo cuando se reanuda una sesión guardada por una corrida ANTERIOR de lampson:
+-- los procesos gestionados mueren con lampson, pero el historial de la sesión dice que estaban corriendo.
+-- Sin esto el modelo "recuerda" servers vivos que ya no existen (visto 2026-08-28). "" si no hay nada que decir.
+-- procesos que ESTA sesión arrancó en cualquier corrida (para la nota de resume: qué se murió con el restart)
+export task list_for_session(sid)
+    require file(".lampson")
+    require file(".lampson/*")
+    let out be []
+    try
+        each e in list_dir(DIR)
+            when c.ends_with(e["name"], ".cmd")
+                let name be slice(e["name"], 0, length(e["name"]) - 4)
+                let mine be false
+                try
+                    set mine to json_decode(read_file(path(name, "owner")))["session"] == text(sid)
+                recover err
+                    set mine to false
+                when mine
+                    set out to append(out, {"name": name, "running": alive(name), "command": read_file(path(name, "cmd"))})
+    recover err
+        give []
+    give out
+
+export task resume_note(sid)
+    require file(".lampson")
+    require file(".lampson/*")
+    let items be list_for_session(sid)
+    when length(items) == 0
+        give ""
+    let lines be []
+    each p in items
+        set lines to append(lines, "- " + p["name"] + ": " + (when p["running"] then "running" otherwise "NOT running") + "  ($ " + first_line_of(p["command"]) + ")")
+    give "[harness] This session was resumed after a lampson restart. Managed processes do NOT survive a restart — anything this conversation started earlier is gone unless listed as running below. Current real state:\n" + join(lines, "\n") + "\nOld logs remain in " + DIR + "/<name>.log. Start a process again with the `process` tool only if it is needed now; do not assume any server is up."
+
+task first_line_of(s)
+    let t be replace_text(text(s), "\r", "")
+    give split(t, "\n")[0]
+
+-- {run, session} actuales (blackboard "lampson:run" / "lampson:session"; vacíos fuera de un entry)
+task owner()
+    observe "lampson:run" as r
+    observe "lampson:session" as s
+    give {"run": when r == nothing then "" otherwise text(r["id"]), "session": when s == nothing then "" otherwise text(s["id"])}
+
+task owned_here(name)
+    try
+        let o be json_decode(read_file(path(name, "owner")))
+        let cur be owner()
+        give o["run"] == cur["run"] and o["session"] == cur["session"]
+    recover err
+        give false
+
+-- [{name, running, command}] — lo que corre ahora + lo terminado de esta sesión en esta corrida.
+-- Como la lista de tareas (todo): un proceso muerto de otra sesión o de una corrida anterior no es
+-- información, es ruido (2026-08-28: la UI mostraba servers de hace días como "apagados").
 export task list()
     require file(".lampson")
     require file(".lampson/*")
@@ -182,7 +239,9 @@ export task list()
         each e in list_dir(DIR)
             when c.ends_with(e["name"], ".cmd")
                 let name be slice(e["name"], 0, length(e["name"]) - 4)
-                set out to append(out, {"name": name, "running": alive(name), "command": read_file(path(name, "cmd"))})
+                let running be alive(name)
+                when running or owned_here(name)
+                    set out to append(out, {"name": name, "running": running, "command": read_file(path(name, "cmd"))})
     recover err
         give []
     give out

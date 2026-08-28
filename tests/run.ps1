@@ -37,6 +37,11 @@ try {
     synsema run mcp_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
     $env:LAMPSON_MCP_CONFIG = ""
+    # cliente LSP contra tests/mock_lsp.js (node, framing Content-Length)
+    $env:LAMPSON_LSP_CONFIG = ".lampson/tmp/lsp_test.json"
+    synsema run lsp_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
+    $env:LAMPSON_LSP_CONFIG = ""
     # subagentes (delegate) contra el mock LLM: el script arranca el mock en :8765
     $saved = @{}; foreach ($k in "LAMPSON_PROVIDER","LAMPSON_WIRE","LAMPSON_BASE_URL","LAMPSON_API_KEY") { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
     $env:LAMPSON_PROVIDER = "openai"; $env:LAMPSON_WIRE = "openai"; $env:LAMPSON_BASE_URL = "http://127.0.0.1:8765/v1"; $env:LAMPSON_API_KEY = "x"

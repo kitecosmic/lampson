@@ -21,6 +21,14 @@ language itself — and every step is visible, in the terminal or in a web UI.
 - **MCP servers**: global (`lampson/.lampson/mcp.json` — one config, every project you open) or per
   project (`.lampson/mcp.json` in the repo), same JSON as Claude Code / Cursor. Their tools join the
   model's catalog as `mcp_<server>_<tool>`; calling one asks you first (yolo allows, strict denies).
+- **LSP**: the agent navigates code through the project's language servers — `lsp symbols` gives a
+  file's structure without reading it, `definition`/`references`/`hover` resolve what grep leaves
+  ambiguous. Nothing is bundled: `/lsp add typescript|python|rust|go|css|html` (or your own command),
+  global or per project; each server starts on its first query.
+- **Lamps** (tool plugins): a folder with a `lamp.json` manifest plus code — a Synsema program that runs
+  under a capability ceiling, or any executable (js, py, sh…). Global in `lampson/lamps/<name>/`, per
+  project in `.lampson/lamps/<name>/` (the agent can write those). **Off by default**: you turn them on
+  from the top bar of the web UI or `/lamps on <name>`; their tools join the catalog as `lamp_<lamp>_<tool>`.
 - **Project memory**: the agent keeps its own notes per project (`memory/<project>/*.md`, outside
   the repo) — how to run it, gotchas, decisions — and rereads them in the next session. You can read
   and edit them (web panel, `/memory`).
@@ -203,6 +211,57 @@ while steps < max_steps and tokens <= budget
   `permission.syn`: **ask** by default, allow in yolo, deny in strict — and lands in the session trace.
 - Not yet: HTTP/SSE transports, resources/prompts, sampling.
 
+### LSP (language servers)
+
+`lib/lsp.syn`, same shape as the MCP client (deepseek-harness `packages/lsp` was the reference: the harness
+installs nothing, the user declares a server per language, it starts lazily, and the model gets a closed
+set of operations — no raw JSON-RPC). Config:
+
+```json
+{"servers": {"typescript": {"command": "npx", "args": ["--yes", "typescript-language-server", "--stdio"],
+                            "languages": {".ts": "typescript", ".tsx": "typescriptreact"}}}}
+```
+
+- `lampson/.lampson/lsp.json` is global, `workspace/.lampson/lsp.json` per project. Presets (`/lsp add
+  <name>`, or the sidebar): typescript, python (pyright), rust (rust-analyzer), go (gopls), css, html.
+  `cwd` defaults to the workspace; `env` and `"disabled": true` as in MCP. On Windows a bare `npx`/`npm`
+  command is retried as `.cmd`. The typescript preset needs `typescript` in the project's `node_modules`
+  (any TS project has it) — verified against a real `typescript-language-server` via `npx`.
+- One supervisor `agent` per server; stdio with `Content-Length` framing (`line_mode: false`, byte-exact
+  cut); server→client requests (`workspace/configuration`, `client/registerCapability`…) are answered with
+  `null`, notifications (diagnostics) ignored. `rootUri` is the real project path (`LAMPSON_WORKSPACE`),
+  results come back relative to it (case-insensitive on Windows, `%3A` decoded).
+- Tool `lsp(op, path, line, character)` — `symbols` (hierarchical outline with line ranges), `definition`,
+  `references` (declaration included), `implementation`, `hover`. Each query opens the document
+  transiently (`didOpen` → request → `didClose`), positions are 1-based like the editor. Read-only: allowed
+  in every mode and profile. Test: `lsp_test.syn` against `tests/mock_lsp.js`.
+
+### Lamps (tool plugins)
+
+`lib/lamps.syn`. Synsema has no dynamic `use` (on purpose: no supply chain inside the process), so a lamp
+never loads into lampson — every call is **one child process that ends**, the "safe runner" pattern from
+the Synsema sandbox docs. `lamps/<name>/lamp.json`:
+
+```json
+{"name": "hello", "description": "greets", "kind": "syn", "entry": "lamp.syn",
+ "caps": "file.read=workspace/*", "timeout": 60,
+ "tools": [{"name": "greet", "description": "…", "parameters": {"type": "object", "properties": {"who": {"type": "string"}}}, "readonly": true}]}
+```
+
+- `kind: "syn"` runs `synsema run --cap-set stdout,time,env=LAMP_*[,caps] <entry>`: the ceiling is the
+  manifest you approved when you turned it on; a `require` above it in the lamp's code fails with
+  *above the host ceiling* — nothing escalates from inside. `kind: "exec"` runs `"command"` as is (no
+  language ceiling — which is why enabling is always a human decision).
+- The tool call travels by env: `LAMP_TOOL`, `LAMP_ARGS` (JSON), `LAMP_DIR`, `LAMP_WORKSPACE`; the lamp
+  prints its result to stdout. Exit ≠ 0 or timeout → `ERROR:` for the model.
+- Discovery: `lamps/` (global) and `workspace/.lampson/lamps/` (project; same name overrides). State in
+  `.lampson/lamps.json` — **off by default**. On/off: web top bar, `/lamps on|off <name>`, or the model's
+  `lamp(action=enable)` which always asks. Lamp tools: ask by default, allow in yolo, deny in strict;
+  `readonly` ones also reach `plan`/`review`/`explore`. Example: `lamps/example-hello/`.
+- The agent can build lamps itself: `lamp(action=create, name, manifest, files)` writes a project lamp,
+  validates the manifest and runs `synsema check` on a syn entry — define-and-validate only, like dsh's
+  `cordis_define`; turning it on is still yours (`cordis_run`'s approval, here `enable` → ask).
+
 ### Keeping the model aware of what it did
 
 Borrowed from the harness that does each part best (see `notes/*.md`):
@@ -214,7 +273,7 @@ Borrowed from the harness that does each part best (see `notes/*.md`):
 | Same call, same args, again and again | **Repeat reminder**: 3rd and 5th identical call (canonical JSON) still run but carry a reminder; the 8th is refused | deepseek / opencode |
 | Budget runs out silently | 80 %: a notice appended to the latest tool result (no new user message, cache stays warm); 95 %: last step without tools, summary required | hermes / opencode |
 | Edits a file it never read, or one that changed | **Observation gate in code**: `read` records the file hash; `edit`/`write` on an existing file are rejected without it, or if the file changed since | deepseek |
-| Loses the plan | `todo` tool (whole-list replacement, one `in_progress` at a time); re-injected only after context compaction, active items only | hermes |
+| Loses the plan | `todo` tool (whole-list replacement, one `in_progress` at a time, scoped to the session like the three references); re-injected only after context compaction, active items only | hermes, opencode |
 | Reads the whole project before touching anything | **Exploration cap** (ours): after 8 read-only calls in a row (read/ls/find/grep) without an edit/write/command the result carries a warning; after 16 they are refused until it acts (`LAMPSON_EXPLORE_CAP`) | — |
 
 ### Sub-agents

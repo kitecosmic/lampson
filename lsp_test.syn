@@ -1,0 +1,81 @@
+-- lsp_test.syn — cliente LSP contra tests/mock_lsp.js (node). Corre con `synsema run` desde tests/run.ps1|sh
+-- con LAMPSON_LSP_CONFIG=.lampson/tmp/lsp_test.json (el script lo escribe). Vive en la raíz (sin ../).
+require exec
+require time
+require env("LAMPSON_*")
+require env("OS")
+require file(".lampson")
+require file(".lampson/*")
+require file("workspace")
+require file("workspace/*")
+use "./lib/lsp.syn" as lsp
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+write_file(".lampson/tmp/lsp_test.json", json_encode({"servers": {"mock": {"command": "node", "args": ["tests/mock_lsp.js"], "cwd": ".", "languages": {".ts": "typescript"}}, "dead": {"command": "node", "args": ["-e", "process.exit(2)"], "cwd": ".", "languages": {".zz": "zz"}}}}))
+write_file("workspace/src/a.ts", "import { foo } from './b'\nconst x = foo()\n")
+write_file("workspace/src/b.ts", "// b\nexport function foo(): number {\n  const inner = 1\n  return inner\n}\nclass Bar {\n  m() {}\n}\n")
+
+check(length(lsp.servers()) == 2, "config: 2 servers")
+check(lsp.server_for("src/a.ts")["server"]["name"] == "mock" and lsp.server_for("x.py") == nothing, "server_for por extensión")
+check(lsp.to_uri("C:\\Users\\x y\\p") == "file:///C:/Users/x%20y/p" and lsp.from_uri("file:///c%3A/Users/x%20y/p") == "c:/Users/x y/p", "uri ida y vuelta (Windows, espacios, %3A)")
+check(lsp.relativize("file:///" + replace_text(lsp.root_path(), ":", "%3A") + "/src/b.ts", lsp.root_path()) == "src/b.ts", "relativize contra la raíz real (case-insensitive)")
+
+-- todo lo que arranca servers va en try: si algo falla, apagarlos igual (si no, el proceso no termina)
+try
+    -- arranque lazy en la primera consulta; el mock manda un request server→cliente en el initialize
+    let d be lsp.query("definition", "src/a.ts", 2, 12)
+    print("    definition → " + d)
+    check(contains(d, "src/b.ts:2:10") and contains(d, "export function foo"), "definition: ruta relativa:línea:col + texto de la línea")
+    check(lsp.state("mock")["status"] == "ready", "server listo tras la primera consulta")
+    let r be lsp.query("references", "src/a.ts", 2, 12)
+    check(contains(r, "src/b.ts:2:10") and contains(r, "src/a.ts:1:17"), "references: 2 ubicaciones")
+    let h be lsp.query("hover", "src/a.ts", 2, 12)
+    check(contains(h, "function foo(): number"), "hover: markdown value")
+    let sy be lsp.query("symbols", "src/b.ts", nothing, nothing)
+    print("    symbols →\n" + sy)
+    check(contains(sy, "2-4  function foo") and contains(sy, "  variable inner") and contains(sy, "5-7  class Bar"), "symbols: outline jerárquico con rangos")
+    let e1 be ""
+    try
+        lsp.query("definition", "src/a.ts", nothing, nothing)
+    recover err
+        set e1 to text(err)
+    check(contains(e1, "line and character are required"), "definition sin posición → error claro")
+    let e2 be ""
+    try
+        lsp.query("hover", "x.py", 1, 1)
+    recover err
+        set e2 to text(err)
+    check(contains(e2, "no LSP server configured for '.py'"), "extensión sin server → error con cómo agregar uno")
+    let e3 be ""
+    try
+        lsp.query("hover", "x.zz", 1, 1)
+    recover err
+        set e3 to text(err)
+    check(contains(e3, "not ready") and contains(e3, "exited with code 2"), "server que muere al arrancar → error, no cuelga: " + e3)
+    -- summary y config add/remove
+    let sm be lsp.summary()
+    check(length(where(sm, (s) => s["name"] == "mock" and s["status"] == "ready")) == 1, "summary: mock ready")
+    let e4 be ""
+    try
+        lsp.add_server("nope", nothing, nothing, "global")
+    recover err
+        set e4 to text(err)
+    check(contains(e4, "no preset named"), "add sin preset ni comando → error")
+recover err
+    lsp.stop_all()
+    sleep(0.5)
+    raise(err)
+lsp.stop_all()
+sleep(0.5)
+check(lsp.state("mock")["status"] != "ready", "stop_all apaga el server")
+when length(failures) > 0
+    print("lsp_test: " + text(length(failures)) + " fallos")
+    raise("lsp_test failed")
+print("lsp_test: todo OK")

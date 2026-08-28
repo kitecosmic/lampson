@@ -26,6 +26,10 @@ export task ws(path)
         give ROOT
     when starts_with(p, ROOT + "/")
         give p
+    -- los resultados largos van a .lampson/spill/<call>.txt (loop.spill) y el modelo los relee con read/grep:
+    -- viven en la raíz de lampson, no en el workspace (2026-08-28: "File not found: workspace/.lampson/spill/…")
+    when starts_with(p, ".lampson/spill/") and not contains(p, "..")
+        give p
     give ROOT + "/" + p
 
 -- path real → path como lo ve el modelo

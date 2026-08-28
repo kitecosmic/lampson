@@ -21,6 +21,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
+require file.read("lamps")
+require file.read("lamps/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -42,6 +44,8 @@ use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
+use "./lib/lamps.syn" as lamps
+use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
 
 -- ---------- UI de terminal ----------
@@ -156,8 +160,10 @@ let COMMANDS be [
     ["/memory", "[nombre]", "notas que el agente guardó sobre ESTE proyecto (memory/<proyecto>/*.md); con nombre, la muestra"],
     ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
     ["/agents", "", "subagentes lanzados con delegate: estado, pasos y log de cada uno"],
-    ["/todo", "", "lista de tareas del agente para este proyecto (la mantiene con la tool todo)"],
-    ["/mcp", "", "servers MCP conectados (globales: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json) y sus tools"],
+    ["/todo", "", "lista de tareas del agente en esta sesión (la mantiene con la tool todo)"],
+    ["/mcp", "[add <nombre> <comando…> [--project] | remove <nombre>]", "servers MCP: listar, conectar o quitar (global: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json)"],
+    ["/lamps", "[on <nombre> | off <nombre> | run <lámpara> <tool> [json] | remove <nombre>]", "lámparas (plugins de tools): listar, encender o apagar (global: lampson/lamps/ · proyecto: .lampson/lamps/)"],
+    ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
     ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
     ["/new", "", "empezar una sesión nueva (historial vacío)"],
@@ -398,7 +404,18 @@ let system_msg be system_for(profile)
 let mcp_servers be mcp.start_all(8)
 each ms in mcp.summary()
     print("  " + (when ms["status"] == "ready" then green("● mcp " + ms["name"]) otherwise red("○ mcp " + ms["name"] + " " + ms["status"])) + dim(" (" + ms["scope"] + ") " + text(length(ms["tools"])) + " tools" + (when ms["error"] != nothing then " · " + text(ms["error"]) otherwise "")))
+-- language servers (lib/lsp.syn): solo se anuncian; arrancan lazy en la primera consulta
+each s in lsp.summary()
+    print("  " + dim("○ lsp " + s["name"] + " (" + s["scope"] + ") " + join(s["extensions"], " ") + " · arranca en la primera consulta"))
+-- lámparas (plugins de tools, lib/lamps.syn): solo se anuncian; apagadas no entran al catálogo
+each l in lamps.summary()
+    print("  " + (when l["enabled"] then green("● lamp " + l["name"]) otherwise dim("○ lamp " + l["name"] + " off")) + dim(" (" + l["scope"] + ", " + l["kind"] + ") " + text(length(l["tools"])) + " tools" + (when l["error"] != nothing then " · " + text(l["error"]) otherwise "")))
 let opts be opts_for(profile, lower(env("LAMPSON_PERMISSION", "ask")))
+
+-- marca de corrida (blackboard): session.save la estampa en meta.run; reanudar una sesión guardada por
+-- OTRA corrida dispara la nota de procesos muertos (proc.resume_note) para que el modelo no los crea vivos
+share {"id": text(now())} as "lampson:run"
+share {"kind": "terminal"} as "lampson:ui"
 
 let sid be env("LAMPSON_SESSION", "")
 let messages be [system_msg]
@@ -407,11 +424,18 @@ when sid != ""
         let doc be session.load(sid)
         set messages to doc["messages"]
         print("reanudando sesión " + sid + " (" + text(length(messages)) + " mensajes)")
+        when session.from_other_run(doc)
+            let note be proc.resume_note(sid)
+            when note != ""
+                set messages to append(messages, {"role": "user", "content": note})
+                print("  " + cyan("✉ " + first_line(note, 140)))
     otherwise
         print("sesión " + sid + " no existe; creando una nueva")
         set sid to ""
 when sid == ""
     set sid to session.new_id()
+-- sesión actual (blackboard): la tool todo guarda su lista por sesión y no recibe contexto (lib/tools/todo.syn)
+share {"id": sid} as "lampson:session"
 
 banner(env_info["cwd"], cfg, profile, opts["permission_mode"], sid)
 flush()
@@ -432,6 +456,7 @@ while running
             print("  " + cyan("✉ " + first_line(m, 140)))
             set messages to append(messages, {"role": "user", "content": m})
         trace.user(sid, "(turno automático por aviso de subagente)", profile, mode, cfg["model"])
+        set opts to opts_for(profile, mode)
         let result be loop.run_turn(cfg, messages, opts, on_event)
         trace.turn_end(sid, result)
         set messages to result["messages"]
@@ -526,6 +551,7 @@ while running
         otherwise when input == "/new"
             set sid to session.new_id()
             set messages to [system_msg]
+            share {"id": sid} as "lampson:session"
             print("nueva sesión " + sid)
         otherwise when input == "/sessions"
             each s in session.list()
@@ -534,8 +560,15 @@ while running
             let id be trim(slice(input, 8, length(input)))
             when session.exists(id)
                 set sid to id
-                set messages to session.load(id)["messages"]
+                let rdoc be session.load(id)
+                set messages to rdoc["messages"]
+                share {"id": sid} as "lampson:session"
                 print("reanudada " + id + " (" + text(length(messages)) + " mensajes)")
+                when session.from_other_run(rdoc)
+                    let note be proc.resume_note(sid)
+                    when note != ""
+                        set messages to append(messages, {"role": "user", "content": note})
+                        print("  " + cyan("✉ " + first_line(note, 140)))
             otherwise
                 print("no existe " + id)
         otherwise when input == "/files"
@@ -577,19 +610,119 @@ while running
             otherwise
                 print(memo.note_read(nm))
         otherwise when input == "/todo"
-            let items be todo.load()
+            let items be todo.load(sid)
             print(when length(items) == 0 then "  sin tareas (el agente las crea con la tool todo)" otherwise "  " + replace_text(todo.format(items), "\n", "\n  "))
-        otherwise when input == "/mcp"
-            let sm be mcp.summary()
-            when length(sm) == 0
-                print("  sin servers MCP. Global (todos los proyectos): lampson\.lampson\mcp.json · por proyecto: .lampson\mcp.json en el repo")
-                print("  " + dim("{\"mcpServers\": {\"github\": {\"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"], \"env\": {\"GITHUB_TOKEN\": \"…\"}}}}"))
-            each ms in sm
-                print("  " + (when ms["status"] == "ready" then green("● ") otherwise red("○ ")) + pad(ms["name"], 14) + dim(pad(ms["scope"], 8) + ms["status"] + "  $ " + ms["command"]) + (when ms["error"] != nothing then red("  " + text(ms["error"])) otherwise ""))
-                when length(ms["tools"]) > 0
-                    print("      " + dim(join(ms["tools"], ", ")))
-            -- servers que se pusieron listos después del arranque: recomponer el catálogo
-            set opts to opts_for(profile, mode)
+        otherwise when input == "/lsp" or starts_with(input, "/lsp ")
+            let srest be trim(slice(input, 4, length(input)))
+            when starts_with(srest, "add ")
+                -- /lsp add typescript [--project]   ·   /lsp add mylang cmd args… --ext .x=lang [--ext .y=lang2]
+                let sscope be when contains(srest, "--project") then "project" otherwise "global"
+                let sline be trim(replace_text(srest, "--project", ""))
+                let stoks be where(split(slice(sline, 4, length(sline)), " "), (x) => x != "")
+                when length(stoks) == 0
+                    print("  uso: /lsp add <" + join(keys(lsp.PRESETS), "|") + "> [--project]   ·   /lsp add <nombre> <comando…> --ext .ext=languageId")
+                otherwise
+                    let langs be {}
+                    let cmdtoks be []
+                    let ti be 1
+                    while ti < length(stoks)
+                        when stoks[ti] == "--ext" and ti + 1 < length(stoks)
+                            let kv be split(stoks[ti + 1], "=")
+                            when length(kv) == 2
+                                set langs[kv[0]] to kv[1]
+                            set ti to ti + 2
+                        otherwise
+                            set cmdtoks to append(cmdtoks, stoks[ti])
+                            set ti to ti + 1
+                    try
+                        print("  " + lsp.add_server(stoks[0], when length(cmdtoks) == 0 then nothing otherwise join(cmdtoks, " "), when length(keys(langs)) == 0 then nothing otherwise langs, sscope))
+                    recover err
+                        print("  " + red(text(err)))
+            otherwise when starts_with(srest, "remove ")
+                try
+                    print("  " + lsp.remove_server(trim(slice(srest, 7, length(srest)))))
+                recover err
+                    print("  " + red(text(err)))
+            otherwise
+                let ss be lsp.summary()
+                when length(ss) == 0
+                    print("  sin language servers configurados. Agregá uno: " + cyan("/lsp add typescript") + dim("  (presets: " + join(keys(lsp.PRESETS), ", ") + ")"))
+                    print("  " + dim("el agente los usa con la tool lsp: symbols (estructura de un archivo sin leerlo), definition, references, hover"))
+                each s in ss
+                    print("  " + (when s["status"] == "ready" then green("● ") otherwise (when s["status"] == "error" or s["status"] == "exited" then red("○ ") otherwise dim("○ "))) + pad(s["name"], 12) + dim(pad(s["scope"], 8) + pad(s["status"], 8) + join(s["extensions"], " ") + "  $ " + s["command"]) + (when s["error"] != nothing then red("  " + text(s["error"])) otherwise ""))
+                print("  " + dim("idle = arranca en la primera consulta del agente"))
+        otherwise when input == "/lamps" or starts_with(input, "/lamps ")
+            let lrest be trim(slice(input, 6, length(input)))
+            when starts_with(lrest, "run ")
+                -- /lamps run <lámpara> <tool> [json de args]  → la corre el usuario, sin el modelo
+                let rt be where(split(trim(slice(lrest, 4, length(lrest))), " "), (x) => x != "")
+                when length(rt) < 2
+                    print("  uso: /lamps run <lámpara> <tool> [{\"arg\": \"valor\"}]")
+                otherwise
+                    let rargs be {}
+                    when length(rt) > 2
+                        try
+                            set rargs to json_decode(join(slice(rt, 2, length(rt)), " "))
+                        recover err
+                            print("  " + red("args: JSON inválido"))
+                    try
+                        print(lamps.call(lamps.tool_name(rt[0], rt[1]), rargs))
+                    recover err
+                        print("  " + red(text(err)))
+            otherwise when starts_with(lrest, "remove ")
+                try
+                    print("  " + lamps.remove(trim(slice(lrest, 7, length(lrest)))))
+                recover err
+                    print("  " + red(text(err)))
+                set opts to opts_for(profile, mode)
+            otherwise when starts_with(lrest, "on ") or starts_with(lrest, "off ")
+                let lon be starts_with(lrest, "on ")
+                try
+                    print("  " + lamps.set_enabled(trim(slice(lrest, when lon then 3 otherwise 4, length(lrest))), lon))
+                recover err
+                    print("  " + red(text(err)))
+                set opts to opts_for(profile, mode)
+            otherwise
+                let ls be lamps.summary()
+                when length(ls) == 0
+                    print("  sin lámparas. Una lámpara es una carpeta con lamp.json: " + dim("lampson\\lamps\\<nombre>\\ (global) · .lampson\\lamps\\<nombre>\\ del repo (proyecto)"))
+                    print("  " + dim("el agente también puede crearlas (write en .lampson/lamps/) y pedirte encenderlas"))
+                each l in ls
+                    print("  " + (when l["enabled"] then green("● ") otherwise dim("○ ")) + pad(l["name"], 14) + dim(pad(l["scope"], 8) + pad(l["kind"], 5)) + (when l["error"] != nothing then red("rota: " + text(l["error"])) otherwise dim(text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["kind"] == "syn" then "  techo: " + l["caps"] otherwise "  $ " + l["command"]))))
+                print("  " + dim("encender/apagar: /lamps on <nombre> · /lamps off <nombre> · correr una vos: /lamps run <lámpara> <tool> [json]"))
+        otherwise when input == "/mcp" or starts_with(input, "/mcp ")
+            let mrest be trim(slice(input, 4, length(input)))
+            when starts_with(mrest, "add ")
+                -- /mcp add <nombre> <comando…> [--project]  (env/keys: editá el mcp.json a mano, no van por terminal)
+                let mscope be when contains(mrest, "--project") then "project" otherwise "global"
+                let mline be trim(replace_text(mrest, "--project", ""))
+                let mtoks be where(split(slice(mline, 4, length(mline)), " "), (x) => x != "")
+                when length(mtoks) < 2
+                    print("  uso: /mcp add <nombre> <comando…> [--project]   p.ej.: /mcp add github npx -y @modelcontextprotocol/server-github")
+                otherwise
+                    try
+                        print("  " + mcp.add_server(mtoks[0], join(slice(mtoks, 1, length(mtoks)), " "), {}, mscope))
+                    recover err
+                        print("  " + red(text(err)))
+                    set opts to opts_for(profile, mode)
+            otherwise when starts_with(mrest, "remove ")
+                try
+                    print("  " + mcp.remove_server(trim(slice(mrest, 7, length(mrest)))))
+                recover err
+                    print("  " + red(text(err)))
+                set opts to opts_for(profile, mode)
+            otherwise
+                let sm be mcp.summary()
+                when length(sm) == 0
+                    print("  sin servers MCP conectados (no hay ninguno configurado).")
+                    print("  conectá uno: " + cyan("/mcp add <nombre> <comando…> [--project]") + dim("   · o editá lampson\\.lampson\\mcp.json (global) / .lampson\\mcp.json del repo (proyecto)"))
+                    print("  " + dim("el agente también puede: pedile \"conectá el MCP de github\" y te va a pedir aprobación"))
+                each ms in sm
+                    print("  " + (when ms["status"] == "ready" then green("● ") otherwise red("○ ")) + pad(ms["name"], 14) + dim(pad(ms["scope"], 8) + ms["status"] + "  $ " + ms["command"]) + (when ms["error"] != nothing then red("  " + text(ms["error"])) otherwise ""))
+                    when length(ms["tools"]) > 0
+                        print("      " + dim(join(ms["tools"], ", ")))
+                -- servers que se pusieron listos después del arranque: recomponer el catálogo
+                set opts to opts_for(profile, mode)
         otherwise when input == "/agents"
             agents.prune(10, 1800)
             let kids be agents.list_children()
@@ -639,6 +772,9 @@ while running
             otherwise
                 set messages to append(messages, {"role": "user", "content": input})
             trace.user(sid, input, profile, mode, cfg["model"])
+            -- catálogo fresco por turno: si el turno anterior conectó/quitó un server MCP, sus tools
+            -- entran/salen acá (con los mismos servers el catálogo es idéntico → el prompt cache no se corta)
+            set opts to opts_for(profile, mode)
             let result be loop.run_turn(cfg, messages, opts, on_event)
             trace.turn_end(sid, result)
             set messages to result["messages"]
@@ -658,5 +794,6 @@ while running
 -- los procesos gestionados (servidores) y los subagentes en background mueren con lampson
 agents.stop_all()
 mcp.stop_all()
+lsp.stop_all()
 proc.halt_all()
 print("bye · sesión " + sid)

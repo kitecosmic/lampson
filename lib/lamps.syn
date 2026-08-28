@@ -1,0 +1,386 @@
+-- lib/lamps.syn — "lámparas": plugins de tools que el usuario (o el agente) escribe y el humano ENCIENDE
+--
+-- Qué es una lámpara: una carpeta con un manifiesto `lamp.json` y el código que implementa sus tools.
+--   lamps/<nombre>/                     GLOBAL (lampson se instala una vez → vale para todos los proyectos)
+--   workspace/.lampson/lamps/<nombre>/  del PROYECTO (el agente puede crearlas con write: es su workspace)
+--   lamp.json = {"name", "description", "kind": "syn" | "exec",
+--                "entry": "lamp.syn"            (kind=syn: un programa Synsema)
+--                "command": "python lamp.py"    (kind=exec: cualquier ejecutable — js, py, sh…)
+--                "caps": "file.read=workspace/*" (kind=syn, opcional: techo EXTRA sobre stdout,time,env=LAMP_*)
+--                "timeout": 60,
+--                "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": false}]}
+--
+-- Cómo corre (patrón "safe runner" de la doc 22-sandbox): cada llamada es UN proceso hijo que termina.
+--   kind=syn  → `synsema run --cap-set stdout,time,env=LAMP_*[,caps] <entry>`: el techo lo fija el
+--               manifiesto que el humano aprobó al encenderla; un `require` de más en el código de la
+--               lámpara falla con "above the host ceiling" — no hay forma de escalar desde adentro.
+--   kind=exec → el comando tal cual (sin techo de lenguaje: por eso encender es SIEMPRE humano).
+--   La tool y sus args viajan por env: LAMP_TOOL, LAMP_ARGS (JSON), LAMP_DIR (carpeta de la lámpara,
+--   relativa a la raíz de lampson = cwd del hijo si kind=syn; si kind=exec el cwd es el workspace),
+--   LAMP_WORKSPACE (ruta real del proyecto). La lámpara imprime el resultado (texto o JSON) por stdout.
+--
+-- Encendido: `.lampson/lamps.json` {"enabled": {"<nombre>": true}}. APAGADA por defecto: descubrir una
+-- carpeta nueva no la activa; la enciende el humano (UI: barra superior; terminal: /lamps on <nombre>) o el
+-- agente con la tool `lamp` (action=enable → ask SIEMPRE, como skill install / mcp add). Crear = write;
+-- encender = permiso. Sin `use` dinámico (Synsema no lo tiene, a propósito): nada de esto entra al proceso
+-- de lampson, solo corre como hijo.
+--
+-- Las tools encendidas entran al catálogo como `lamp_<lámpara>_<tool>`; loop.execute las despacha acá
+-- (registry las marca con "lamp", como "mcp"). permission.syn: ask por defecto, yolo permite, strict deniega;
+-- las readonly también en plan/review/explore.
+
+use "./tools/common.syn" as c
+
+export let GLOBAL_DIR be "lamps"
+export let PROJECT_DIR be "workspace/.lampson/lamps"
+export let STATE_FILE be ".lampson/lamps.json"
+let DEFAULT_TIMEOUT be 60
+let BASE_CAPS be "stdout,time,env=LAMP_*"
+
+-- nombre de lámpara: SIN "_" (el separador de lamp_<lámpara>_<tool>); las tools sí pueden llevarlo
+task valid_name(name)
+    when name == nothing or name == ""
+        give false
+    give matches(text(name), "[a-zA-Z0-9-]{1,32}")
+
+task valid_tool_name(name)
+    when name == nothing or name == ""
+        give false
+    give matches(text(name), "[a-zA-Z0-9_-]{1,40}")
+
+-- lee y valida un manifiesto; devuelve {ok, lamp} o {ok: false, error}
+task read_manifest(dir, name, scope)
+    let path be dir + "/" + name + "/lamp.json"
+    let doc be nothing
+    try
+        set doc to json_decode(read_file(path))
+    recover err
+        give {"ok": false, "name": name, "scope": scope, "error": "no lamp.json: " + text(err)}
+    let kind be when contains(doc, "kind") then lower(text(doc["kind"])) otherwise "syn"
+    when kind != "syn" and kind != "exec"
+        give {"ok": false, "name": name, "scope": scope, "error": "kind must be syn or exec"}
+    when kind == "syn" and not contains(doc, "entry")
+        give {"ok": false, "name": name, "scope": scope, "error": "kind=syn needs \"entry\" (the .syn file)"}
+    when kind == "exec" and not contains(doc, "command")
+        give {"ok": false, "name": name, "scope": scope, "error": "kind=exec needs \"command\""}
+    when not contains(doc, "tools") or length(doc["tools"]) == 0
+        give {"ok": false, "name": name, "scope": scope, "error": "no tools declared"}
+    let tools be []
+    each t in doc["tools"]
+        when not contains(t, "name") or not valid_tool_name(t["name"])
+            give {"ok": false, "name": name, "scope": scope, "error": "a tool has no valid name"}
+        set tools to append(tools, {"name": text(t["name"]), "description": when contains(t, "description") then text(t["description"]) otherwise "", "parameters": when contains(t, "parameters") then t["parameters"] otherwise {"type": "object", "properties": {}}, "readonly": contains(t, "readonly") and t["readonly"] == true})
+    give {"ok": true, "name": name, "scope": scope, "lamp": {"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools}}
+
+task scan(dir, scope)
+    let out be []
+    try
+        each e in list_dir(dir)
+            when e["is_dir"] and valid_name(e["name"])
+                set out to append(out, read_manifest(dir, e["name"], scope))
+    recover err
+        give out
+    give out
+
+task load_state()
+    try
+        let doc be json_decode(read_file(STATE_FILE))
+        give when contains(doc, "enabled") then doc["enabled"] otherwise {}
+    recover err
+        give {}
+
+-- todas las lámparas descubiertas (proyecto pisa a global por nombre), con enabled y error.
+-- LAMPSON_LAMPS_DIR = una carpeta extra (tests).
+export task all()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let by_name be {}
+    each r in scan(GLOBAL_DIR, "global")
+        set by_name[r["name"]] to r
+    each r in scan(PROJECT_DIR, "project")
+        set by_name[r["name"]] to r
+    when env("LAMPSON_LAMPS_DIR", "") != ""
+        each r in scan(env("LAMPSON_LAMPS_DIR", ""), "extra")
+            set by_name[r["name"]] to r
+    let st be load_state()
+    let out be []
+    each n in sort_by(keys(by_name), (x) => x)
+        let r be by_name[n]
+        let on be contains(st, n) and st[n] == true
+        when r["ok"]
+            let l be r["lamp"]
+            set l["enabled"] to on
+            set l["error"] to nothing
+            set out to append(out, l)
+        otherwise
+            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "enabled": false, "error": r["error"]})
+    give out
+
+export task enabled()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    give where(all(), (l) => l["enabled"] and l["error"] == nothing)
+
+-- encender/apagar (el humano, o el agente tras aprobación). Encender una lámpara rota es error.
+export task set_enabled(name, on)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    when not valid_name(name)
+        raise("invalid lamp name")
+    let found be where(all(), (l) => l["name"] == name)
+    when length(found) == 0
+        raise("no lamp named '" + name + "' (global: " + GLOBAL_DIR + "/<name>/lamp.json · project: " + PROJECT_DIR + "/<name>/lamp.json)")
+    when on and found[0]["error"] != nothing
+        raise("lamp '" + name + "' is broken: " + text(found[0]["error"]))
+    let st be load_state()
+    set st[name] to on == true
+    write_file(STATE_FILE, json_encode({"enabled": st}))
+    let l be found[0]
+    when on
+        give "lamp '" + name + "' ON (" + l["kind"] + ", " + text(length(l["tools"])) + " tools" + (when l["kind"] == "syn" then ", ceiling: " + ceiling_of(l) otherwise ", NO capability ceiling: exec") + ") — its tools are in the catalog from the next turn as lamp_" + name + "_<tool>"
+    give "lamp '" + name + "' OFF"
+
+task ceiling_of(l)
+    give when l["caps"] == "" then BASE_CAPS otherwise BASE_CAPS + "," + l["caps"]
+
+-- ---------- catálogo ----------
+export task tool_name(lamp, tool)
+    give "lamp_" + lamp + "_" + tool
+
+task split_name(full)
+    let segs be split(slice(full, 5, length(full)), "_")
+    when length(segs) < 2
+        raise("bad lamp tool name '" + full + "'")
+    give {"lamp": segs[0], "tool": join(slice(segs, 1, length(segs)), "_")}
+
+export task catalog(readonly_only)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let out be []
+    each l in enabled()
+        each t in l["tools"]
+            when not readonly_only or t["readonly"]
+                set out to append(out, {"name": tool_name(l["name"], t["name"]), "description": "[lamp " + l["name"] + "] " + t["description"], "parameters": t["parameters"]})
+    give out
+
+export task names(readonly_only)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    give apply(catalog(readonly_only), (s) => s["name"])
+
+-- ---------- llamada: un proceso hijo por invocación ----------
+task run_lamp(exe, argv, cwd, envs, t)
+    let p be proc_spawn(exe, argv, {"cwd": cwd, "env": envs, "stderr": "merge", "on_full": "drop_oldest"})
+    proc_close_stdin(p)
+    let deadline be now() + t
+    let lines be []
+    let code be nothing
+    let timed_out be false
+    while code == nothing and not timed_out
+        let left be deadline - now()
+        when left <= 0
+            set timed_out to true
+        otherwise
+            let ev be proc_recv(p, when left < 0.2 then 0.2 otherwise left)
+            when ev == nothing
+                set timed_out to now() >= deadline
+            otherwise when ev["type"] == "exit"
+                set code to ev["data"]["exit_code"]
+            otherwise
+                set lines to append(lines, ev["data"])
+    proc_close(p)
+    let out be join(lines, "\n")
+    when timed_out
+        give "ERROR: lamp timed out after " + text(t) + "s (killed). Output so far:\n" + out
+    when code != 0
+        give "ERROR: lamp exited with code " + text(code) + "\n" + out
+    give when trim(out) == "" then "(no output)" otherwise out
+
+-- separa "python lamp.py --x" en exe + args (comillas simples/dobles respetadas)
+export task split_command(line)
+    let toks be []
+    let cur be ""
+    let q be ""
+    let has be false
+    let i be 0
+    while i < length(line)
+        let ch be slice(line, i, i + 1)
+        set i to i + 1
+        when q != ""
+            when ch == q
+                set q to ""
+            otherwise
+                set cur to cur + ch
+        otherwise when ch == "\"" or ch == "'"
+            set q to ch
+            set has to true
+        otherwise when ch == " " or ch == "\t"
+            when cur != "" or has
+                set toks to append(toks, cur)
+                set cur to ""
+                set has to false
+        otherwise
+            set cur to cur + ch
+    when cur != "" or has
+        set toks to append(toks, cur)
+    give toks
+
+export task call(full_name, args)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let parts be split_name(full_name)
+    let found be where(enabled(), (l) => l["name"] == parts["lamp"])
+    when length(found) == 0
+        give "ERROR: lamp '" + parts["lamp"] + "' is not enabled (the user turns lamps on)"
+    let l be found[0]
+    let tl be where(l["tools"], (t) => t["name"] == parts["tool"])
+    when length(tl) == 0
+        give "ERROR: lamp '" + l["name"] + "' has no tool '" + parts["tool"] + "'"
+    -- LAMP_DIR relativa a la raíz de lampson (cwd del hijo para kind=syn); LAMP_WORKSPACE = la ruta real del
+    -- proyecto (lampson.ps1 la exporta; sin ella, la junction)
+    let envs be {"LAMP_TOOL": parts["tool"], "LAMP_ARGS": json_encode(when args == nothing then {} otherwise args), "LAMP_DIR": l["dir"], "LAMP_WORKSPACE": env("LAMPSON_WORKSPACE", c.ROOT)}
+    when l["kind"] == "syn"
+        -- techo del manifiesto: el código de la lámpara no puede pedir más de lo que el humano aprobó
+        give c.truncate(run_lamp(env("LAMPSON_SYNSEMA", "synsema"), ["run", "--cap-set", ceiling_of(l), l["dir"] + "/" + l["entry"]], ".", envs, l["timeout"]), c.MAX_OUTPUT)
+    let argv be split_command(l["command"])
+    when length(argv) == 0
+        give "ERROR: lamp '" + l["name"] + "' has an empty command"
+    -- el comando corre desde la RAÍZ DEL WORKSPACE (para que "python lamp.py" vea el proyecto), así que un
+    -- token que nombra un archivo de la carpeta de la lámpara se resuelve solo (2026-08-28: "python lamp.py"
+    -- salía con code 2 porque lamp.py no estaba en el cwd)
+    let rel_dir be when starts_with(l["dir"], c.ROOT + "/") then slice(l["dir"], length(c.ROOT) + 1, length(l["dir"])) otherwise "../" + l["dir"]
+    let resolved be []
+    each tok in argv
+        when not contains(tok, "/") and not contains(tok, "\\") and file_exists(l["dir"] + "/" + tok)
+            set resolved to append(resolved, rel_dir + "/" + tok)
+        otherwise
+            set resolved to append(resolved, tok)
+    give c.truncate(run_lamp(resolved[0], slice(resolved, 1, length(resolved)), c.ROOT, envs, l["timeout"]), c.MAX_OUTPUT)
+
+-- crear una lámpara DEL PROYECTO (workspace/.lampson/lamps/<name>/): escribe lamp.json + el código, revalida el
+-- manifiesto y, si es syn, corre `synsema check` sobre el entry. Como cordis_define en dsh: define y valida,
+-- NO ejecuta ni enciende — encender sigue siendo del humano (set_enabled tras ask).
+-- `files` = {"lamp.syn": "…", "helper.py": "…"}: nombres simples (sin / ni ..) dentro de la carpeta.
+export task create(name, manifest, files)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    when not valid_name(name)
+        raise("invalid lamp name '" + text(name) + "': letters, digits and - only (no _), max 32")
+    when manifest == nothing or not contains(manifest, "tools")
+        raise("manifest needs at least \"tools\" (and \"entry\" for kind=syn or \"command\" for kind=exec)")
+    let dir be PROJECT_DIR + "/" + name
+    let m be manifest
+    set m["name"] to name
+    when not contains(m, "kind")
+        set m["kind"] to "syn"
+    write_file(dir + "/lamp.json", json_encode(m))
+    let written be ["lamp.json"]
+    when files != nothing
+        each fname in keys(files)
+            when not matches(fname, "[A-Za-z0-9_.-]{1,64}") or starts_with(fname, ".")
+                raise("bad file name '" + fname + "' (simple names inside the lamp folder only)")
+            write_file(dir + "/" + fname, text(files[fname]))
+            set written to append(written, fname)
+    let found be where(all(), (l) => l["name"] == name)
+    when length(found) == 0
+        raise("lamp written but not discovered (?)")
+    let l be found[0]
+    when l["error"] != nothing
+        give "lamp '" + name + "' written to " + dir + " but its manifest is INVALID: " + text(l["error"]) + " — fix it with edit and call lamp(action=list) to re-check"
+    let note be ""
+    when l["kind"] == "syn"
+        let chk be run_lamp(env("LAMPSON_SYNSEMA", "synsema"), ["check", l["dir"] + "/" + l["entry"]], ".", {}, 30)
+        when starts_with(chk, "ERROR")
+            give "lamp '" + name + "' written to " + dir + " but `synsema check " + l["entry"] + "` FAILED:\n" + chk + "\nFix the code with edit; it stays off until it checks and the user turns it on."
+        set note to " · synsema check OK · ceiling when on: " + ceiling_of(l)
+    when l["kind"] == "exec"
+        set note to " · exec (no capability ceiling: the user will see that when approving)"
+    give "lamp '" + name + "' created (project, " + l["kind"] + ", " + text(length(l["tools"])) + " tools: " + join(apply(l["tools"], (t) => t["name"]), ", ") + ") in " + dir + " [" + join(written, ", ") + "]" + note + (when l["kind"] == "exec" then ". The command runs from the workspace root; a file of the lamp folder named in the command is resolved automatically" otherwise "") + ". It is OFF until the user turns it on: offer to do it (lamp action=enable asks them), or point them to the lamp switch of their UI. Its tools will be lamp_" + name + "_<tool>."
+
+-- eliminar una lámpara DEL PROYECTO: borra su carpeta (no hay delete_file en el runtime → rm -rf por el shell
+-- de bash.syn) y la saca del estado. Las globales (lamps/) se borran a mano: son de la instalación, no del repo.
+export task remove(name)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    when not valid_name(name)
+        raise("invalid lamp name")
+    let found be where(all(), (l) => l["name"] == name)
+    when length(found) == 0
+        raise("no lamp named '" + name + "'")
+    let l be found[0]
+    when l["scope"] != "project"
+        raise("'" + name + "' is a " + l["scope"] + " lamp (" + GLOBAL_DIR + "/" + name + "): delete that folder by hand")
+    let dir be PROJECT_DIR + "/" + name
+    let is_win be env("OS", "") == "Windows_NT"
+    let sh be env("LAMPSON_SHELL", when is_win then "C:\\Program Files\\Git\\bin\\bash.exe" otherwise "bash")
+    let r be run(sh, ["-c", "rm -rf '" + dir + "'"], 30, {"cwd": "."})
+    when file_exists(dir + "/lamp.json")
+        raise("could not delete " + dir + ": " + text(r["stderr"]))
+    let st be load_state()
+    let clean be {}
+    each k in keys(st)
+        when k != name
+            set clean[k] to st[k]
+    write_file(STATE_FILE, json_encode({"enabled": clean}))
+    give "lamp '" + name + "' deleted (" + dir + ")"
+
+-- resumen para UI/terminal/tool
+export task summary()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let out be []
+    each l in all()
+        set out to append(out, {"name": l["name"], "scope": l["scope"], "kind": l["kind"], "description": l["description"], "enabled": l["enabled"], "error": l["error"], "caps": when l["kind"] == "syn" and l["error"] == nothing then ceiling_of(l) otherwise "", "command": when l["kind"] == "exec" then l["command"] otherwise "", "tools": apply(l["tools"], (t) => t["name"]), "tool_specs": l["tools"], "dir": l["dir"]})
+    give out
