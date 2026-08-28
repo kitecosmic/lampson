@@ -23,6 +23,11 @@ export task save(id, messages, meta)
     require env("LAMPSON_*")
     -- cada sesión queda marcada con el proyecto (slug del workspace) para que list() no mezcle proyectos
     set meta["project"] to memo.slug()
+    -- y con la corrida de lampson que la guardó (blackboard "lampson:run", lo comparte el entry al arrancar):
+    -- reanudar una sesión de OTRA corrida dispara la nota de procesos muertos (proc.resume_note)
+    observe "lampson:run" as run_info
+    when run_info != nothing
+        set meta["run"] to run_info["id"]
     let doc be {"id": id, "updated": format_time(now()), "meta": meta, "messages": messages}
     write_file(path_of(id), json_encode(doc))
     give id
@@ -32,6 +37,15 @@ export task load(id)
     require file.read(".lampson/*")
     let doc be json_decode(read_file(path_of(id)))
     give doc
+
+-- ¿el doc cargado fue guardado por OTRA corrida de lampson? (sin marca = sesión vieja → sí)
+export task from_other_run(doc)
+    observe "lampson:run" as run_info
+    when run_info == nothing
+        give false
+    when not contains(doc["meta"], "run")
+        give true
+    give doc["meta"]["run"] != run_info["id"]
 
 export task exists(id)
     require file.read(".lampson")

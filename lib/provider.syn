@@ -172,7 +172,9 @@ export task config_for(name, model)
         "wire": wire,
         "base_url": base,
         "model": m,
-        "max_tokens": floor(number(env("LAMPSON_MAX_TOKENS", "4096"))),
+        -- 8192 (antes 4096): a un modelo razonador 4096 se le pueden ir enteros en pensar y la
+        -- respuesta llega vacía (finish_reason=length). Override: LAMPSON_MAX_TOKENS.
+        "max_tokens": floor(number(env("LAMPSON_MAX_TOKENS", "8192"))),
         "timeout": number(env("LAMPSON_TIMEOUT", "180")),
         "key": key,
         "has_key": has_key(n)
@@ -328,6 +330,18 @@ task chat_openai(cfg, messages, catalog)
     when contains(j, "usage")
         when j["usage"] != nothing
             set usage to {"input": j["usage"]["prompt_tokens"], "output": j["usage"]["completion_tokens"], "cached": cached_of(j["usage"])}
+    -- finish_reason=length: se agotó max_tokens ANTES de terminar. Con un modelo razonador (deepseek-v4-pro)
+    -- puede irse TODO el presupuesto en pensar y llegar acá sin texto ni tool calls (visto 2026-08-28:
+    -- out=4096 exacto, respuesta vacía, y el turno moría en silencio como "done"). Vacío → error visible;
+    -- parcial → marcador para que el usuario sepa que faltó el final.
+    let fr be ""
+    when contains(j["choices"][0], "finish_reason")
+        when j["choices"][0]["finish_reason"] != nothing
+            set fr to text(j["choices"][0]["finish_reason"])
+    when fr == "length" and length(calls) == 0
+        when trim(txt) == ""
+            give {"text": "", "tool_calls": [], "usage": usage, "stop": "end", "error": "empty response: the model used its whole output budget (max_tokens=" + text(cfg["max_tokens"]) + ") without emitting text or tool calls — a reasoning model can spend it all thinking. Raise LAMPSON_MAX_TOKENS (or simplify the request) and say «seguí»."}
+        set txt to txt + "\n\n[respuesta cortada: se alcanzó max_tokens=" + text(cfg["max_tokens"]) + " — decí «seguí» para que continúe]"
     let finish be when length(calls) > 0 then "tool_calls" otherwise "end"
     give {"text": txt, "tool_calls": calls, "usage": usage, "stop": finish, "error": nothing}
 
@@ -394,11 +408,49 @@ task to_anthropic_tools(catalog)
         set out to append(out, {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]})
     give out
 
+-- Prompt caching Anthropic: es OPT-IN (sin marcadores no cachea NADA). Los mismos 3 breakpoints a los
+-- que convergen opencode (cache-policy.ts) y hermes (prompt_caching.py): el último tool del catálogo,
+-- el system, y el último mensaje user — así cada llamada intra-turno pega en el prefijo (lectura 10%
+-- del precio). OpenAI/DeepSeek cachean solas por prefijo: su wire no lleva marcadores.
+let CACHE_HINT be {"type": "ephemeral"}
+
+task mark_last_block(m)
+    -- copia del mensaje con cache_control en su último bloque (content texto → un bloque text)
+    when text(m["content"]) == m["content"]
+        give {"role": m["role"], "content": [{"type": "text", "text": m["content"], "cache_control": CACHE_HINT}]}
+    let blocks be m["content"]
+    let n be length(blocks)
+    let last be {}
+    each k in keys(blocks[n - 1])
+        set last[k] to blocks[n - 1][k]
+    set last["cache_control"] to CACHE_HINT
+    give {"role": m["role"], "content": slice(blocks, 0, n - 1) + [last]}
+
+task cache_marked_messages(msgs)
+    let i be length(msgs) - 1
+    while i >= 0
+        when msgs[i]["role"] == "user"
+            give slice(msgs, 0, i) + [mark_last_block(msgs[i])] + slice(msgs, i + 1, length(msgs))
+        set i to i - 1
+    give msgs
+
+task cache_marked_tools(tools)
+    let n be length(tools)
+    when n == 0
+        give tools
+    let last be {}
+    each k in keys(tools[n - 1])
+        set last[k] to tools[n - 1][k]
+    set last["cache_control"] to CACHE_HINT
+    give slice(tools, 0, n - 1) + [last]
+
 task chat_anthropic(cfg, messages, catalog)
     let conv be to_anthropic(messages)
-    let body be {"model": cfg["model"], "max_tokens": cfg["max_tokens"], "system": conv["system"], "messages": conv["messages"]}
+    let sys be when conv["system"] == "" then "" otherwise [{"type": "text", "text": conv["system"], "cache_control": CACHE_HINT}]
+    let msgs be cache_marked_messages(conv["messages"])
+    let body be {"model": cfg["model"], "max_tokens": cfg["max_tokens"], "system": sys, "messages": msgs}
     when length(catalog) > 0
-        set body to {"model": cfg["model"], "max_tokens": cfg["max_tokens"], "system": conv["system"], "messages": conv["messages"], "tools": to_anthropic_tools(catalog)}
+        set body to {"model": cfg["model"], "max_tokens": cfg["max_tokens"], "system": sys, "messages": msgs, "tools": cache_marked_tools(to_anthropic_tools(catalog))}
     let headers be {"x-api-key": cfg["key"], "anthropic-version": ANTHROPIC_VERSION, "Content-Type": "application/json"}
     let r be http_post(strip_slash(cfg["base_url"]) + "/messages", json_encode(body), headers, cfg["timeout"])
     when contains(r, "error")
@@ -415,8 +467,17 @@ task chat_anthropic(cfg, messages, catalog)
             set calls to append(calls, {"id": b["id"], "name": b["name"], "args": b["input"]})
     let usage be {"input": 0, "output": 0, "cached": 0}
     when contains(j, "usage")
+        -- input_tokens de Anthropic EXCLUYE lo cacheado: input = no-cache + escritura de caché + lectura de caché
+        -- (la escritura se cobra 1.25x pero se cuenta 1x acá; la lectura pondera 10% en cost_tokens)
         let cr be when contains(j["usage"], "cache_read_input_tokens") then j["usage"]["cache_read_input_tokens"] otherwise 0
-        set usage to {"input": j["usage"]["input_tokens"] + cr, "output": j["usage"]["output_tokens"], "cached": cr}
+        let cw be when contains(j["usage"], "cache_creation_input_tokens") then j["usage"]["cache_creation_input_tokens"] otherwise 0
+        set usage to {"input": j["usage"]["input_tokens"] + cr + cw, "output": j["usage"]["output_tokens"], "cached": cr}
+    -- stop_reason=max_tokens: mismo tratamiento que finish_reason=length en el wire openai (ver arriba)
+    let sr be when contains(j, "stop_reason") then text(j["stop_reason"]) otherwise ""
+    when sr == "max_tokens" and length(calls) == 0
+        when trim(txt) == ""
+            give {"text": "", "tool_calls": [], "usage": usage, "stop": "end", "error": "empty response: the model used its whole output budget (max_tokens=" + text(cfg["max_tokens"]) + ") without emitting text or tool calls. Raise LAMPSON_MAX_TOKENS and say «seguí»."}
+        set txt to txt + "\n\n[respuesta cortada: se alcanzó max_tokens=" + text(cfg["max_tokens"]) + " — decí «seguí» para que continúe]"
     let finish be when length(calls) > 0 then "tool_calls" otherwise "end"
     give {"text": txt, "tool_calls": calls, "usage": usage, "stop": finish, "error": nothing}
 
@@ -431,19 +492,29 @@ export task chat(cfg, messages, catalog)
         give chat_anthropic(cfg, ready, catalog)
     give chat_openai(cfg, ready, catalog)
 
--- Reintento simple con backoff para 429/5xx/red .
+-- Reintento simple con backoff para 429/5xx/red. Además: "empty response" (el razonador gastó TODO
+-- max_tokens pensando, sin emitir nada) reintenta con el DOBLE de max_tokens (hasta 65536) — así un
+-- LAMPSON_MAX_TOKENS modesto no mata un turno que necesitaba pensar largo.
 export task chat_retry(cfg, messages, catalog, attempts)
     require net
     require time
     let n be 0
     let last be nothing
+    let cur be cfg
     while n < attempts
         set n to n + 1
-        set last to chat(cfg, messages, catalog)
+        set last to chat(cur, messages, catalog)
         when last["error"] == nothing
             give last
         let e be last["error"]
         let retryable be starts_with(e, "network") or starts_with(e, "http 429") or starts_with(e, "http 5")
+        when starts_with(e, "empty response") and cur["max_tokens"] < 65536
+            let bigger be {}
+            each k in keys(cur)
+                set bigger[k] to cur[k]
+            set bigger["max_tokens"] to cur["max_tokens"] * 2
+            set cur to bigger
+            set retryable to true
         when not retryable
             give last
         when n < attempts
