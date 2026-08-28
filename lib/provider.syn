@@ -122,6 +122,21 @@ export task list_models(cfg)
                 set ids to append(ids, text(m["id"]))
     give {"models": sort_by(ids, (x) => x), "error": nothing}
 
+-- Tokens de entrada servidos desde caché de prompt (cuestan ~10%): DeepSeek `prompt_cache_hit_tokens`,
+-- OpenAI `prompt_tokens_details.cached_tokens`. El presupuesto por turno (loop.syn) los pondera al 10%.
+export task cached_of(u)
+    when contains(u, "prompt_cache_hit_tokens")
+        give floor(number(u["prompt_cache_hit_tokens"]))
+    when contains(u, "prompt_tokens_details")
+        when u["prompt_tokens_details"] != nothing and contains(u["prompt_tokens_details"], "cached_tokens")
+            give floor(number(u["prompt_tokens_details"]["cached_tokens"]))
+    give 0
+
+-- costo ponderado de una llamada: cache al 10%, resto al 100%
+export task cost_tokens(u)
+    let cached be when contains(u, "cached") then u["cached"] otherwise 0
+    give floor((u["input"] - cached) + cached * 0.1 + u["output"])
+
 -- Configuración para un proveedor concreto (name "" = el por defecto; model "" = el guardado/preset).
 -- Llamar DENTRO del handler bajo serve.
 export task config_for(name, model)
@@ -309,10 +324,10 @@ task chat_openai(cfg, messages, catalog)
         when msg["tool_calls"] != nothing
             each tc in msg["tool_calls"]
                 set calls to append(calls, {"id": tc["id"], "name": tc["function"]["name"], "args": parse_args(tc["function"]["arguments"])})
-    let usage be {"input": 0, "output": 0}
+    let usage be {"input": 0, "output": 0, "cached": 0}
     when contains(j, "usage")
         when j["usage"] != nothing
-            set usage to {"input": j["usage"]["prompt_tokens"], "output": j["usage"]["completion_tokens"]}
+            set usage to {"input": j["usage"]["prompt_tokens"], "output": j["usage"]["completion_tokens"], "cached": cached_of(j["usage"])}
     let finish be when length(calls) > 0 then "tool_calls" otherwise "end"
     give {"text": txt, "tool_calls": calls, "usage": usage, "stop": finish, "error": nothing}
 
@@ -398,9 +413,10 @@ task chat_anthropic(cfg, messages, catalog)
             set txt to txt + b["text"]
         otherwise when b["type"] == "tool_use"
             set calls to append(calls, {"id": b["id"], "name": b["name"], "args": b["input"]})
-    let usage be {"input": 0, "output": 0}
+    let usage be {"input": 0, "output": 0, "cached": 0}
     when contains(j, "usage")
-        set usage to {"input": j["usage"]["input_tokens"], "output": j["usage"]["output_tokens"]}
+        let cr be when contains(j["usage"], "cache_read_input_tokens") then j["usage"]["cache_read_input_tokens"] otherwise 0
+        set usage to {"input": j["usage"]["input_tokens"] + cr, "output": j["usage"]["output_tokens"], "cached": cr}
     let finish be when length(calls) > 0 then "tool_calls" otherwise "end"
     give {"text": txt, "tool_calls": calls, "usage": usage, "stop": finish, "error": nothing}
 

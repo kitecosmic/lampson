@@ -81,6 +81,12 @@ export task canon(v)
         give "[" + join(apply((x) => canon(x), v), ",") + "]"
     give json_encode(v)
 
+task one_line_args(args)
+    let t be json_encode(args)
+    when length(t) > 80
+        give slice(t, 0, 80) + "…"
+    give t
+
 task safe_id(id, step)
     let t be text(id)
     when matches(t, "[A-Za-z0-9_-]{1,80}")
@@ -282,7 +288,7 @@ export task run_turn(cfg, messages, opts, on_event)
     let steps be 0
     let spent be 0
     let errors be 0
-    let usage be {"input": 0, "output": 0}
+    let usage be {"input": 0, "output": 0, "cached": 0}
     let final_text be ""
     let stopped be "done"
     let last_sig be ""
@@ -290,6 +296,12 @@ export task run_turn(cfg, messages, opts, on_event)
     let nudged be false
     let explore_streak be 0
     let cap be explore_cap()
+    -- lecturas repetidas en el mismo turno (visto 2026-08-28: globals.css y page.tsx leídos 3 veces cada uno):
+    -- si el resultado es idéntico al anterior, el modelo recibe un recibo corto — el contenido ya está en su contexto
+    let seen_reads be {}
+    -- y un tope TOTAL por turno de llamadas de solo lectura (el de racha se reinicia con cualquier acción)
+    let reads_total be 0
+    let turn_cap be cap * 2
     let catalog be opts["catalog"]
     let max_steps be opts["max_steps"]
     let budget be opts["budget_tokens"]
@@ -337,8 +349,10 @@ export task run_turn(cfg, messages, opts, on_event)
             set stopped to "error: " + r["error"]
             set final_text to ""
             give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": stopped}
-        set usage to {"input": usage["input"] + r["usage"]["input"], "output": usage["output"] + r["usage"]["output"]}
-        set spent to spent + r["usage"]["input"] + r["usage"]["output"]
+        let rc be when contains(r["usage"], "cached") then r["usage"]["cached"] otherwise 0
+        set usage to {"input": usage["input"] + r["usage"]["input"], "output": usage["output"] + r["usage"]["output"], "cached": usage["cached"] + rc}
+        -- el presupuesto mide COSTO: los tokens servidos desde caché de prompt pesan 10%
+        set spent to spent + provider.cost_tokens(r["usage"])
         emit(on_event, "usage", {"step": steps, "usage": r["usage"], "total": usage}, tag)
         let clean_text be strip_raw_tool_calls(r["text"])
         let assistant be {"role": "assistant", "content": clean_text, "tool_calls": r["tool_calls"]}
@@ -363,8 +377,20 @@ export task run_turn(cfg, messages, opts, on_event)
             otherwise when ex["refuse"]
                 set out to "ERROR: exploration cap reached — " + text(explore_streak) + " read-only calls in a row (read/ls/find/grep) without a single change. Reading more will not help. Do one of: (1) edit/write the files you already read; (2) run a command (bash/process) that moves the task; (3) delegate ONE focused question to an `explore` sub-agent; (4) tell the user what you need. read/ls/find/grep are refused until you do."
                 emit(on_event, "tool_denied", {"call": tc, "reason": "exploration cap (" + text(explore_streak) + " read-only calls without acting)"}, tag)
+            otherwise when contains(READ_ONLY_TOOLS, tc["name"]) and reads_total >= turn_cap
+                set out to "ERROR: this turn already made " + text(reads_total) + " read-only calls (limit " + text(turn_cap) + "). Everything you read is in your context. Act on it now (edit/write/run), delegate ONE focused question to an `explore` sub-agent, or report to the user."
+                emit(on_event, "tool_denied", {"call": tc, "reason": "read-only calls per turn (" + text(reads_total) + ")"}, tag)
             otherwise
                 set out to spill(tc["name"], safe_id(tc["id"], steps), execute(tc, opts, on_event))
+                when contains(READ_ONLY_TOOLS, tc["name"])
+                    set reads_total to reads_total + 1
+                    let rk be tc["name"] + " " + canon(tc["args"])
+                    let h be decode(sha256(out), "hex")
+                    when contains(seen_reads, rk) and seen_reads[rk]["hash"] == h and not starts_with(out, "ERROR")
+                        set out to "[unchanged: identical to your " + tc["name"] + " at step " + text(seen_reads[rk]["step"]) + " this turn — the content is already in your context above; do not re-read files you already have]"
+                        emit(on_event, "inbox", "lectura repetida (" + tc["name"] + " " + one_line_args(tc["args"]) + "): recibo en vez de re-enviar el contenido", tag)
+                    otherwise
+                        set seen_reads[rk] to {"hash": h, "step": steps}
                 when contains(REPEAT_TIERS, repeats)
                     set out to out + repeat_note(tc, repeats)
                 when ex["note"] != ""

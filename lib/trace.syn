@@ -68,7 +68,8 @@ export task event(sid, kind, data, tag)
     require file(".lampson/*")
     let t be when tag == nothing or tag == "" then "" otherwise "[" + text(tag) + "] "
     when kind == "usage"
-        give write(sid, "STEP " + text(data["step"]), t + "modelo respondió · in=" + text(data["usage"]["input"]) + " out=" + text(data["usage"]["output"]) + " · acumulado " + text(data["total"]["input"] + data["total"]["output"]))
+        let cached be when contains(data["usage"], "cached") then data["usage"]["cached"] otherwise 0
+        give write(sid, "STEP " + text(data["step"]), t + "modelo respondió · in=" + text(data["usage"]["input"]) + (when cached > 0 then " (cache " + text(cached) + ")" otherwise "") + " out=" + text(data["usage"]["output"]) + " · acumulado " + text(data["total"]["input"] + data["total"]["output"]))
     when kind == "assistant"
         give write(sid, "SAY ", t + one_line(data, MAX_LINE))
     when kind == "tool_call"

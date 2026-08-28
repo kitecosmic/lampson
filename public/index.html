@@ -786,7 +786,7 @@ async function loadSessions() {
   for (const s of r.sessions) {
     const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
     d.querySelector('.tr').onclick = (ev) => { ev.stopPropagation(); openTrace(s.id); };
-    d.querySelector('.del').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del'), '¿borrar?', async () => { await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); }); };
+    d.querySelector('.del:not(.tr)').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del:not(.tr)'), '¿borrar?', async () => { await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); }); };
     box.appendChild(d);
   }
 }

@@ -107,6 +107,13 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
     assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
 
+test "usage: tokens de caché al 10% en el costo (DeepSeek y OpenAI)"
+    assert_eq(provider.cached_of({"prompt_tokens": 1000, "prompt_cache_hit_tokens": 800}), 800)
+    assert_eq(provider.cached_of({"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 600}}), 600)
+    assert_eq(provider.cached_of({"prompt_tokens": 1000}), 0)
+    assert_eq(provider.cost_tokens({"input": 1000, "output": 100, "cached": 800}), 380)
+    assert_eq(provider.cost_tokens({"input": 1000, "output": 100}), 1100)
+
 test "trace: una línea por evento, con tiempos, y tail"
     let sid be "test-trace"
     trace.user(sid, "hola" + "\n" + "mundo", "build", "ask", "m1")

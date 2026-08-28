@@ -77,11 +77,13 @@ export task delete(id)
         raise("invalid session id")
     when not exists(id)
         give "no existe " + id
-    let p be replace_text(path_of(id), "/", "\\")
-    when env("OS", "") == "Windows_NT"
-        run("cmd", ["/c", "del", "/q", p], 10)
-    otherwise
-        run("rm", ["-f", path_of(id)], 10)
+    -- la sesión y su traza (.lampson/trace/<id>.log + .last) se van juntas
+    let files be [path_of(id), ".lampson/trace/" + id + ".log", ".lampson/trace/" + id + ".last"]
+    each f in files
+        when env("OS", "") == "Windows_NT"
+            run("cmd", ["/c", "del", "/q", replace_text(f, "/", "\\")], 10)
+        otherwise
+            run("rm", ["-f", f], 10)
     give "borrada " + id
 
 -- Título = primer mensaje de usuario recortado.
