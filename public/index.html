@@ -289,6 +289,10 @@
     <h2 title="procesos que el agente arranca con la tool process"><span class="caret">▸</span>Procesos<span class="cnt" id="procCount"></span></h2>
     <div class="body" id="procs"></div>
   </section>
+  <section class="sec" data-sec="agents">
+    <h2 title="subagentes que el agente lanza con la tool delegate (en paralelo o en background); clic = log en vivo"><span class="caret">▸</span>Subagentes<span class="cnt" id="agentCount"></span></h2>
+    <div class="body" id="agentsBox"></div>
+  </section>
   <section class="sec" data-sec="memory">
     <h2 title="notas que el agente guarda sobre este proyecto con la tool memory"><span class="caret">▸</span>Memoria<span class="cnt" id="memCount"></span></h2>
     <div class="body" id="memory"></div>
@@ -338,16 +342,16 @@ let busy = false; let cfg = {};
 
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function md(src) { // Markdown mínimo: code fences, inline code, bold, headers, listas, párrafos
-  const blocks = []; src = String(src ?? '').replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, c) => { blocks.push('<pre><code>' + esc(c) + '</code></pre>'); return '' + (blocks.length - 1) + ''; });
+  const blocks = []; src = String(src ?? '').replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, c) => { blocks.push('<pre><code>' + esc(c) + '</code></pre>'); return '' + (blocks.length - 1) + ''; }); // marcador con chars de uso privado: NUNCA dígitos a secas (2026-08-27: se perdieron y todo número del texto salía undefined)
   let h = esc(src).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   h = h.split(/\n{2,}/).map(p => {
-    if (/^\d+$/.test(p.trim())) return p;
+    if (/^\d+$/.test(p.trim())) return p;
     if (/^#{1,3} /.test(p)) return '<h3>' + p.replace(/^#{1,3} /, '') + '</h3>';
     if (/^(\s*[-*] .*\n?)+$/.test(p)) return '<ul>' + p.split('\n').map(l => '<li>' + l.replace(/^\s*[-*] /, '') + '</li>').join('') + '</ul>';
     if (/^(\s*\d+[.)] .*\n?)+$/.test(p)) return '<ol>' + p.split('\n').map(l => '<li>' + l.replace(/^\s*\d+[.)] /, '') + '</li>').join('') + '</ol>';
     return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
   }).join('');
-  return h.replace(/(\d+)/g, (m, i) => blocks[+i]);
+  return h.replace(/(\d+)/g, (m, i) => blocks[+i]);
 }
 function add(cls, html) { showPane('log'); log.classList.remove('hero'); const d = document.createElement('div'); d.className = 'msg ' + cls; d.innerHTML = html; log.appendChild(d); $('#stage').scrollTop = $('#stage').scrollHeight; return d; }
 function describe(c) { const a = c.args || {}; if (c.name === 'bash') return '$ ' + (a.command || ''); if (c.name === 'delegate') return 'delegate → ' + a.agent + ': ' + String(a.brief || '').slice(0, 80); if (a.path) return c.name + ' ' + a.path; if (a.pattern) return c.name + ' ' + a.pattern; if (a.name) return c.name + ' ' + a.name; return c.name + ' ' + JSON.stringify(a); }
@@ -657,6 +661,37 @@ async function openProc(name) {
   loadProcs();
 }
 
+// ---- subagentes (delegate): lista + log vivo por hijo ----
+let agentOpen = null, agentTimer = null;
+async function loadAgents() {
+  let r; try { r = await (await fetch('/api/agents')).json(); } catch (e) { return; }
+  const box = $('#agentsBox'); box.innerHTML = '';
+  const list = (r.agents || []).slice().reverse(); const act = list.filter(a => a.status === 'running').length;
+  $('#agentCount').textContent = list.length ? (act ? `${act} ● · ${list.length}` : `${list.length}`) : ''; autoSec('agents', act > 0);
+  if (!list.length) { box.innerHTML = '<div class="p none">ninguno</div>'; return; }
+  for (const a of list) {
+    const run = a.status === 'running';
+    const d = document.createElement('div'); d.className = 'p' + (run ? ' run' : '') + (agentOpen === a.id ? ' active' : ''); d.title = `${a.status} · ${a.steps} pasos · ${a.tokens} tokens\n${a.brief}`;
+    d.innerHTML = `<span class="st"></span><span class="nm">${esc(a.id)}</span><span class="cm">${esc(String(a.brief || '').split('\n')[0].slice(0, 90))}</span>` + (run ? '<button title="parar: devuelve el informe parcial">■</button>' : '');
+    d.onclick = () => openAgent(a.id);
+    const b = d.querySelector('button'); if (b) b.onclick = async (ev) => { ev.stopPropagation(); await fetch('/api/agents/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id }) }); setTimeout(loadAgents, 1500); };
+    box.appendChild(d);
+  }
+}
+async function openAgent(id) {
+  agentOpen = id; procOpen = null; document.querySelectorAll('.row.active').forEach(x => x.classList.remove('active'));
+  const paint = async () => {
+    let r; try { r = await (await fetch('/api/agents/log?id=' + encodeURIComponent(id))).json(); } catch (e) { return false; }
+    const meta = (r.agent || {});
+    $('#vpath').textContent = 'subagente ' + id; $('#vmeta').textContent = meta.status === 'running' ? `● corriendo · ${meta.steps} pasos · log en vivo` : `○ ${meta.status || 'terminado'} · ${meta.steps ?? '?'} pasos · ${meta.tokens ?? '?'} tokens`;
+    const pre = $('#vbody'); pre.className = 'log'; pre.textContent = (r.log || '(sin salida todavía)') + (meta.status && meta.status !== 'running' && meta.text ? '\n\n── informe ──\n' + meta.text : '');
+    return meta.status === 'running';
+  };
+  const running = await paint(); showPane('viewer'); $('#stage').scrollTop = $('#stage').scrollHeight;
+  clearInterval(agentTimer); if (running) agentTimer = setInterval(async () => { if (agentOpen !== id || $('#viewer').style.display === 'none') { clearInterval(agentTimer); return; } const still = await paint(); if (!still) { clearInterval(agentTimer); loadAgents(); } }, 2000);
+  loadAgents();
+}
+
 // ---- sessions ----
 async function loadSessions() {
   let r; try { r = await (await fetch('/api/sessions')).json(); } catch (e) { return; }
@@ -743,7 +778,7 @@ async function send(message) {
       }
     }
   } catch (e) { add('meta', e.name === 'AbortError' ? '■ detenido por vos (el agente para en el próximo paso; el historial queda guardado hasta ahí)' : '‼ ' + esc(e.message)); }
-  thinking.remove(); aborter = null; setBusy(false); loadSessions(); loadTree(); loadProcs(); loadMemory();
+  thinking.remove(); aborter = null; setBusy(false); loadSessions(); loadTree(); loadProcs(); loadMemory(); loadAgents();
 }
 let pending = null;
 function handle(chunk, thinking) {
@@ -752,7 +787,8 @@ function handle(chunk, thinking) {
   const k = ev.kind, d = ev.data;
   if (k === 'session') { session = d; localStorage.setItem('lampson.session', d); }
   else if (k === 'assistant') add('assistant', md(d));
-  else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); }
+  else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); if (d.name === 'delegate') { setTimeout(loadAgents, 800); setTimeout(loadAgents, 4000); } }
+  else if (k === 'inbox') { add('meta', '✉ ' + esc(String(d).split('\n')[0].slice(0, 160))); loadAgents(); }
   else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out); const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }
   else if (k === 'approval_result') { const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === d.id); if (el) el.querySelector('.btns').innerHTML = d.approved ? '<span style="color:var(--str)">✓ permitido</span>' : (d.timeout ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
@@ -766,8 +802,9 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if ((!t && !attachments.length) || busy) return; $('#in').value = ''; send(t || '(imagen adjunta)'); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, 10000);
+setInterval(() => { if ($('#agentCount').textContent.includes('●') || busy) loadAgents(); }, 5000);
 </script>
 </body>
 </html>

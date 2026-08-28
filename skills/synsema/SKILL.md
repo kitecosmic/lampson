@@ -3,7 +3,7 @@ name: synsema
 description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, live processes / pseudo-terminals, and the runtime traps that cost hours. Load before touching any .syn file.
 ---
 
-# Synsema quick reference (v0.6.9)
+# Synsema quick reference (v0.6.10)
 
 > Curated 10 KB summary for the agent (the full reference is ~450 KB and lives in the user's editor
 > skill). Kept in sync by hand with each `synsema update`; if `synsema --version` is newer than the
@@ -55,10 +55,11 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   snapshot (latency = interval), `watch_close(w)`. Gate: `file("src")` + `file("src/*")`.
 
 ## Traps verified on this machine (do not fight them)
-- Agents: an `agent` body sees ONLY its `spawn X with a = …` parameters and the builtins — not the
-  module's `let` constants nor `c.*` imports ("Undefined variable"). `stop` only inside loops. Under
-  `synsema test` the swarm is not wired (`spawn` does nothing, `agents()` undefined) → test agents with
-  `synsema run`. `synsema run` joins agents at exit: a `while true` supervisor must be told to stop (bus/signal).
+- Agents: an `agent` body sees ONLY its `spawn X with a = …` parameters, the builtins and the TOP-LEVEL
+  tasks of the entry program — not the module's `let` constants, tasks nor `c.*` imports ("Undefined
+  variable"); a task passed through `spawn` arrives as text. Each agent needs its OWN `require` lines.
+  `stop` only inside loops. `synsema run`/`test` join agents at the end: a `while true` supervisor must be
+  told to stop (bus/signal). (≤ 0.6.9 `test` had no swarm; v0.6.10+ runs agents for real in `test`.)
 - `;` between statements is a lexer error (one statement per line).
 - `file("./*")` behaves like `"*"` (whole disk). Use a named dir scope: `file("workspace/*")`.
 - `http_post(url, MAP)` sends `text(map)`, not JSON → `http_post(url, json_encode(body), {"Content-Type": "application/json"})`.

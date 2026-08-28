@@ -199,9 +199,22 @@ serve on 8080
         when not matches(query.id, "[a-z]+-[0-9]+")
             give fail(400, "bad id")
         try
-            give {"id": query.id, "log": read_file(agents.DIR + "/" + query.id + ".log")}
+            let meta be nothing
+            try
+                set meta to json_decode(read_file(agents.DIR + "/" + query.id + ".json"))
+            recover e2
+                set meta to nothing
+            give {"id": query.id, "log": read_file(agents.DIR + "/" + query.id + ".log"), "agent": meta}
         recover err
             give fail(404, "no such sub-agent")
+
+    route "POST /api/agents/stop" requires auth
+        expect body {id: text}
+        let b be json of request
+        when not matches(b["id"], "[a-z]+-[0-9]+")
+            give fail(400, "bad id")
+        write_file(agents.DIR + "/" + b["id"] + ".stop", "stop")
+        give {"result": "stop requested for " + b["id"]}
 
     route "GET /api/proc" requires auth
         give {"processes": proc.list()}

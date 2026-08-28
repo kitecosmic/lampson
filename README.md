@@ -252,7 +252,7 @@ Things that cost time and are handled in the code:
   server-looking commands and points to `process`.
 - `localhost` may resolve to IPv6 while `serve` listens on IPv4 → use `127.0.0.1`.
 - Reserved words that bite: `reason task ask stop decide analyze generate show approve confirm`.
-- `and`/`or` do not short-circuit; a task named `run` shadows the builtin (and a module task named `read`/`write` breaks `read_file`/`write_file` calls in sibling tasks); modules cannot import `../`; `split(s, "")` is an error; `slice` past the end errors.
+- `and`/`or` short-circuit only from Synsema v0.6.10 (before, `contains(m, "k") and m["k"]` exploded — the code still nests `when` for that); a task named `run` shadows the builtin (and a module task named `read`/`write` breaks `read_file`/`write_file` calls in sibling tasks); modules cannot import `../`; `split(s, "")` is an error; `slice` past the end errors.
 
 ## License
 
