@@ -2,24 +2,45 @@
 --
 -- Un "modo" (plan, review…) NO es un estado del runtime: es un agente con un allow-list de tools
 -- restringido y un addendum al system prompt. Cambiar de modo = cambiar de perfil.
--- `delegate` corre un sub-loop con el perfil pedido, historial propio (no contamina el del padre)
--- y devuelve solo su informe final.
+--
+-- SUBAGENTES (2026-08-27, tomado de hermes/deepseek/opencode — ver notes/*.md):
+--   * `delegate(tasks=[{agent, brief, context}…])` corre N hijos EN PARALELO (parallel_map: hilos reales),
+--     cada uno con historial propio, perfil restringido y sin `delegate` (profundidad 1). Devuelve un
+--     informe consolidado: por hijo {status, steps, tokens, texto}. El texto es un SELF-REPORT: el padre
+--     debe verificar (rutas, tests) antes de darlo por bueno.
+--   * `background=true`: vuelve enseguida con el id; el hijo corre en un `agent` de Synsema (hilo con
+--     intérprete propio) y, al terminar, el resultado entra en el buzón del padre (loop.inbox_fn) como
+--     mensaje nuevo en su próximo paso — o, si el padre está idle en la terminal, como turno nuevo.
+--     Nunca se muta contexto pasado (prefix cache intacto).
+--   * Cada hijo deja un log vivo en .lampson/agents/<id>.log (tail -f / panel web) y su resultado en
+--     <id>.json. `delegate(action=list|steer|stop|result, id, message)`: steer = texto que el hijo ve en
+--     su próximo paso; stop = corta y devuelve lo parcial.
+--   * Permisos del hijo: NUNCA pregunta al humano (no tiene ask_fn): en modo ask/strict del padre corre en
+--     strict (peligroso → denegado con motivo, el hijo lo informa); en yolo hereda yolo.
 --
 -- Least-privilege en dos capas:
 --   1. el perfil recorta el ALLOW-LIST (plan no tiene write/edit/bash → el modelo ni las ve);
 --   2. cada tool sigue corriendo con call_tool (sus `require` ∩ programa).
--- Los subagentes NO tienen `delegate` → sin recursión.
+--
+-- MIGA runtime: un `agent` de Synsema NO ve las tasks ni imports de su módulo — solo sus parámetros de
+-- spawn, las builtins y las tasks TOP-LEVEL del programa de entrada. Por eso el hijo en background es
+-- `agent Child` → llama `lampson_subagent(spec_json)`, una task de UNA línea que chat.syn y web.syn
+-- definen a nivel top: `task lampson_subagent(spec) give agents.run_child_json(spec)`.
 
 use "./tools.syn" as tools
 use "./loop.syn" as loop
 use "./provider.syn" as provider
 use "./prompt.syn" as prompt
 
+export let DIR be ".lampson/agents"
+let MAX_TASKS be 6
+let PARALLEL be 4
+
 export let PROFILES be {
     "build": {
         "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "memory", "skill", "delegate"],
         "steps": 40,
-        "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context."
+        "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context; several independent questions can go in one delegate call (they run in parallel)."
     },
     "plan": {
         "tools": ["read", "ls", "find", "grep", "memory", "skill", "delegate"],
@@ -35,8 +56,15 @@ export let PROFILES be {
         "tools": ["read", "ls", "find", "grep", "memory", "skill"],
         "steps": 20,
         "addendum": "You are an EXPLORER: read-only. Locate the code relevant to the question (files, functions, line numbers) and report it concisely with paths and short excerpts. Do not propose changes."
+    },
+    "worker": {
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "bash", "process", "memory", "skill"],
+        "steps": 40,
+        "addendum": "You are a WORKER sub-agent: implement exactly the scoped task you were given (read, edit, run tests), then report what you changed (files) and how you verified it. Stay inside the scope; if something outside it is needed, report it instead of doing it."
     }
 }
+
+let CHILD_NOTE be "\n\n# Sub-agent rules\n- You are a delegated sub-agent. Your permission scope was fixed when you started and you cannot ask the user: a denied action stays denied — do not retry it; state the limitation in your report so the delegating agent can handle it.\n- Your final message is your REPORT: concrete, with paths and line numbers (or test output) the parent can verify. No questions."
 
 export task names()
     give keys(PROFILES)
@@ -86,44 +114,295 @@ export task env_info(cfg)
         "provider": cfg["provider"]
     }
 
--- ---------- delegate (tool) ----------
+-- ---------- estado de los hijos: archivos en .lampson/agents ----------
 
-export task delegate(agent, brief, context)
+task path(id, ext)
+    give DIR + "/" + id + "." + ext
+
+task read_json(id)
+    try
+        give json_decode(read_file(path(id, "json")))
+    recover err
+        give nothing
+
+task write_json(id, m)
+    write_file(path(id, "json"), json_encode(m))
+
+task one_line(s, max)
+    let t be replace_text(replace_text(text(s), "\r", ""), "\n", " ⏎ ")
+    when length(t) > max
+        give slice(t, 0, max) + "…"
+    give t
+
+-- log vivo del hijo (una línea por evento) — el padre y el humano lo pueden mirar mientras corre
+export task child_event(kind, data, tag)
+    require file(".lampson")
+    require file(".lampson/*")
+    let line be ""
+    when kind == "assistant"
+        set line to "[assistant] " + one_line(data, 600)
+    otherwise when kind == "tool_call"
+        set line to "⚙ " + data["name"] + " " + one_line(json_encode(data["args"]), 300)
+    otherwise when kind == "tool_result"
+        let out be data["output"]
+        let bad be starts_with(out, "ERROR") or starts_with(out, "DENIED")
+        set line to (when bad then "✗ " otherwise "✓ ") + one_line(out, 300)
+    otherwise when kind == "inbox"
+        set line to "[inbox] " + one_line(data, 300)
+    otherwise when kind == "error"
+        set line to "‼ " + one_line(data, 300)
+    otherwise when kind == "compact"
+        set line to "⧗ compact"
+    when line != ""
+        append_file(path(tag, "log"), line + "\n")
+        bus_publish("subagent." + tag, {"kind": kind, "line": line})
+
+-- buzón del hijo: steer (mensajes del padre) y stop
+export task child_inbox(step, tag)
+    require file(".lampson")
+    require file(".lampson/*")
+    let stop_now be false
+    try
+        read_file(path(tag, "stop"))
+        set stop_now to true
+    recover err
+        set stop_now to false
+    let msgs be []
+    try
+        let raw be trim(read_file(path(tag, "steer")))
+        when raw != ""
+            set msgs to ["[harness] Message from the delegating agent: " + raw]
+            write_file(path(tag, "steer"), "")
+    recover err
+        set msgs to msgs
+    when stop_now or length(msgs) > 0
+        give {"messages": msgs, "stop": stop_now}
+    give nothing
+
+-- buzón del padre: hijos en background terminados y no entregados
+export task parent_inbox(step, tag)
+    require file(".lampson")
+    require file(".lampson/*")
+    let msgs be []
+    each c in list_children()
+        when c["status"] != "running" and not c["delivered"]
+            set msgs to append(msgs, notice_text(c))
+            let m be read_json(c["id"])
+            set m["delivered"] to true
+            write_json(c["id"], m)
+    when length(msgs) > 0
+        give {"messages": msgs, "stop": false}
+    give nothing
+
+export task notice_text(c)
+    give "[harness] Sub-agent " + c["id"] + " (" + c["agent"] + ") finished: " + c["status"] + " · " + text(c["steps"]) + " steps · " + text(c["tokens"]) + " tokens.\nTask: " + one_line(c["brief"], 200) + "\nReport (self-report — verify before relying on it):\n" + c["text"]
+
+task ends_with(s, suffix)
+    when length(s) < length(suffix)
+        give false
+    give slice(s, length(s) - length(suffix), length(s)) == suffix
+
+-- [{id, agent, brief, status, steps, tokens, started, finished, delivered, text}]
+export task list_children()
+    require file(".lampson")
+    require file(".lampson/*")
+    let out be []
+    try
+        each e in list_dir(DIR)
+            when ends_with(e["name"], ".json")
+                let m be read_json(slice(e["name"], 0, length(e["name"]) - 5))
+                when m != nothing
+                    set out to append(out, m)
+    recover err
+        give []
+    give sort_by(out, (x) => x["started"])
+
+-- pedir a todos los hijos vivos que paren (salida de lampson)
+export task stop_all()
+    require file(".lampson")
+    require file(".lampson/*")
+    each c in list_children()
+        when c["status"] == "running"
+            write_file(path(c["id"], "stop"), "stop")
+
+-- ---------- correr UN hijo hasta el final (foreground: parallel_map · background: agent Child) ----------
+
+export task run_child(spec)
     require net
     require time
     require exec
     require env("LAMPSON_*")
     require env("OS")
-    require secret("LAMPSON_API_KEY")
+    require secret("LAMPSON_*")
     require file("workspace")
     require file("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
     require file("memory")
     require file("memory/*")
-    when not contains(PROFILES, agent)
-        raise("unknown agent '" + agent + "'; available: plan, review, explore")
-    when agent == "build"
-        raise("cannot delegate to 'build' (only read-only or review agents can be delegated): plan, review, explore")
-    let cfg be provider.config()
+    require file(".lampson")
+    require file(".lampson/*")
+    let id be spec["id"]
+    let agent be spec["agent"]
     let p be PROFILES[agent]
-    let system be {"role": "system", "content": prompt.build(env_info(cfg), p["addendum"])}
-    let full_brief be when context == nothing then brief otherwise brief + "\n\nContext from the delegating agent:\n" + context
+    let cfg be provider.config()
+    write_json(id, {"id": id, "agent": agent, "brief": spec["brief"], "status": "running", "steps": 0, "tokens": 0, "started": spec["started"], "finished": nothing, "delivered": not spec["background"], "text": "", "background": spec["background"]})
+    write_file(path(id, "log"), "# sub-agent " + id + " (" + agent + ")\n# " + one_line(spec["brief"], 300) + "\n")
+    let system be {"role": "system", "content": prompt.build(env_info(cfg), p["addendum"] + CHILD_NOTE)}
+    let full_brief be when spec["context"] == nothing or spec["context"] == "" then spec["brief"] otherwise spec["brief"] + "\n\nContext from the delegating agent:\n" + spec["context"]
     let messages be [system, {"role": "user", "content": full_brief}]
     let opts be loop.default_opts(tools.registry_subset(p["tools"]), tools.catalog_subset(p["tools"]), nothing)
     set opts to loop.with_steps(opts, p["steps"])
-    let result be loop.run_turn(cfg, messages, opts, nothing)
-    let head be "[" + agent + " agent · " + text(result["steps"]) + " steps · " + result["stopped"] + " · " + text(result["usage"]["input"] + result["usage"]["output"]) + " tokens]\n"
-    when result["text"] == ""
-        give head + "(the agent produced no final text)"
-    give head + result["text"]
+    set opts to loop.with_mode(opts, when spec["mode"] == "yolo" then "yolo" otherwise "strict")
+    set opts to loop.with_inbox(opts, child_inbox, id)
+    let result be nothing
+    try
+        set result to loop.run_turn(cfg, messages, opts, child_event)
+    recover err
+        set result to {"text": "", "steps": 0, "usage": {"input": 0, "output": 0}, "stopped": "error: " + text(err)}
+    let status be when result["stopped"] == "done" then "done" otherwise result["stopped"]
+    let tokens be result["usage"]["input"] + result["usage"]["output"]
+    let final be {"id": id, "agent": agent, "brief": spec["brief"], "status": status, "steps": result["steps"], "tokens": tokens, "started": spec["started"], "finished": now(), "delivered": not spec["background"], "text": when result["text"] == "" then "(the sub-agent produced no final text)" otherwise result["text"], "background": spec["background"]}
+    write_json(id, final)
+    append_file(path(id, "log"), "# finished: " + status + " · " + text(result["steps"]) + " steps · " + text(tokens) + " tokens\n")
+    bus_publish("subagent.done", {"id": id, "status": status})
+    give final
+
+-- entrada para el agente en background (recibe JSON porque los parámetros del spawn se copian como valores)
+export task run_child_json(spec_json)
+    require net
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    give run_child(json_decode(spec_json))
+
+-- hilo con intérprete propio: solo puede llamar tasks top-level del programa de entrada. Declara sus
+-- capabilities (un agente no hereda las del padre: sin `require` propio, env()/net fallan adentro).
+agent Child
+    require net
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    lampson_subagent(spec_json)
+
+task format_report(c)
+    give "[" + c["id"] + " · " + c["agent"] + " · " + c["status"] + " · " + text(c["steps"]) + " steps · " + text(c["tokens"]) + " tokens · log: " + DIR + "/" + c["id"] + ".log]\n" + c["text"]
+
+-- el hijo nunca pregunta: hereda yolo si el operador lo fijó (LAMPSON_PERMISSION); si no, strict
+task child_mode()
+    require env("LAMPSON_*")
+    give when lower(env("LAMPSON_PERMISSION", "ask")) == "yolo" then "yolo" otherwise "strict"
+
+-- id único aun para tasks creadas en el mismo milisegundo (índice dentro del batch)
+task new_id(agent, i)
+    give agent + "-" + slice(text(floor(now() * 1000)), 7, 13) + text(i)
+
+-- ---------- delegate (tool) ----------
+
+export task delegate(agent, brief, context, tasks, background, action, id, message)
+    require net
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let act be when action == nothing or action == "" then "spawn" otherwise action
+    when act == "list"
+        let lines be []
+        each c in list_children()
+            set lines to append(lines, c["id"] + "  " + c["status"] + "  " + text(c["steps"]) + " steps  " + one_line(c["brief"], 80))
+        give when length(lines) == 0 then "no sub-agents yet" otherwise join(lines, "\n")
+    when act == "steer" or act == "stop" or act == "result"
+        let c be when id == nothing then nothing otherwise read_json(id)
+        when c == nothing
+            raise("unknown sub-agent id '" + text(id) + "' (use action=list)")
+        when act == "result"
+            give format_report(c)
+        when c["status"] != "running"
+            give "sub-agent " + id + " already finished (" + c["status"] + "); use action=result to read its report"
+        when act == "stop"
+            write_file(path(id, "stop"), "stop")
+            give "stop requested for " + id + "; its partial report will arrive in your inbox"
+        when message == nothing or message == ""
+            raise("steer needs a message")
+        append_file(path(id, "steer"), message + "\n")
+        give "message queued for " + id + " (it reads it before its next step)"
+    -- spawn
+    let items be [{"agent": agent, "brief": brief, "context": context}]
+    when tasks != nothing
+        when length(tasks) > 0
+            set items to tasks
+    when length(items) > MAX_TASKS
+        raise("at most " + text(MAX_TASKS) + " tasks per delegate call")
+    let specs be []
+    let i be 0
+    each t in items
+        set i to i + 1
+        let a be when contains(t, "agent") then text(t["agent"]) otherwise ""
+        when not contains(PROFILES, a)
+            raise("unknown agent '" + a + "'; available: explore, plan, review, worker")
+        when a == "build"
+            raise("cannot delegate to 'build' (a child never gets `delegate`): use worker for scoped implementation, or explore/plan/review")
+        when not contains(t, "brief") or trim(text(t["brief"])) == ""
+            raise("every task needs a brief")
+        set specs to append(specs, {"id": new_id(a, i), "agent": a, "brief": text(t["brief"]), "context": when contains(t, "context") then text(t["context"]) otherwise "", "mode": child_mode(), "background": background == true, "started": now()})
+    when background == true
+        let lines be []
+        each sp in specs
+            write_json(sp["id"], {"id": sp["id"], "agent": sp["agent"], "brief": sp["brief"], "status": "running", "steps": 0, "tokens": 0, "started": sp["started"], "finished": nothing, "delivered": false, "text": "", "background": true})
+            write_file(path(sp["id"], "log"), "# starting…\n")
+            spawn Child with spec_json = json_encode(sp)
+            set lines to append(lines, "started sub-agent " + sp["id"] + " (" + sp["agent"] + ") in the background · live log: " + DIR + "/" + sp["id"] + ".log")
+        give join(lines, "\n") + "\nYou will receive each report automatically as a new message when it finishes — keep working on independent steps; do NOT poll or sleep. delegate(action=steer|stop, id=…) to redirect or cut it."
+    let results be parallel_map(run_child, specs, PARALLEL)
+    let parts be []
+    each c in results
+        set parts to append(parts, format_report(c))
+    give join(parts, "\n\n") + "\n\n(Reports are self-reports: verify paths, diffs and test results before relying on them.)"
 
 export let DELEGATE_SPEC be {
     "name": "delegate",
-    "description": "Run a sub-agent with its own fresh context and a restricted toolset, and get back only its final report. Agents: `explore` (read-only; find where things are), `plan` (read-only; produce an implementation plan), `review` (read-only files + can run tests/commands; find bugs). Use it to keep your own context small: e.g. delegate a broad codebase search to `explore` and then act on its report. Give a self-contained task description; the sub-agent does not see your conversation.",
+    "description": "Run sub-agents: each gets its own fresh context, a restricted toolset and returns only its final report (it does not see your conversation — give it a self-contained brief). Agents: `explore` (read-only; find where things are), `plan` (read-only; implementation plan), `review` (read-only files, can run tests/commands; find bugs), `worker` (can edit files and run commands: a scoped implementation task). Several tasks in one call run IN PARALLEL and come back consolidated — use that for independent questions or independent changes in different files. background=true returns immediately with ids; each report arrives later as a message in your context (do not poll). action=list|steer|stop|result manages background sub-agents (steer sends a message the child reads before its next step; stop returns its partial report). Reports are SELF-REPORTS: verify what matters (read the file, run the test) before telling the user it is done. Sub-agents cannot ask the user and cannot delegate.",
     "parameters": {"type": "object", "properties": {
-        "agent": {"type": "string", "enum": ["explore", "plan", "review"]},
+        "tasks": {"type": "array", "description": "Batch: [{agent, brief, context?}] — they run in parallel (max 6)", "items": {"type": "object", "properties": {
+            "agent": {"type": "string", "enum": ["explore", "plan", "review", "worker"]},
+            "brief": {"type": "string"},
+            "context": {"type": "string"}
+        }, "required": ["agent", "brief"]}},
+        "agent": {"type": "string", "enum": ["explore", "plan", "review", "worker"], "description": "Single task form (alternative to tasks)"},
         "brief": {"type": "string", "description": "Self-contained instructions for the sub-agent"},
-        "context": {"type": "string", "description": "Optional extra context (relevant paths, findings so far)"}
-    }, "required": ["agent", "brief"]}
+        "context": {"type": "string", "description": "Optional extra context (relevant paths, findings so far)"},
+        "background": {"type": "boolean", "description": "true: return immediately; reports arrive later as messages"},
+        "action": {"type": "string", "enum": ["spawn", "list", "steer", "stop", "result"], "description": "default spawn"},
+        "id": {"type": "string", "description": "steer/stop/result: the sub-agent id"},
+        "message": {"type": "string", "description": "steer: text the sub-agent will read before its next step"}
+    }}
 }

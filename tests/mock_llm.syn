@@ -91,6 +91,17 @@ serve on 8765
             when tools_seen == 1
                 give reply_tools([tool_call("edit", {"path": "scratch_mock.txt", "old_string": "hola", "new_string": "chau"}), tool_call("read", {"path": "scratch_mock.txt"})])
             give reply_text("final escribe · msgs=" + text(length(msgs)) + " · read said: " + msgs[length(msgs) - 1]["content"])
+        -- "delega": dos explore en paralelo (cada hijo recibe "ls" como brief → guion ls) → final con los informes
+        when starts_with(q, "delega-bg")
+            when tools_seen == 0
+                give reply_tools([tool_call("delegate", {"agent": "explore", "brief": "ls", "background": true})])
+            give reply_text("final delega-bg · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        when starts_with(q, "delega")
+            when tools_seen == 0
+                give reply_tools([tool_call("delegate", {"tasks": [{"agent": "explore", "brief": "ls"}, {"agent": "explore", "brief": "ls otra vez"}]})])
+            give reply_text("final delega · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 400))
+        when starts_with(q, "[harness] sub-agent")
+            give reply_text("final notice · recibí el informe del subagente: " + slice(q, 0, 120))
         when starts_with(q, "peligro")
             when tools_seen == 0
                 give reply_tools([tool_call("bash", {"command": "rm -rf /tmp/x"})])

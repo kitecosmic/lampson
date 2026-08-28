@@ -6,8 +6,13 @@
 -- run_turn(cfg, messages, opts, on_event) → {messages, text, steps, usage, stopped}
 --   cfg      : provider.config()
 --   messages : historial canónico (ver provider.syn); el turno del usuario YA está agregado
---   opts     : {max_steps, budget_tokens, permission_mode, ask_fn, registry, catalog}
---   on_event : task(kind, data) — "assistant", "tool_call", "tool_result", "tool_denied", "error", "usage", "compact"
+--   opts     : {max_steps, budget_tokens, permission_mode, ask_fn, registry, catalog, inbox_fn, tag}
+--   on_event : task(kind, data, tag) — "assistant", "tool_call", "tool_result", "tool_denied", "error", "usage", "compact"
+--              `tag` = opts["tag"]: "" para el agente principal, el id del subagente para sus eventos
+--   inbox_fn : task(step, tag) → {messages: [texto…], stop: bool} | nothing — se consulta ANTES de cada llamada
+--              al modelo. Es el buzón: al padre le trae los avisos de subagentes terminados; al hijo, los
+--              `steer` del padre y la orden de `stop` (que corta el turno devolviendo lo parcial).
+--              Los avisos entran como mensajes `user` nuevos, nunca se muta el contexto pasado (cache intacto).
 --
 -- Garantías (las mismas que documenta llm.md de Synsema):
 --   * Solo se ejecutan tools del allow-list (registry). Un nombre alucinado → error devuelto al modelo.
@@ -20,9 +25,9 @@ use "./permission.syn" as permission
 
 let MAX_ERRORS_PER_TURN be 8
 
-task emit(on_event, kind, data)
+task emit(on_event, kind, data, tag)
     when on_event != nothing
-        call(on_event, {"kind": kind, "data": data})
+        call(on_event, {"kind": kind, "data": data, "tag": tag})
 
 -- Imágenes adjuntas (base64 en m["images"]) fuera del texto: para contar tokens y para el resumen
 -- de compaction se reemplazan por una marca; cada imagen se estima en ~1000 tokens.
@@ -106,24 +111,25 @@ task tool_result_msg(tc, content)
 
 -- Ejecuta UNA tool call: permisos → allow-list → call_tool → resultado como texto.
 task execute(tc, opts, on_event)
+    let tag be opts["tag"]
     let name be tc["name"]
     let args be tc["args"]
     let registry be opts["registry"]
     when not contains(registry, name)
-        emit(on_event, "tool_denied", {"call": tc, "reason": "unknown tool"})
+        emit(on_event, "tool_denied", {"call": tc, "reason": "unknown tool"}, tag)
         give "ERROR: unknown tool '" + name + "'. Available: " + join(keys(registry), ", ")
     when contains(args, "_parse_error")
         give "ERROR: could not parse tool arguments as JSON: " + text(args["_parse_error"])
     let verdict be permission.evaluate(name, args, opts["permission_mode"])
     when verdict["decision"] == "deny"
-        emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]})
+        emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]}, tag)
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."
     when verdict["decision"] == "ask"
         let approved be false
         when opts["ask_fn"] != nothing
             set approved to call(opts["ask_fn"], {"name": name, "args": args, "why": verdict["reason"]})
         when not approved
-            emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"})
+            emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
     try
         let result be call_tool(registry[name], args)
@@ -146,12 +152,23 @@ export task run_turn(cfg, messages, opts, on_event)
     let catalog be opts["catalog"]
     let max_steps be opts["max_steps"]
     let budget be opts["budget_tokens"]
+    let tag be opts["tag"]
     -- compaction preventiva
     when estimate_tokens(msgs) > opts["compact_at_tokens"]
-        emit(on_event, "compact", {"before": estimate_tokens(msgs)})
+        emit(on_event, "compact", {"before": estimate_tokens(msgs)}, tag)
         set msgs to compact(cfg, msgs, 6)
     while steps < max_steps and spent <= budget
         set steps to steps + 1
+        -- buzón: avisos de subagentes (padre) / steer y stop (hijo)
+        when opts["inbox_fn"] != nothing
+            let inb be call(opts["inbox_fn"], {"step": steps, "tag": tag})
+            when inb != nothing
+                each m in inb["messages"]
+                    emit(on_event, "inbox", m, tag)
+                    set msgs to append(msgs, {"role": "user", "content": m})
+                when inb["stop"]
+                    emit(on_event, "error", "stopped by the parent agent", tag)
+                    give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": "stopped"}
         -- último paso: sin tools + instrucción explícita → respuesta final (truco de llm.md: catálogo vacío)
         let last_step be steps == max_steps
         let cat be when last_step then [] otherwise catalog
@@ -159,23 +176,23 @@ export task run_turn(cfg, messages, opts, on_event)
             set msgs to append(msgs, {"role": "user", "content": "[harness] Step limit reached for this turn (" + text(max_steps) + " tool calls). Do NOT call tools now. Reply with a short status: what you completed, what is verified, and exactly what remains to do next. The user can say 'continue' to resume."})
         let r be provider.chat_retry(cfg, msgs, cat, 3)
         when r["error"] != nothing
-            emit(on_event, "error", r["error"])
+            emit(on_event, "error", r["error"], tag)
             set stopped to "error: " + r["error"]
             set final_text to ""
             give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": stopped}
         set usage to {"input": usage["input"] + r["usage"]["input"], "output": usage["output"] + r["usage"]["output"]}
         set spent to spent + r["usage"]["input"] + r["usage"]["output"]
-        emit(on_event, "usage", {"step": steps, "usage": r["usage"], "total": usage})
+        emit(on_event, "usage", {"step": steps, "usage": r["usage"], "total": usage}, tag)
         let clean_text be strip_raw_tool_calls(r["text"])
         let assistant be {"role": "assistant", "content": clean_text, "tool_calls": r["tool_calls"]}
         set msgs to append(msgs, assistant)
         when clean_text != ""
-            emit(on_event, "assistant", clean_text)
+            emit(on_event, "assistant", clean_text, tag)
         when length(r["tool_calls"]) == 0
             set final_text to clean_text
             give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": when last_step then "max_steps" otherwise "done"}
         each tc in r["tool_calls"]
-            emit(on_event, "tool_call", tc)
+            emit(on_event, "tool_call", tc, tag)
             -- doom loop: la misma tool con los mismos args 3 veces seguidas → cortar
             let sig be json_encode({"n": tc["name"], "a": tc["args"]})
             set repeats to when sig == last_sig then repeats + 1 otherwise 1
@@ -183,18 +200,18 @@ export task run_turn(cfg, messages, opts, on_event)
             let out be ""
             when repeats >= 3
                 set out to "ERROR: you already called " + tc["name"] + " with these exact arguments " + text(repeats) + " times in a row. The result will not change; try a different approach or report the problem."
-                emit(on_event, "tool_denied", {"call": tc, "reason": "doom loop (" + text(repeats) + "x)"})
+                emit(on_event, "tool_denied", {"call": tc, "reason": "doom loop (" + text(repeats) + "x)"}, tag)
             otherwise
                 set out to execute(tc, opts, on_event)
             when starts_with(out, "ERROR") or starts_with(out, "DENIED")
                 set errors to errors + 1
-            emit(on_event, "tool_result", {"call": tc, "output": out})
+            emit(on_event, "tool_result", {"call": tc, "output": out}, tag)
             set msgs to append(msgs, tool_result_msg(tc, out))
         when errors >= MAX_ERRORS_PER_TURN
             set msgs to append(msgs, {"role": "user", "content": "[harness] Too many tool errors this turn. Stop calling tools and report what happened."})
             let fin be provider.chat_retry(cfg, msgs, [], 2)
             set msgs to append(msgs, {"role": "assistant", "content": fin["text"], "tool_calls": []})
-            emit(on_event, "assistant", fin["text"])
+            emit(on_event, "assistant", fin["text"], tag)
             give {"messages": msgs, "text": fin["text"], "steps": steps, "usage": usage, "stopped": "too_many_errors"}
     set stopped to when spent > budget then "budget" otherwise "max_steps"
     give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": stopped}
@@ -209,27 +226,27 @@ export task default_opts(registry, catalog, ask_fn)
         "compact_at_tokens": number(env("LAMPSON_COMPACT_AT", "80000")),
         "ask_fn": ask_fn,
         "registry": registry,
-        "catalog": catalog
+        "catalog": catalog,
+        "inbox_fn": nothing,
+        "tag": ""
     }
+
+-- copia de opts con una clave cambiada (los maps son valores: no hay mutación compartida)
+task with_key(opts, key, value)
+    let out be {}
+    each k in keys(opts)
+        set out[k] to opts[k]
+    set out[key] to value
+    give out
 
 export task with_mode(opts, mode)
-    give {
-        "max_steps": opts["max_steps"],
-        "budget_tokens": opts["budget_tokens"],
-        "permission_mode": mode,
-        "compact_at_tokens": opts["compact_at_tokens"],
-        "ask_fn": opts["ask_fn"],
-        "registry": opts["registry"],
-        "catalog": opts["catalog"]
-    }
+    give with_key(opts, "permission_mode", mode)
 
 export task with_steps(opts, n)
-    give {
-        "max_steps": floor(n),
-        "budget_tokens": opts["budget_tokens"],
-        "permission_mode": opts["permission_mode"],
-        "compact_at_tokens": opts["compact_at_tokens"],
-        "ask_fn": opts["ask_fn"],
-        "registry": opts["registry"],
-        "catalog": opts["catalog"]
-    }
+    give with_key(opts, "max_steps", floor(n))
+
+export task with_inbox(opts, inbox_fn, tag)
+    give with_key(with_key(opts, "inbox_fn", inbox_fn), "tag", tag)
+
+export task with_ask(opts, ask_fn)
+    give with_key(opts, "ask_fn", ask_fn)

@@ -13,7 +13,7 @@ fi
 rm -rf "$tmp"; mkdir -p "$tmp"; : > "$tmp/.lampson-test-workspace"
 ln -s "$tmp" "$mount"
 restore() {
-    rm -rf "$here"/memory/lampson-test-workspace-* "$here"/.lampson/sessions/test-*.json "$here"/.lampson/proc/t_demo.*
+    rm -rf "$here"/memory/lampson-test-workspace-* "$here"/.lampson/sessions/test-*.json "$here"/.lampson/proc/t_demo.* "$here"/.lampson/agents/explore-*
     rm -f "$mount"; [ -n "$previous" ] && [ -d "$previous" ] && ln -s "$previous" "$mount"; true
 }
 trap restore EXIT
@@ -23,4 +23,6 @@ LAMPSON_WORKSPACE="$tmp" synsema test unit.test.syn
 code=$?
 # procesos gestionados: supervisor-agente + proc_spawn — corre con `run` (el swarm no existe bajo `test`)
 LAMPSON_WORKSPACE="$tmp" synsema run proc_test.syn || code=1
+# subagentes (delegate) contra el mock LLM (el script lo arranca en :8765)
+LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run agents_test.syn || code=1
 exit "${code:-0}"

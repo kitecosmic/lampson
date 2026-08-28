@@ -27,9 +27,12 @@ description: How this harness works — tools, workspace mount, permissions, age
 - `find` is a simple glob (`*.ts`, `test_*`, `*config*`), `grep` is regex by default (`regex=false` for literals).
 - Calling the same tool with identical args 3 times in a row is blocked (doom loop) — change approach.
 - After 8 tool errors in a turn the harness asks you to stop and report.
-- `delegate(agent, brief)` runs a sub-agent (`explore` / `plan` / `review`) with a fresh context and
-  returns only its report. Use it for broad searches or an independent review; give it a
-  self-contained brief — it does not see this conversation.
+- `delegate(tasks=[{agent, brief, context}…])` runs sub-agents (`explore` / `plan` / `review` /
+  `worker`) IN PARALLEL, each with a fresh context and a restricted toolset, and returns their reports
+  consolidated. `background=true` returns ids at once and each report arrives later as a message in
+  your context (do not poll); `action=list|steer|stop|result` manages them. Give a self-contained
+  brief — a child does not see this conversation, cannot ask the user and cannot delegate. Reports are
+  self-reports: verify before claiming success. Live logs: `.lampson/agents/<id>.log`.
 
 ## When you need the USER to run something
 The user can run any command themselves from the chat by prefixing it with `!` — e.g. `!npm run dev`,

@@ -11,8 +11,10 @@ language itself — and every step is visible, in the terminal or in a web UI.
   them. File tools can only touch the mounted workspace (absolute paths, `..`, sibling dirs → denied).
 - **Permissions you control**: `ask` (approve dangerous commands, in the terminal or with a button in
   the web UI), `yolo`, `strict`. Destructive system commands are always blocked.
-- **Agents**: `build` (edits), `plan` (read-only), `review` (runs tests, never edits), `explore`;
-  `delegate` runs a sub-agent with its own context.
+- **Agents**: `build` (edits), `plan` (read-only), `review` (runs tests, never edits), `explore`,
+  `worker` (scoped implementation). **Sub-agents**: `delegate` runs several of them *in parallel*
+  (real threads) with their own context and a restricted toolset, or in the *background* — the report
+  lands in the parent's inbox when it finishes; every child has a live log (`/agents`, web panel).
 - **Managed processes**: the agent starts servers with `process`, and the new log lines of every
   server are appended to each command result — it *sees its own console*. Live logs in the web UI.
 - **Skills**: Markdown procedures the model loads on demand (yours in `workspace/skills/`).
@@ -144,7 +146,7 @@ lib/
   tools/<x>.syn      one tool per file: read write edit ls find grep bash process skill
   tools/common.sh    shared shell helpers (kill process trees on Windows/unix)
   tools/proc.sh        ports, command line of a pid, kill a foreign pid tree (the managed processes are native)
-  agents.syn         profiles (build / plan / review / explore) + `delegate`
+  agents.syn         profiles (build / plan / review / explore / worker) + `delegate` (sub-agents: batch, background, inbox, steer/stop)
   permission.syn     evaluate(tool, args, mode) → allow | deny | ask
   prompt.syn         system prompt (rules, tools, environment, skills index, AGENTS.md of the project)
   skills.syn         SKILL.md index (harness / project / local)
@@ -168,6 +170,24 @@ while steps < max_steps and tokens <= budget
         out = call_tool(registry[name], args)          -- least-privilege; errors go back as text
         messages += tool(id, out)                      -- everything is kept, including failures
 ```
+
+### Sub-agents
+
+`delegate(tasks=[{agent, brief, context}…], background?)` — or `action=list|steer|stop|result`.
+
+- **Batch, in parallel**: each task runs `loop.run_turn` in its own thread (`parallel_map`, 4 at a time,
+  max 6 per call) with a fresh history, the profile's toolset and *no* `delegate` (depth 1). The parent
+  gets one consolidated report; every child writes `.lampson/agents/<id>.log` (tail it) and `<id>.json`.
+- **Background**: returns the ids at once; the child runs inside a Synsema `agent` (own interpreter) and
+  its report enters the parent's **inbox**: `loop.run_turn` checks `opts.inbox_fn` before every model call
+  and appends pending reports as new `user` messages (never mutating past context — prefix cache intact);
+  in the terminal an idle parent gets an automatic turn (max 3 in a row, reset by real input).
+  `steer` = text the child reads before its next step; `stop` = cut and return the partial report.
+- **Permissions**: a child never asks the user — it runs `strict` (dangerous → denied with the reason;
+  it reports the limitation) or `yolo` if `LAMPSON_PERMISSION=yolo`. Reports are self-reports: the
+  prompt tells the parent to verify (read the file, run the test) before claiming success.
+- Runtime detail: a Synsema `agent` only sees its spawn parameters, the builtins and the *top-level* tasks
+  of the entry program, so `chat.syn`/`web.syn` define `task lampson_subagent(spec)` as the child's door.
 
 ### Adding a tool
 

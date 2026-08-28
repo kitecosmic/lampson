@@ -1,0 +1,126 @@
+-- agents_test.syn — subagentes (delegate): batch en paralelo, background con aviso en el buzón, list/result.
+-- Corre con `synsema run` (el swarm no existe bajo `synsema test`) contra el mock LLM (tests/mock_llm.syn),
+-- que este script arranca solo en :8765. Lo lanza tests/run.ps1 / run.sh con:
+--   LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x
+-- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
+require net
+require time
+require exec
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_*")
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file("memory")
+require file("memory/*")
+require file(".lampson")
+require file(".lampson/*")
+use "./lib/agents.syn" as agents
+use "./lib/loop.syn" as loop
+use "./lib/provider.syn" as provider
+use "./lib/prompt.syn" as prompt
+
+-- puerta de entrada del hijo en background (igual que en chat.syn / web.syn)
+task lampson_subagent(spec_json)
+    give agents.run_child_json(spec_json)
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+-- mock LLM
+let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
+let up be false
+let tries be 0
+while not up and tries < 40
+    sleep(0.25)
+    set tries to tries + 1
+    try
+        let r be http_get("http://127.0.0.1:8765/v1/models")
+        set up to r["status"] > 0
+    recover err
+        set up to false
+check(up, "mock LLM arriba en :8765")
+
+let cfg be provider.config()
+check(contains(cfg["base_url"], "8765"), "provider apunta al mock: " + text(cfg["base_url"]))
+let REG be agents.registry_for("build")
+
+print("delegate batch: dos explore en paralelo, informe consolidado")
+let t0 be now()
+let out be call_tool(REG["delegate"], {"tasks": [{"agent": "explore", "brief": "ls"}, {"agent": "explore", "brief": "ls otra vez", "context": "solo el raíz"}]})
+check(contains(out, "explore-") and contains(out, "final ls"), "informe con ids y texto final: " + slice(out, 0, 200))
+check(length(split(out, "[explore-")) == 3, "dos informes")
+check(contains(out, "self-reports"), "advertencia self-report")
+let kids be agents.list_children()
+check(length(kids) >= 2, "list_children ve los hijos: " + text(length(kids)))
+check(kids[0]["status"] == "done" and kids[0]["delivered"], "hijo foreground: done y delivered")
+let log be read_file(agents.DIR + "/" + kids[0]["id"] + ".log")
+check(contains(log, "⚙ ls") and contains(log, "# finished: done"), "log vivo del hijo con tool call y cierre")
+check(agents.parent_inbox(0, "") == nothing, "sin avisos pendientes tras un batch foreground")
+
+print("delegate: validaciones")
+let bad1 be false
+try
+    call_tool(REG["delegate"], {"agent": "build", "brief": "x"})
+recover err
+    set bad1 to true
+check(bad1, "no se puede delegar a build")
+let bad2 be false
+try
+    call_tool(REG["delegate"], {"agent": "explore", "brief": ""})
+recover err
+    set bad2 to true
+check(bad2, "brief vacío → error")
+check(not contains(agents.registry_for("explore"), "delegate") and not contains(agents.registry_for("worker"), "delegate"), "los hijos no tienen delegate (profundidad 1)")
+
+print("delegate background: vuelve enseguida, el informe llega por el buzón del padre")
+let bg be call_tool(REG["delegate"], {"agent": "explore", "brief": "ls", "background": true})
+check(contains(bg, "started sub-agent explore-") and contains(bg, "do NOT poll"), "respuesta inmediata: " + slice(bg, 0, 120))
+let notice be nothing
+set tries to 0
+while notice == nothing and tries < 60
+    sleep(0.5)
+    set tries to tries + 1
+    set notice to agents.parent_inbox(0, "")
+check(notice != nothing, "aviso en el buzón (" + text(tries * 0.5) + "s)")
+when notice != nothing
+    let m be notice["messages"][0]
+    check(contains(m, "[harness] Sub-agent explore-") and contains(m, "final ls"), "aviso con id e informe: " + slice(m, 0, 160))
+    check(agents.parent_inbox(0, "") == nothing, "el aviso se entrega una sola vez")
+    check(contains(call_tool(REG["delegate"], {"action": "list"}), "explore-"), "action=list")
+    let last be agents.list_children()
+    let bgid be last[length(last) - 1]["id"]
+    check(contains(call_tool(REG["delegate"], {"action": "result", "id": bgid}), "final ls"), "action=result relee el informe")
+    check(contains(call_tool(REG["delegate"], {"action": "stop", "id": bgid}), "already finished"), "stop sobre uno terminado avisa")
+
+print("el padre, vía loop.run_turn con el mock: delega → informe → texto final; y el aviso entra como turno")
+let system be {"role": "system", "content": prompt.build(agents.env_info(cfg), agents.addendum_for("build"))}
+let opts be loop.default_opts(REG, agents.catalog_for("build"), nothing)
+set opts to loop.with_inbox(opts, agents.parent_inbox, "")
+let r1 be loop.run_turn(cfg, [system, {"role": "user", "content": "delega"}], opts, nothing)
+check(contains(r1["text"], "final delega") and contains(r1["text"], "explore-"), "turno del padre con delegate batch: " + slice(r1["text"], 0, 160))
+let r2 be loop.run_turn(cfg, [system, {"role": "user", "content": "delega-bg"}], opts, nothing)
+check(contains(r2["text"], "final delega-bg"), "turno del padre con delegate background: " + slice(r2["text"], 0, 120))
+set tries to 0
+let pending be false
+while not pending and tries < 60
+    sleep(0.5)
+    set tries to tries + 1
+    each c in agents.list_children()
+        when c["background"] and c["status"] != "running" and not c["delivered"]
+            set pending to true
+check(pending, "el hijo background terminó sin entregar todavía")
+let r3 be loop.run_turn(cfg, r2["messages"] + [{"role": "user", "content": "otra cosa"}], opts, nothing)
+check(contains(r3["text"], "final notice"), "el buzón inyectó el aviso antes del siguiente paso del padre: " + slice(r3["text"], 0, 120))
+
+proc_close(mock)
+when length(failures) > 0
+    raise(text(length(failures)) + " fallos en agents_test")
+print("agents_test: todo OK")

@@ -90,8 +90,14 @@ task boot(profile, mode, ask_fn, pname, model)
     let p be when contains(agents.PROFILES, profile) then profile otherwise "build"
     let opts be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_fn)
     set opts to loop.with_steps(opts, agents.steps_for(p))
+    set opts to loop.with_inbox(opts, agents.parent_inbox, "")
     set opts to loop.with_mode(opts, mode)
     give {"cfg": cfg, "system": {"role": "system", "content": prompt.build(agents.env_info(cfg), agents.addendum_for(p))}, "opts": opts, "profile": p}
+
+-- Subagente en background: `agent Child` (lib/agents.syn) solo puede llamar tasks TOP-LEVEL de este
+-- programa; esta es su puerta de entrada. Bajo serve el agente sobrevive al request que lo lanzó.
+task lampson_subagent(spec_json)
+    give agents.run_child_json(spec_json)
 
 serve on 8080
     max_streams 50
@@ -184,6 +190,19 @@ serve on 8080
             give fail(400, "name required")
         give {"name": query.name, "content": memo.note_read(query.name)}
 
+    route "GET /api/agents" requires auth
+        give {"agents": agents.list_children()}
+
+    route "GET /api/agents/log" requires auth
+        when not contains(query, "id")
+            give fail(400, "id required")
+        when not matches(query.id, "[a-z]+-[0-9]+")
+            give fail(400, "bad id")
+        try
+            give {"id": query.id, "log": read_file(agents.DIR + "/" + query.id + ".log")}
+        recover err
+            give fail(404, "no such sub-agent")
+
     route "GET /api/proc" requires auth
         give {"processes": proc.list()}
 
@@ -229,8 +248,8 @@ serve on 8080
         let pname be when contains(b, "provider") then lower(text(b["provider"])) otherwise ""
         let pmodel be when contains(b, "model") then text(b["model"]) otherwise ""
         stream
-            task emit(kind, data)
-                send {"kind": kind, "data": data} as "event"
+            task emit(kind, data, tag)
+                send {"kind": kind, "data": data, "tag": tag} as "event"
             -- aprobación humana desde la UI: pregunta por SSE y espera la respuesta (o el timeout)
             task ask_web(name, args, why)
                 let id be text(floor(now() * 1000)) + "-" + name

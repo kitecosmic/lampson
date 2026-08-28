@@ -137,6 +137,8 @@ test "perfiles: plan no ve write/edit/bash; subagentes no ven delegate"
     assert(not contains(plan, "write") and not contains(plan, "bash"))
     let review be agents.registry_for("review")
     assert(contains(review, "bash") and not contains(review, "edit") and not contains(review, "delegate"))
+    assert(contains(agents.registry_for("worker"), "edit") and not contains(agents.registry_for("worker"), "delegate"))
+    assert(contains(agents.PROFILES, "worker") and length(agents.names()) == 5)
     assert_eq(length(agents.catalog_for("build")), length(tools.CATALOG) + 1)
 
 test "skills: índice, sección de prompt, carga por tool y prioridad workspace > harness"

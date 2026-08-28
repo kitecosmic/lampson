@@ -94,11 +94,14 @@ task summarize(name, out)
         give join(shown, "\n      ") + extra
     give first_line(out, 120)
 
-task on_event(kind, data)
+-- tag = "" para el agente principal; los subagentes en background NO pasan por acá (escriben su log)
+task on_event(kind, data, tag)
     when kind == "assistant"
         print("")
         print(data)
         print("")
+    otherwise when kind == "inbox"
+        print("  " + cyan("✉ " + first_line(data, 140)))
     otherwise when kind == "tool_call"
         print("  " + yellow("⚙ " + permission.describe_call(data["name"], data["args"])))
     otherwise when kind == "tool_result"
@@ -146,6 +149,7 @@ let COMMANDS be [
     ["/kill", "<pid>", "matar un proceso NO gestionado (p.ej. un servidor huérfano que ves en /procs)"],
     ["/memory", "[nombre]", "notas que el agente guardó sobre ESTE proyecto (memory/<proyecto>/*.md); con nombre, la muestra"],
     ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
+    ["/agents", "", "subagentes lanzados con delegate: estado, pasos y log de cada uno"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
     ["/new", "", "empezar una sesión nueva (historial vacío)"],
     ["/sessions", "", "listar sesiones guardadas"],
@@ -320,7 +324,13 @@ task system_for(p)
 task opts_for(p, mode)
     let o be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_user)
     set o to loop.with_steps(o, agents.steps_for(p))
+    set o to loop.with_inbox(o, agents.parent_inbox, "")
     give loop.with_mode(o, mode)
+
+-- Subagente en background: `agent Child` (lib/agents.syn) corre en un hilo con intérprete propio y solo
+-- puede llamar tasks TOP-LEVEL de este programa — esta es su única puerta de entrada al harness.
+task lampson_subagent(spec_json)
+    give agents.run_child_json(spec_json)
 
 -- !comando del usuario en un pseudo-terminal: la salida se ve EN VIVO y, si el proceso se queda esperando
 -- (prompt y/N, contraseña, REPL, `npm init`…), lo que escribas se le manda como teclas + Enter.
@@ -395,11 +405,32 @@ flush()
 let total_usage be {"input": 0, "output": 0}
 let mode be opts["permission_mode"]
 let running be true
+-- turnos automáticos por avisos de subagentes en background (padre idle): tope 3 seguidos, se
+-- reinicia con input humano real (anti bucle auto-excitado, deepseek-harness)
+let followups be 0
 while running
-    let line be read_line("\n" + (when length(pending_images) > 0 then dim("📎" + text(length(pending_images)) + " ") otherwise "") + cyan("❯ "))
-    when line == nothing
+    let inbox be when followups < 3 then agents.parent_inbox(0, "") otherwise nothing
+    let line be nothing
+    when inbox != nothing
+        set followups to followups + 1
+        each m in inbox["messages"]
+            print("")
+            print("  " + cyan("✉ " + first_line(m, 140)))
+            set messages to append(messages, {"role": "user", "content": m})
+        let result be loop.run_turn(cfg, messages, opts, on_event)
+        set messages to result["messages"]
+        set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}
+        print(dim("  ─── " + text(result["steps"]) + " pasos · " + fmt_tokens(result["usage"]["input"] + result["usage"]["output"]) + " tokens · turno automático por subagente"))
+        session.save(sid, messages, {"title": session.title_of(messages)})
+        flush()
+    otherwise
+        set line to read_line("\n" + (when length(pending_images) > 0 then dim("📎" + text(length(pending_images)) + " ") otherwise "") + cyan("❯ "))
+    when inbox != nothing
+        set running to running
+    otherwise when line == nothing
         set running to false
     otherwise
+        set followups to 0
         let input be trim(line)
         when input == ""
             set running to running
@@ -519,6 +550,12 @@ while running
                     print("  " + yellow(it["name"]) + "  " + it["title"])
             otherwise
                 print(memo.note_read(nm))
+        otherwise when input == "/agents"
+            let kids be agents.list_children()
+            when length(kids) == 0
+                print("  sin subagentes todavía (el agente los lanza con la tool delegate)")
+            each c in kids
+                print("  " + (when c["status"] == "running" then green("● running") otherwise dim("○ " + c["status"] + "  ")) + "  " + c["id"] + "  " + text(c["steps"]) + " pasos  " + dim(first_line(c["brief"], 80)) + dim("  log: " + agents.DIR + "/" + c["id"] + ".log"))
         otherwise when input == "/skills"
             print(skills_list())
             print(dim("  instalar una de skills.sh: pedile al agente «instalá la skill X de owner/repo» (global, pide aprobación) · o !npx skills add owner/repo --skill X -g"))
@@ -575,6 +612,7 @@ while running
                 print(dim("  ─── " + summary))
             session.save(sid, messages, {"title": session.title_of(messages)})
     flush()
--- los procesos gestionados (servidores) mueren con lampson: aviso por bus y espera corta
+-- los procesos gestionados (servidores) y los subagentes en background mueren con lampson
+agents.stop_all()
 proc.halt_all()
 print("bye · sesión " + sid)
