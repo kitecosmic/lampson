@@ -39,9 +39,35 @@ let MAX_ERRORS_PER_TURN be 8
 --   * TODO (hermes): la lista activa se re-inyecta SOLO tras una compaction.
 export let SPILL_DIR be ".lampson/spill"
 export let SPILL_CAP be 10000
-export let PROTECT_TOKENS be 40000
+export let PROTECT_TOKENS be 16000
 let REPEAT_TIERS be [3, 5, 8]
 let REPEAT_HARD be 8
+-- TOPE DE EXPLORACIÓN (propio; ningún harness lo tiene y es lo que faltaba): llamadas de SOLO LECTURA
+-- seguidas sin ninguna acción (edit/write/bash/process/delegate/mcp). Visto 2026-08-28 con deepseek-v4-pro:
+-- 39 read/ls/find seguidos, 0 ediciones, 419k tokens, dos veces, con las reglas de prompt ignoradas.
+-- A la mitad del tope el resultado lleva un aviso; al tope, read/ls/find/grep se rechazan hasta que actúe.
+let READ_ONLY_TOOLS be ["read", "ls", "find", "grep"]
+let ACTION_TOOLS be ["edit", "write", "bash", "process", "delegate"]
+
+export task explore_cap()
+    require env("LAMPSON_*")
+    let e be env("LAMPSON_EXPLORE_CAP", "")
+    when e != ""
+        give floor(number(e))
+    give 16
+
+-- {streak, note, refuse}: nuevo streak tras esta llamada y qué hacer con ella
+export task explore_verdict(streak, name, cap)
+    when contains(ACTION_TOOLS, name) or starts_with(name, "mcp_")
+        give {"streak": 0, "note": "", "refuse": false}
+    when not contains(READ_ONLY_TOOLS, name)
+        give {"streak": streak, "note": "", "refuse": false}
+    let n be streak + 1
+    when n >= cap
+        give {"streak": n, "note": "", "refuse": true}
+    when n == floor(cap / 2)
+        give {"streak": n, "note": "\n\n[harness] " + text(n) + " read-only calls in a row without changing anything. You likely know enough: edit/write now, or run the relevant command. After " + text(cap) + " read-only calls in a row, read/ls/find/grep are refused until you act. If the codebase is genuinely too big, delegate ONE focused question to an `explore` sub-agent instead of reading everything yourself.", "refuse": false}
+    give {"streak": n, "note": "", "refuse": false}
 
 -- JSON canónico (claves ordenadas en profundidad): reordenar propiedades no engaña al detector
 export task canon(v)
@@ -262,6 +288,8 @@ export task run_turn(cfg, messages, opts, on_event)
     let last_sig be ""
     let repeats be 0
     let nudged be false
+    let explore_streak be 0
+    let cap be explore_cap()
     let catalog be opts["catalog"]
     let max_steps be opts["max_steps"]
     let budget be opts["budget_tokens"]
@@ -327,13 +355,21 @@ export task run_turn(cfg, messages, opts, on_event)
             set repeats to when sig == last_sig then repeats + 1 otherwise 1
             set last_sig to sig
             let out be ""
+            let ex be explore_verdict(explore_streak, tc["name"], cap)
+            set explore_streak to ex["streak"]
             when repeats >= REPEAT_HARD
                 set out to "ERROR: you already called " + tc["name"] + " with these exact arguments " + text(repeats) + " times in a row. The result will not change; try a different approach or report the problem."
                 emit(on_event, "tool_denied", {"call": tc, "reason": "repeated call (" + text(repeats) + "x)"}, tag)
+            otherwise when ex["refuse"]
+                set out to "ERROR: exploration cap reached — " + text(explore_streak) + " read-only calls in a row (read/ls/find/grep) without a single change. Reading more will not help. Do one of: (1) edit/write the files you already read; (2) run a command (bash/process) that moves the task; (3) delegate ONE focused question to an `explore` sub-agent; (4) tell the user what you need. read/ls/find/grep are refused until you do."
+                emit(on_event, "tool_denied", {"call": tc, "reason": "exploration cap (" + text(explore_streak) + " read-only calls without acting)"}, tag)
             otherwise
                 set out to spill(tc["name"], safe_id(tc["id"], steps), execute(tc, opts, on_event))
                 when contains(REPEAT_TIERS, repeats)
                     set out to out + repeat_note(tc, repeats)
+                when ex["note"] != ""
+                    set out to out + ex["note"]
+                    emit(on_event, "inbox", "tope de exploración a la mitad (" + text(explore_streak) + "/" + text(cap) + " lecturas seguidas sin actuar): aviso al modelo", tag)
             when starts_with(out, "ERROR") or starts_with(out, "DENIED")
                 set errors to errors + 1
             emit(on_event, "tool_result", {"call": tc, "output": out}, tag)

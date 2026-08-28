@@ -207,6 +207,22 @@ test "loop: JSON canónico, spill cabeza+cola, recibos y poda de resultados viej
     let small be loop.prune_results([{"role": "user", "content": "u"}, old])
     assert_eq(small[1]["content"], big)
 
+test "tope de exploración: aviso a la mitad, rechazo al tope, reset con una acción"
+    let cap be 16
+    let v be loop.explore_verdict(0, "read", cap)
+    assert_eq(v["streak"], 1)
+    assert(v["note"] == "" and not v["refuse"])
+    let v8 be loop.explore_verdict(7, "ls", cap)
+    assert(contains(v8["note"], "8 read-only calls in a row") and not v8["refuse"], v8["note"])
+    let v16 be loop.explore_verdict(15, "grep", cap)
+    assert(v16["refuse"] and v16["streak"] == 16)
+    let act be loop.explore_verdict(16, "edit", cap)
+    assert(act["streak"] == 0 and not act["refuse"])
+    let other be loop.explore_verdict(5, "todo", cap)
+    assert(other["streak"] == 5 and not other["refuse"])
+    assert(loop.explore_verdict(20, "mcp_github_search", cap)["streak"] == 0)
+    assert_eq(loop.explore_cap(), 16)
+
 task repeat_text(s, n)
     let out be ""
     let i be 0

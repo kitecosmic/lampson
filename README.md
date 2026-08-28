@@ -215,6 +215,7 @@ Borrowed from the harness that does each part best (see `notes/*.md`):
 | Budget runs out silently | 80 %: a notice appended to the latest tool result (no new user message, cache stays warm); 95 %: last step without tools, summary required | hermes / opencode |
 | Edits a file it never read, or one that changed | **Observation gate in code**: `read` records the file hash; `edit`/`write` on an existing file are rejected without it, or if the file changed since | deepseek |
 | Loses the plan | `todo` tool (whole-list replacement, one `in_progress` at a time); re-injected only after context compaction, active items only | hermes |
+| Reads the whole project before touching anything | **Exploration cap** (ours): after 8 read-only calls in a row (read/ls/find/grep) without an edit/write/command the result carries a warning; after 16 they are refused until it acts (`LAMPSON_EXPLORE_CAP`) | — |
 
 ### Sub-agents
 
