@@ -28,7 +28,10 @@ language itself — and every step is visible, in the terminal or in a web UI.
 - **Local only**: the web API (chat with tools, terminal, process control) answers loopback clients
   only; anything else gets 401. To let a script in from elsewhere, set `LAMPSON_WEB_TOKEN` in `.env`
   and send `Authorization: Bearer <token>`.
-- **Sessions** persisted as JSON, including every tool call, result, error and denial.
+- **Sessions** persisted as JSON, including every tool call, result, error and denial — plus a
+  human-readable **trace** per session (`.lampson/trace/<id>.log`: one line per step, tool call,
+  result, error, denial, with elapsed time and tokens) to see where the agent does well or badly:
+  `/trace [n]` in the terminal, `≡` next to a session in the web UI, or `tail -f` the file.
 
 ## Install
 
@@ -117,6 +120,10 @@ confinement real. Config, sessions and process logs live in the `lampson` folder
 | `anthropic` `minimax` | Anthropic | `{base_url}/messages` |
 
 Any compatible endpoint: set `LAMPSON_BASE_URL` (and `LAMPSON_WIRE` if the preset can't guess).
+Model names are normalized to lowercase for providers whose APIs are case-sensitive (DeepSeek, OpenAI,
+Anthropic, Groq, Kimi, Grok, OpenRouter — `DeepSeek-V4-Pro` would be a 400); MiniMax and Ollama keep
+theirs. `/model` with no argument (or the model window in the web UI) lists what the provider's API
+actually offers (`GET /models`), so you never type a name blind.
 The API key is a Synsema `secret()`: the program can pass it as a header but never read or print it.
 See `.env.example` for every knob (steps, token budget, compaction threshold, shell).
 

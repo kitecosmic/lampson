@@ -482,6 +482,10 @@ function fillSetup() {
   const p = (cfg.providers || []).find(x => x.name === setupSel) || {};
   $('#setModel').value = setupSel === cfg.provider ? (cfg.model || p.model || '') : (p.model || '');
   $('#setModel').placeholder = p.model || '';
+  // modelos válidos según la API del proveedor (evita tipear "DeepSeek-V4-Pro" cuando la API quiere "deepseek-v4-pro")
+  let dl = $('#modelList'); if (!dl) { dl = document.createElement('datalist'); dl.id = 'modelList'; document.body.appendChild(dl); $('#setModel').setAttribute('list', 'modelList'); }
+  dl.innerHTML = ''; $('#setModel').title = '';
+  if (p.has_key || setupSel === 'ollama') fetch('/api/models?provider=' + encodeURIComponent(setupSel)).then(r => r.json()).then(d => { if (setupSel !== p.name) return; if (d.error) { $('#setModel').title = 'no pude listar modelos: ' + d.error; return; } dl.innerHTML = (d.models || []).map(m => `<option value="${esc(m)}">`).join(''); $('#setModel').title = (d.models || []).length ? 'modelos disponibles: ' + d.models.join(', ') : ''; }).catch(() => {});
   $('#setKey').value = ''; $('#setKey').disabled = setupSel === 'ollama';
   $('#setKey').placeholder = setupSel === 'ollama' ? 'ollama no necesita key' : (p.has_key ? 'hay una key guardada · pegá otra para reemplazarla' : 'pegala acá');
 }
@@ -726,6 +730,15 @@ function connectEvents() {
 }
 connectEvents();
 
+// ---- traza legible de una sesión (.lampson/trace/<sid>.log) ----
+async function openTrace(id) {
+  procOpen = null; agentOpen = null;
+  let r; try { r = await (await fetch('/api/trace?session=' + encodeURIComponent(id) + '&tail=600')).json(); } catch (e) { return; }
+  $('#vpath').textContent = 'traza ' + id; $('#vmeta').textContent = r.file || '';
+  const pre = $('#vbody'); pre.className = 'log'; pre.textContent = r.trace || '(sin traza todavía: se escribe a medida que el agente trabaja)';
+  showPane('viewer'); $('#stage').scrollTop = $('#stage').scrollHeight;
+}
+
 // ---- sessions ----
 async function loadSessions() {
   let r; try { r = await (await fetch('/api/sessions')).json(); } catch (e) { return; }
@@ -733,7 +746,8 @@ async function loadSessions() {
   $('#sessCount').textContent = r.sessions.length || '';
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
   for (const s of r.sessions) {
-    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
+    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
+    d.querySelector('.tr').onclick = (ev) => { ev.stopPropagation(); openTrace(s.id); };
     d.querySelector('.del').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del'), '¿borrar?', async () => { await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); }); };
     box.appendChild(d);
   }
@@ -828,7 +842,7 @@ function handle(chunk, thinking) {
   else if (k === 'approval_result') { const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === d.id); if (el) el.querySelector('.btns').innerHTML = d.approved ? '<span style="color:var(--str)">✓ permitido</span>' : (d.timeout ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
   else if (k === 'mode') { $('#agent').value = d.agent; $('#perm').value = d.permission; if (d.has_key === false) { add('denied', `‼ no hay API key para ${esc(d.provider)} — cargala en la ventana de modelo (clic en «${esc(d.provider)} · ${esc(d.model)}» arriba)`); } }
   else if (k === 'tool_denied') { const el = pending || add('step', '<span class="ic">✗</span>'); el.insertAdjacentHTML('beforeend', `<span class="denied"> ✗ ${esc(d.reason)}</span>`); }
-  else if (k === 'error') add('denied', '‼ ' + esc(d));
+  else if (k === 'error') { add('denied', '‼ ' + esc(d)); if (/model/i.test(String(d))) add('meta', `el proveedor rechazó el nombre del modelo (${esc(cfg.model || '')}) — clic en «${esc(cfg.provider || '')} · ${esc(cfg.model || '')}» arriba: la lista de modelos válidos aparece al elegir el proveedor`); }
   else if (k === 'compact') add('meta', '⧗ compactando contexto (~' + d.before + ' tokens)');
   else if (k === 'done') { if (d.stopped !== 'user_command') add('meta', `${d.steps} paso${d.steps === 1 ? '' : 's'} · ${d.usage.input + d.usage.output} tokens · ${d.stopped}`); }
   log.appendChild(thinking); $('#stage').scrollTop = $('#stage').scrollHeight;

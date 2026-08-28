@@ -26,6 +26,7 @@ use "./lib/agents.syn" as agents
 use "./lib/skills.syn" as skills
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
+use "./lib/trace.syn" as trace
 
 let REG be tools.registry()
 
@@ -88,6 +89,32 @@ test "config: preset deepseek por defecto y override por env"
     assert(contains(provider.PRESETS, cfg["provider"]) or cfg["provider"] != "", "provider name")
     assert(cfg["wire"] == "openai" or cfg["wire"] == "anthropic")
     assert(cfg["max_tokens"] > 0)
+
+test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), MiniMax intacto"
+    assert_eq(provider.normalize_model("deepseek", " DeepSeek-V4-Pro "), "deepseek-v4-pro")
+    assert_eq(provider.normalize_model("openai", "GPT-4o"), "gpt-4o")
+    assert_eq(provider.normalize_model("minimax", "MiniMax-M3"), "MiniMax-M3")
+    assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-v4-flash")
+    assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
+    assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
+
+test "trace: una línea por evento, con tiempos, y tail"
+    let sid be "test-trace"
+    trace.user(sid, "hola" + "\n" + "mundo", "build", "ask", "m1")
+    trace.event(sid, "usage", {"step": 1, "usage": {"input": 10, "output": 5}, "total": {"input": 10, "output": 5}}, "")
+    trace.event(sid, "tool_call", {"name": "read", "args": {"path": "a.txt"}}, "")
+    trace.event(sid, "tool_result", {"call": {"name": "read"}, "output": "ERROR: no such file"}, "")
+    trace.event(sid, "tool_denied", {"call": {"name": "bash"}, "reason": "user declined"}, "")
+    trace.event(sid, "inbox", "[harness] Sub-agent x finished", "")
+    trace.turn_end(sid, {"steps": 2, "usage": {"input": 10, "output": 5}, "stopped": "done"})
+    let t be trace.tail(sid, 10)
+    assert(contains(t, "USER  [build · ask · m1] hola ⏎ mundo"), t)
+    assert(contains(t, "STEP 1  modelo respondió · in=10 out=5"), t)
+    assert(contains(t, "CALL  read {\"path\": \"a.txt\"}"), t)
+    assert(contains(t, "FAIL  read → ERROR: no such file"), t)
+    assert(contains(t, "DENY  bash · user declined") and contains(t, "MAIL  [harness]") and contains(t, "END   2 pasos · 15 tokens · done"), t)
+    assert_eq(length(split(trace.tail(sid, 3), "\n")), 3)
+    run("C:\\Program Files\\Git\\bin\\bash.exe", ["-c", "rm -f .lampson/trace/test-trace.*"], 10)
 
 test "presets: cada uno tiene wire, base_url y model"
     each name in keys(provider.PRESETS)

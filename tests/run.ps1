@@ -25,6 +25,8 @@ New-Item -ItemType Junction -Path $mount -Target $tmp | Out-Null
 Push-Location $here
 try {
     $env:LAMPSON_WORKSPACE = $tmp
+    # los tests NUNCA usan .lampson/config.json (proveedor/key reales): solo .env y estas variables
+    $prevNoCfg = $env:LAMPSON_NO_CONFIG; $env:LAMPSON_NO_CONFIG = "1"
     synsema test unit.test.syn
     $code = $LASTEXITCODE
     # procesos gestionados: supervisor-agente + proc_spawn — corre con `run` (el swarm no existe bajo `test`)
@@ -36,6 +38,7 @@ try {
     synsema run agents_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    $env:LAMPSON_NO_CONFIG = $prevNoCfg
 } finally {
     # residuos de los tests fuera del workspace: notas de memoria del slug de prueba y sesiones test-*
     Get-ChildItem -LiteralPath (Join-Path $here "memory") -Directory -Filter "lampson-test-workspace-*" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force

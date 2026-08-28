@@ -12,6 +12,11 @@ let PATH be ".lampson/config.json"
 export task load()
     require file.read(".lampson")
     require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    -- LAMPSON_NO_CONFIG=1: ignorar config.json (proveedor/key reales) — lo fija tests/run.ps1|sh para que la
+    -- suite hable SOLO con el mock (2026-08-27: agents_test gastó tokens reales de DeepSeek por no tenerlo)
+    when env("LAMPSON_NO_CONFIG", "") == "1"
+        give {"provider": "", "model": "", "keys": {}}
     try
         let doc be json_decode(read_file(PATH))
         -- claves siempre presentes: quien lee no tiene que chequear (y `and` no cortocircuita)

@@ -29,7 +29,7 @@ let ANTHROPIC_VERSION be "2023-06-01"
 -- Tabla base URL por proveedor
 export let PRESETS be {
     "openai":     {"wire": "openai",    "base_url": "https://api.openai.com/v1",         "model": "gpt-4o"},
-    "deepseek":   {"wire": "openai",    "base_url": "https://api.deepseek.com/v1",       "model": "deepseek-chat"},
+    "deepseek":   {"wire": "openai",    "base_url": "https://api.deepseek.com/v1",       "model": "deepseek-v4-flash"},
     "kimi":       {"wire": "openai",    "base_url": "https://api.moonshot.ai/v1",        "model": "kimi-k2-0711-preview"},
     "groq":       {"wire": "openai",    "base_url": "https://api.groq.com/openai/v1",    "model": "llama-3.3-70b-versatile"},
     "grok":       {"wire": "openai",    "base_url": "https://api.x.ai/v1",               "model": "grok-3"},
@@ -92,6 +92,36 @@ export task providers()
         set out to append(out, {"name": n, "model": PRESETS[n]["model"], "wire": PRESETS[n]["wire"], "has_key": has_key(n), "current": n == cur})
     give out
 
+-- Nombres de modelo: DeepSeek, OpenAI, Anthropic, Groq, Kimi, Grok y OpenRouter publican ids en minúsculas
+-- y la API rechaza otra capitalización ("deepseek-v4-pro" sí, "DeepSeek-V4-Pro" → 400 invalid_request_error,
+-- visto 2026-08-27 con un nombre tipeado en /setup). MiniMax ("MiniMax-M3") y Ollama (tags) se dejan tal cual.
+let LOWERCASE_MODELS be ["deepseek", "openai", "anthropic", "groq", "kimi", "grok", "openrouter"]
+
+export task normalize_model(name, model)
+    let m be trim(text(model))
+    when contains(LOWERCASE_MODELS, name)
+        give lower(m)
+    give m
+
+-- Modelos que la API declara disponibles (GET {base_url}/models, ambos wires) → [ids] o error legible.
+-- Se usa en `/model` sin argumentos y en la ventana de modelo de la web, para no tipear nombres a ciegas.
+export task list_models(cfg)
+    require net
+    require time
+    let headers be {"Authorization": bearer(cfg["key"])}
+    when cfg["wire"] == "anthropic"
+        set headers to {"x-api-key": cfg["key"], "anthropic-version": ANTHROPIC_VERSION}
+    let r be http_get(strip_slash(cfg["base_url"]) + "/models", headers)
+    when r["status"] != 200
+        give {"models": [], "error": "http " + text(r["status"]) + ": " + slice(text(r["body"]), 0, 200)}
+    let doc be json_decode(r["body"])
+    let ids be []
+    when contains(doc, "data")
+        each m in doc["data"]
+            when contains(m, "id")
+                set ids to append(ids, text(m["id"]))
+    give {"models": sort_by(ids, (x) => x), "error": nothing}
+
 -- Configuración para un proveedor concreto (name "" = el por defecto; model "" = el guardado/preset).
 -- Llamar DENTRO del handler bajo serve.
 export task config_for(name, model)
@@ -115,6 +145,7 @@ export task config_for(name, model)
             set m to s["model"]
     when model != nothing and model != ""
         set m to model
+    set m to normalize_model(n, m)
     -- key: guardada en config.json > LAMPSON_API_KEY_<P> > LAMPSON_API_KEY (solo para el proveedor de .env)
     let key be secret("LAMPSON_API_KEY", "ollama")
     when env(key_var(n), "") != ""
@@ -197,6 +228,8 @@ export task supports_vision(cfg)
         give true
     when p == "groq"
         give contains(m, "llama-4") or contains(m, "vision")
+    when p == "deepseek"
+        give contains(m, "vision")
     when p == "openai"
         give starts_with(m, "gpt-4o") or starts_with(m, "gpt-4.1") or starts_with(m, "gpt-5") or starts_with(m, "o1") or starts_with(m, "o3") or starts_with(m, "o4")
     when p == "openrouter" or p == "ollama"

@@ -47,6 +47,7 @@ use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
+use "./lib/trace.syn" as trace
 
 let APPROVAL_TIMEOUT be 180
 
@@ -190,6 +191,21 @@ serve on 8080
             give fail(400, "name required")
         give {"name": query.name, "content": memo.note_read(query.name)}
 
+    -- traza legible de una sesión (ver lib/trace.syn)
+    route "GET /api/trace" requires auth
+        when not contains(query, "session")
+            give fail(400, "session required")
+        when not matches(query.session, "[A-Za-z0-9_-]{1,40}")
+            give fail(400, "bad session id")
+        let n be when contains(query, "tail") then floor(number(query.tail)) otherwise 400
+        give {"session": query.session, "file": trace.file_of(query.session), "trace": trace.tail(query.session, n)}
+
+    -- modelos que declara la API del proveedor (para no tipear nombres a ciegas: DeepSeek es case-sensitive)
+    route "GET /api/models" requires auth
+        let pname be when contains(query, "provider") then lower(text(query.provider)) otherwise ""
+        let cfg be provider.config_for(pname, "")
+        give provider.list_models(cfg)
+
     route "GET /api/agents" requires auth
         agents.prune(10, 1800)
         give {"agents": agents.list_children()}
@@ -282,6 +298,7 @@ serve on 8080
         let pmodel be when contains(b, "model") then text(b["model"]) otherwise ""
         stream
             task emit(kind, data, tag)
+                trace.event(sid, kind, data, tag)
                 send {"kind": kind, "data": data, "tag": tag} as "event"
             -- aprobación humana desde la UI: pregunta por SSE y espera la respuesta (o el timeout)
             task ask_web(name, args, why)
@@ -337,6 +354,8 @@ serve on 8080
                 when length(images) > 0
                     set umsg to {"role": "user", "content": message, "images": images}
                 set messages to append(messages, umsg)
+                trace.user(sid, message, ctx["profile"], mode, ctx["cfg"]["model"])
                 let result be loop.run_turn(ctx["cfg"], messages, ctx["opts"], emit)
+                trace.turn_end(sid, result)
                 session.save(sid, result["messages"], {"title": session.title_of(result["messages"])})
                 send {"kind": "done", "data": {"text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "session": sid}} as "event"

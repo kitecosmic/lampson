@@ -1,0 +1,115 @@
+-- lib/trace.syn — traza legible de lo que hace el agente, por sesión: .lampson/trace/<sid>.log
+--
+-- Las sesiones (.lampson/sessions/*.json) guardan el historial canónico para el modelo; esto es para
+-- el HUMANO que quiere ver cómo trabajó el agente y dónde se equivoca: una línea por evento con hora,
+-- tiempo desde el evento anterior, paso, tokens, tool + args, resultado (primeras líneas), errores y
+-- denegaciones, avisos del buzón y subagentes. Se lee con `/trace [n]` (terminal), en la web (≡ en la
+-- sesión) o con cualquier editor / `tail -f`.
+--
+-- Formato de línea:  HH:MM:SS.mmm +Δs  [tag] KIND  texto
+--   Δs = segundos desde la línea anterior de la misma sesión (dónde se fue el tiempo: modelo vs tools).
+
+export let DIR be ".lampson/trace"
+let MAX_LINE be 600
+
+task path(sid)
+    give DIR + "/" + sid + ".log"
+
+task one_line(s, max)
+    let t be replace_text(replace_text(text(s), "\r", ""), "\n", " ⏎ ")
+    when length(t) > max
+        give slice(t, 0, max) + "…"
+    give t
+
+task pad2(n)
+    let t be text(floor(n))
+    when length(t) < 2
+        give "0" + t
+    give t
+
+task stamp()
+    let t be now()
+    let ms be floor((t - floor(t)) * 1000)
+    let mst be text(ms)
+    while length(mst) < 3
+        set mst to "0" + mst
+    give format_time(t, "%H:%M:%S") + "." + mst
+
+-- delta desde la última línea: guardamos el instante en <sid>.last
+task delta(sid)
+    let last be 0
+    try
+        set last to number(trim(read_file(DIR + "/" + sid + ".last")))
+    recover err
+        set last to 0
+    write_file(DIR + "/" + sid + ".last", text(now()))
+    when last == 0
+        give "      "
+    let d be now() - last
+    let s be text(floor(d * 10) / 10)
+    while length(s) < 5
+        set s to " " + s
+    give "+" + s
+
+export task write(sid, kind, line)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    when sid == nothing or sid == ""
+        give false
+    append_file(path(sid), stamp() + " " + delta(sid) + "s  " + kind + "  " + line + "\n")
+    give true
+
+-- eventos del loop (on_event de chat/web): kind ∈ assistant | tool_call | tool_result | tool_denied |
+-- error | usage | compact | inbox
+export task event(sid, kind, data, tag)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    let t be when tag == nothing or tag == "" then "" otherwise "[" + text(tag) + "] "
+    when kind == "usage"
+        give write(sid, "STEP " + text(data["step"]), t + "modelo respondió · in=" + text(data["usage"]["input"]) + " out=" + text(data["usage"]["output"]) + " · acumulado " + text(data["total"]["input"] + data["total"]["output"]))
+    when kind == "assistant"
+        give write(sid, "SAY ", t + one_line(data, MAX_LINE))
+    when kind == "tool_call"
+        give write(sid, "CALL", t + data["name"] + " " + one_line(json_encode(data["args"]), MAX_LINE))
+    when kind == "tool_result"
+        let out be text(data["output"])
+        let bad be starts_with(out, "ERROR") or starts_with(out, "DENIED")
+        give write(sid, when bad then "FAIL" otherwise "OK  ", t + data["call"]["name"] + " → " + one_line(out, MAX_LINE) + " (" + text(length(out)) + " chars)")
+    when kind == "tool_denied"
+        give write(sid, "DENY", t + data["call"]["name"] + " · " + one_line(data["reason"], MAX_LINE))
+    when kind == "error"
+        give write(sid, "ERR ", t + one_line(data, MAX_LINE))
+    when kind == "compact"
+        give write(sid, "PACK", t + "compactación de contexto (~" + text(data["before"]) + " tokens)")
+    when kind == "inbox"
+        give write(sid, "MAIL", t + one_line(data, MAX_LINE))
+    give false
+
+-- marcas de turno (las llaman chat.syn / web.syn)
+export task user(sid, content, agent, mode, model)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    give write(sid, "USER", "[" + agent + " · " + mode + " · " + model + "] " + one_line(content, MAX_LINE))
+
+export task turn_end(sid, result)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    give write(sid, "END ", text(result["steps"]) + " pasos · " + text(result["usage"]["input"] + result["usage"]["output"]) + " tokens · " + result["stopped"])
+
+export task tail(sid, n)
+    require file(".lampson")
+    require file(".lampson/*")
+    try
+        let lines be split(replace_text(read_file(path(sid)), "\r", ""), "\n")
+        when length(lines) > n
+            set lines to slice(lines, length(lines) - n, length(lines))
+        give join(lines, "\n")
+    recover err
+        give ""
+
+export task file_of(sid)
+    give path(sid)

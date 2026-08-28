@@ -40,6 +40,7 @@ use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
+use "./lib/trace.syn" as trace
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -96,6 +97,7 @@ task summarize(name, out)
 
 -- tag = "" para el agente principal; los subagentes en background NO pasan por acá (escriben su log)
 task on_event(kind, data, tag)
+    trace.event(sid, kind, data, tag)
     when kind == "assistant"
         print("")
         print(data)
@@ -113,6 +115,8 @@ task on_event(kind, data, tag)
         set data to data
     otherwise when kind == "error"
         print("  " + red("‼ " + text(data)))
+        when contains(lower(text(data)), "model")
+            print("  " + yellow("el proveedor rechazó el nombre del modelo (" + cfg["model"] + "): /model sin argumentos lista los válidos, /model <nombre> lo cambia"))
     otherwise when kind == "compact"
         print("  " + dim("⧗ compactando contexto (~" + text(data["before"]) + " tokens)"))
     flush()
@@ -150,6 +154,7 @@ let COMMANDS be [
     ["/memory", "[nombre]", "notas que el agente guardó sobre ESTE proyecto (memory/<proyecto>/*.md); con nombre, la muestra"],
     ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
     ["/agents", "", "subagentes lanzados con delegate: estado, pasos y log de cada uno"],
+    ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
     ["/new", "", "empezar una sesión nueva (historial vacío)"],
     ["/sessions", "", "listar sesiones guardadas"],
@@ -417,7 +422,9 @@ while running
             print("")
             print("  " + cyan("✉ " + first_line(m, 140)))
             set messages to append(messages, {"role": "user", "content": m})
+        trace.user(sid, "(turno automático por aviso de subagente)", profile, mode, cfg["model"])
         let result be loop.run_turn(cfg, messages, opts, on_event)
+        trace.turn_end(sid, result)
         set messages to result["messages"]
         set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}
         print(dim("  ─── " + text(result["steps"]) + " pasos · " + fmt_tokens(result["usage"]["input"] + result["usage"]["output"]) + " tokens · turno automático por subagente"))
@@ -450,12 +457,22 @@ while running
                 print("  " + update.apply())
         otherwise when input == "/config"
             show_config(cfg, env_info["cwd"], profile, mode, opts)
+        otherwise when starts_with(input, "/trace")
+            let n be trim(slice(input, 6, length(input)))
+            let lines be when n == "" then 40 otherwise floor(number(n))
+            print(dim("  " + trace.file_of(sid)))
+            print(trace.tail(sid, lines))
         otherwise when starts_with(input, "/model")
             let want be trim(slice(input, 6, length(input)))
             when want == ""
                 print("modelo actual: " + cfg["model"] + " · uso: /model <nombre>")
+                let lm be provider.list_models(cfg)
+                when lm["error"] != nothing
+                    print("  " + dim("no pude listar los modelos de " + cfg["provider"] + ": " + lm["error"]))
+                otherwise
+                    print("  disponibles en " + cfg["provider"] + ": " + join(lm["models"], ", "))
             otherwise
-                set cfg["model"] to want
+                set cfg["model"] to provider.normalize_model(cfg["provider"], want)
                 print("modelo=" + want + " (solo esta sesión; para fijarlo: LAMPSON_MODEL en lampson\\.env)")
         otherwise when starts_with(input, "/provider")
             let args be where(split(trim(slice(input, 9, length(input))), " "), (x) => x != "")
@@ -598,7 +615,9 @@ while running
                 set pending_images to []
             otherwise
                 set messages to append(messages, {"role": "user", "content": input})
+            trace.user(sid, input, profile, mode, cfg["model"])
             let result be loop.run_turn(cfg, messages, opts, on_event)
+            trace.turn_end(sid, result)
             set messages to result["messages"]
             set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}
             let summary be text(result["steps"]) + (when result["steps"] == 1 then " paso" otherwise " pasos") + " · " + fmt_tokens(result["usage"]["input"] + result["usage"]["output"]) + " tokens"
