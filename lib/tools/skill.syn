@@ -4,8 +4,11 @@
 
 export let SPEC be {
     "name": "skill",
-    "description": "Load a skill: project- or harness-specific instructions for a kind of task (how to deploy, how tests are run here, how this harness works, how to write Synsema...). The system prompt lists the available skills with a one-line description; call this with the name BEFORE starting that kind of task and follow the instructions it returns.",
+    "description": "Skills are folders with a SKILL.md (the Agent Skills format used on skills.sh). action=load (default): load the instructions of a skill listed in the system prompt — do it BEFORE starting that kind of task and follow them. action=list: every skill available with its source. action=install: fetch a skill from a GitHub repo with `npx skills add` (source=owner/repo, name=the skill folder; e.g. source=anthropics/skills name=frontend-design). scope=global (default) installs into ~/.agents/skills so it is available in EVERY project; scope=project into ./.agents/skills. Installing always asks the user for approval — propose it when the task needs know-how you lack (a framework, a language, design guidelines) and a skill for it exists.",
     "parameters": {"type": "object", "properties": {
-        "name": {"type": "string", "description": "Skill name exactly as listed in the system prompt"}
+        "name": {"type": "string", "description": "Skill name (load: exactly as listed; install: the skill folder in the repo)"},
+        "action": {"type": "string", "enum": ["load", "list", "install"], "description": "Default: load"},
+        "source": {"type": "string", "description": "install only: owner/repo on GitHub, or a github URL"},
+        "scope": {"type": "string", "enum": ["global", "project"], "description": "install only: global (default, every project) or project"}
     }, "required": ["name"]}
 }

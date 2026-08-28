@@ -25,11 +25,25 @@ use "./tools/memo.syn" as t_memo
 use "./skills.syn" as skills
 
 -- la task de la tool skill (su SPEC está en tools/skill.syn)
-task skill_tool(name)
+task skill_tool(name, action, source, scope)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
     require file.read("skills")
     require file.read("skills/*")
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when action == "install"
+        give skills.install(source, name, scope)
+    when action == "list"
+        let idx be skills.index()
+        let lines be []
+        each n in sort_by(keys(idx), (x) => x)
+            set lines to append(lines, n + " (" + idx[n]["source"] + "): " + idx[n]["description"])
+        give join(lines, "\n")
     give skills.load(name)
 
 -- Allow-list nombre → task. El modelo solo devuelve NOMBRES; el loop decide si se ejecuta.

@@ -184,8 +184,11 @@ the index; the content enters the context when the model calls `skill(name)`. Se
 `~/.agents/skills`, `~/.claude/skills` (global) < `skills/` (harness) < `.claude/skills`, `.agents/skills`,
 `skills/` of the project < `.lampson/skills/` of the project (local, not committed).
 
-**Installing external skills** — there is no installer of its own; use the standard one and lampson
-picks the skill up on the next start (`/skills` lists them):
+**Installing external skills** — the agent can do it for you: ask *"install the frontend-design skill from
+anthropics/skills"* and it calls `skill(action=install, source, name, scope=global|project)`, which runs the
+standard installer below. Installing is **always human-in-the-loop** (it asks even in yolo mode; strict denies
+it) because it brings third-party instructions and scripts onto your machine. Global (default) means
+`~/.agents/skills`: a Go skill installed once serves every Go project. Or do it yourself:
 
 ```bash
 npx skills add anthropics/skills --skill frontend-design      # → ./.agents/skills (this project)

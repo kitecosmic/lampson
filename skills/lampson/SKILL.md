@@ -90,4 +90,7 @@ the terminal button and run `npm run dev`), then tell me the URL".
 - Providers are raw HTTP (`lib/provider.syn`): OpenAI wire (`/chat/completions`) and Anthropic wire
   (`/messages`). Config via `.env` (`LAMPSON_PROVIDER`, `LAMPSON_API_KEY`, `LAMPSON_MODEL`, `LAMPSON_BASE_URL`).
 - Skills: `skills/<name>/SKILL.md` (harness), `workspace/skills/<name>/SKILL.md` (project),
-  `workspace/.lampson/skills/<name>/SKILL.md` (local). Frontmatter `name:` + `description:`.
+  `workspace/.lampson/skills/<name>/SKILL.md` (local), plus external ones installed with `npx skills add`
+  (`workspace/.agents/skills`, `workspace/.claude/skills`, and the global `~/.agents/skills` / `~/.claude/skills`
+  mounted as `.lampson/skills-global` / `.lampson/skills-claude`). Frontmatter `name:` + `description:`.
+  `skill(action=install, source=owner/repo, name=x, scope=global|project)` installs one (always asks the user).

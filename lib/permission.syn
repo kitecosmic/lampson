@@ -48,6 +48,12 @@ task is_secret_env(base)
             give false
     give true
 
+-- (`and` no cortocircuita en Synsema: indexar args["action"] sin la clave explota → helper con when anidado)
+task is_install(args)
+    when not contains(args, "action")
+        give false
+    give args["action"] == "install"
+
 -- evaluate(tool_name, args, mode) → {decision: "allow"|"deny"|"ask", reason}
 export task evaluate(name, args, mode)
     when name == "bash"
@@ -73,6 +79,11 @@ export task evaluate(name, args, mode)
                 give {"decision": "allow", "reason": "yolo mode (.env)"}
             give {"decision": "ask", "reason": "writes a .env file (secrets)"}
         give {"decision": "allow", "reason": "workspace write"}
+    when name == "skill" and is_install(args)
+        -- instala instrucciones/scripts de terceros FUERA del workspace (~/.agents/skills): humano siempre, incluso en yolo
+        when mode == "strict"
+            give {"decision": "deny", "reason": "strict mode (installs a third-party skill)"}
+        give {"decision": "ask", "reason": "installs a third-party skill from " + (when contains(args, "source") then text(args["source"]) otherwise "?") + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"}
     give {"decision": "allow", "reason": "read-only tool"}
 
 -- Resumen legible de una tool call, para mostrar al humano antes de aprobar / en el log.
@@ -83,6 +94,8 @@ task one_line(s, max)
     give t
 
 export task describe_call(name, args)
+    when name == "skill" and is_install(args)
+        give "skill install " + text(args["source"]) + " --skill " + text(args["name"]) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "bash"
         give "$ " + one_line(when contains(args, "command") then text(args["command"]) otherwise "", 160)
     when contains(args, "path")

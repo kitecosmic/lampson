@@ -521,6 +521,7 @@ while running
                 print(memo.note_read(nm))
         otherwise when input == "/skills"
             print(skills_list())
+            print(dim("  instalar una de skills.sh: pedile al agente «instalá la skill X de owner/repo» (global, pide aprobación) · o !npx skills add owner/repo --skill X -g"))
         otherwise when input == "/tokens"
             print("contexto≈" + text(loop.estimate_tokens(messages)) + " tokens · gastado in=" + text(total_usage["input"]) + " out=" + text(total_usage["output"]))
         otherwise when input == "/yolo" or input == "/ask" or input == "/strict"

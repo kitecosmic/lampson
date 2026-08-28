@@ -117,3 +117,63 @@ export task load(name)
     when length(extras) > 0
         set head to head + "Files in this skill: " + join(extras, ", ") + "\n"
     give head + "\n" + fm["body"]
+
+-- ---------- instalación de skills externas (skills.sh / cualquier repo con SKILL.md) ----------
+-- No reinventamos el instalador: `npx skills add <owner/repo> --skill <name>` (vercel-labs/skills) escribe
+-- en ./.agents/skills (scope project) o ~/.agents/skills (-g, scope global — sirve para TODOS los proyectos,
+-- que es lo que uno quiere con una skill de Go, de Next, de diseño…). `-a codex -y` = no interactivo
+-- (codex ya usa la carpeta canónica, así que no crea symlinks extra; verificado 2026-08-27). Es una acción
+-- con efectos fuera del workspace → permission.syn la marca "ask" SIEMPRE (human in the loop), incluso en yolo.
+task shell_exe()
+    require env("LAMPSON_*")
+    require env("OS")
+    let is_win be env("OS", "") == "Windows_NT"
+    give env("LAMPSON_SHELL", when is_win then "C:\\Program Files\\Git\\bin\\bash.exe" otherwise "bash")
+
+task valid_slug(s)
+    when s == nothing or s == ""
+        give false
+    give matches(s, "[a-zA-Z0-9._/@:-]{1,120}")
+
+-- la junction/symlink .lampson/skills-global → ~/.agents/skills la crea lampson.ps1/sh al arrancar, pero si
+-- la carpeta HOME no existía todavía (primera instalación global) hay que crear ambas ahora
+task ensure_global_mount()
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    let is_win be env("OS", "") == "Windows_NT"
+    let win be "src=\"$USERPROFILE/.agents/skills\"; mkdir -p \"$src\"; [ -e .lampson/skills-global ] || cmd //c mklink //J \".lampson\\\\skills-global\" \"$(cygpath -w \"$src\")\" >/dev/null"
+    let unix be "src=\"$HOME/.agents/skills\"; mkdir -p \"$src\"; [ -e .lampson/skills-global ] || ln -s \"$src\" .lampson/skills-global"
+    run(shell_exe(), ["-c", when is_win then win otherwise unix], 30, {"cwd": "."})
+
+task tail_out(s)
+    let t be strip_ansi(replace_text(s, "\r", ""))
+    when length(t) > 3000
+        give slice(t, length(t) - 3000, length(t))
+    give t
+
+export task install(source, name, scope)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when not valid_slug(source)
+        raise("invalid source '" + text(source) + "' (expected owner/repo or a github URL)")
+    when not valid_slug(name)
+        raise("invalid skill name '" + text(name) + "'")
+    let global be scope != "project"
+    let argv be ["-y", "skills", "add", source, "--skill", name, "-a", "codex", "-y"]
+    when global
+        set argv to append(argv, "-g")
+        ensure_global_mount()
+    let r be run(shell_exe(), ["-c", "CI=1 npx " + join(argv, " ") + " 2>&1"], 240, {"cwd": when global then "." otherwise "workspace"})
+    let idx be index()
+    when contains(idx, name)
+        give "installed skill '" + name + "' (" + (when global then "global: ~/.agents/skills, available in every project" otherwise "project: ./.agents/skills") + "). It is in the skills index now — call skill(name=\"" + name + "\") to load it.\n" + tail_out(r["stdout"])
+    give "npx skills finished (exit " + text(r["exit_code"]) + ") but '" + name + "' is not in the skills index. Output:\n" + tail_out(r["stdout"])

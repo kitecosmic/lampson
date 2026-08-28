@@ -66,6 +66,17 @@ test "escribir .env por bash (redirect) pide aprobación; describe_call en una l
     assert_eq(permission.evaluate("bash", {"command": "cat .env.example"}, "ask")["decision"], "allow")
     assert_eq(permission.describe_call("bash", {"command": "echo a" + "\n" + "echo b"}), "$ echo a ⏎ echo b")
 
+test "skill install: human in the loop siempre (ask incluso en yolo, deny en strict); load/list nunca preguntan"
+    let ins be {"name": "frontend-design", "action": "install", "source": "anthropics/skills", "scope": "global"}
+    assert_eq(permission.evaluate("skill", ins, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("skill", ins, "yolo")["decision"], "ask")
+    assert_eq(permission.evaluate("skill", ins, "strict")["decision"], "deny")
+    assert_eq(permission.evaluate("skill", {"name": "lampson"}, "strict")["decision"], "allow")
+    assert_eq(permission.evaluate("skill", {"name": "", "action": "list"}, "strict")["decision"], "allow")
+    assert_eq(permission.describe_call("skill", ins), "skill install anthropics/skills --skill frontend-design (global)")
+    assert(contains(call_tool(REG["skill"], {"name": "", "action": "list"}), "lampson (harness)"))
+    assert_error(() => call_tool(REG["skill"], {"name": "x", "action": "install", "source": "not a repo!"}))
+
 test "describe_call"
     assert_eq(permission.describe_call("bash", {"command": "ls"}), "$ ls")
     assert_eq(permission.describe_call("read", {"path": "a.txt"}), "read a.txt")
