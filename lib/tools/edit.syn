@@ -6,6 +6,7 @@ export task tool(path, old_string, new_string, replace_all)
     require file("workspace/*")
     let real be c.ws(path)
     let shown be c.unws(real)
+    c.check_observed(real, "edit")
     let content be read_file(real)
     let parts be split(content, old_string)
     let n be length(parts) - 1
@@ -16,11 +17,12 @@ export task tool(path, old_string, new_string, replace_all)
         when not all
             raise(`old_string appears {text(n)} times in {shown}; include more surrounding context to make it unique, or pass replace_all=true`)
     write_file(real, join(parts, new_string))
+    c.mark_observed(real)
     give `edited {shown}: {text(n)} replacement(s)`
 
 export let SPEC be {
     "name": "edit",
-    "description": "Replace an exact string in a file. old_string must match EXACTLY (including whitespace and indentation) and be unique in the file, otherwise the call fails — include more surrounding lines to disambiguate, or set replace_all=true to replace every occurrence. Read the file first.",
+    "description": "Replace an exact string in a file. old_string must match EXACTLY (including whitespace and indentation) and be unique in the file, otherwise the call fails — include more surrounding lines to disambiguate, or set replace_all=true to replace every occurrence. The file MUST have been read in this session (and not changed since), or the call is rejected.",
     "parameters": {"type": "object", "properties": {
         "path": {"type": "string"},
         "old_string": {"type": "string"},

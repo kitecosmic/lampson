@@ -49,6 +49,7 @@ use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
+use "./lib/tools/todo.syn" as todo
 
 let APPROVAL_TIMEOUT be 180
 
@@ -209,6 +210,9 @@ serve on 8080
         let pname be when contains(query, "provider") then lower(text(query.provider)) otherwise ""
         let cfg be provider.config_for(pname, "")
         give provider.list_models(cfg)
+
+    route "GET /api/todo" requires auth
+        give {"items": todo.load()}
 
     route "GET /api/mcp" requires auth
         give {"servers": mcp.summary(), "global": mcp.GLOBAL_CONFIG, "project": mcp.PROJECT_CONFIG}

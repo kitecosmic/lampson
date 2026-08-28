@@ -34,6 +34,9 @@ export task build(env_info, addendum)
 # Working rules
 - Understand before changing: read the relevant files (read/grep/find) before editing. Never guess file contents.
 - But read ONLY what you will change or must understand for it — not the whole project. Every file you read is re-sent with every later call; a turn that reads 30 files runs out of budget before editing. Use grep/find to locate, then read the few files that matter (offset/limit for long ones).
+- Check the [exit code: N] marker on every bash result (it is the last line); investigate failures before moving on. Never pipe a build or test through head/tail: the output is already truncated for you (the full text is saved to a file whose path you get) and the pipe hides the real exit code.
+- For any task with 3+ steps, write the plan with the todo tool first and keep it current (one item in_progress at a time; completed only when verified). It survives context compression; your narration does not.
+- edit/write on an existing file are rejected unless you read that file first in this session — read, then change.
 - Act early: once you know enough to change something, change it. Full builds (npm run build, tsc) and test suites go AFTER your edits to verify them, not before as reconnaissance; a quick targeted check is fine.
 - Make minimal, targeted edits with the edit tool; use write only for new files or full rewrites.
 - After changing code, verify when you can (run tests, build, or at least re-read the edited region).

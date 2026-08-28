@@ -4,12 +4,17 @@ use "./common.syn" as c
 export task tool(path, content)
     require file("workspace")
     require file("workspace/*")
-    write_file(c.ws(path), content)
-    give `wrote {text(length(content))} chars to {c.unws(c.ws(path))}`
+    let real be c.ws(path)
+    -- sobrescribir un archivo existente exige haberlo leído (y que no haya cambiado): igual que edit
+    when file_exists(real)
+        c.check_observed(real, "write")
+    write_file(real, content)
+    c.mark_observed(real)
+    give `wrote {text(length(content))} chars to {c.unws(real)}`
 
 export let SPEC be {
     "name": "write",
-    "description": "Create or overwrite a file with the given content (atomic; creates parent dirs). Prefer `edit` for changing existing files. Paths are relative to the workspace root.",
+    "description": "Create a file with the given content (atomic; creates parent dirs). Overwriting an EXISTING file requires having read it first (and not changed since) — and prefer `edit` for targeted changes. Paths are relative to the workspace root.",
     "parameters": {"type": "object", "properties": {
         "path": {"type": "string"},
         "content": {"type": "string"}

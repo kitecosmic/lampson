@@ -22,6 +22,7 @@ use "./tools/bash.syn" as t_bash
 use "./tools/skill.syn" as t_skill
 use "./tools/process.syn" as t_process
 use "./tools/memo.syn" as t_memo
+use "./tools/todo.syn" as t_todo
 use "./skills.syn" as skills
 
 -- la task de la tool skill (su SPEC está en tools/skill.syn)
@@ -58,10 +59,11 @@ export task registry()
         "bash": t_bash.tool,
         "process": t_process.tool,
         "memory": t_memo.tool,
+        "todo": t_todo.tool,
         "skill": skill_tool
     }
 
-export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_skill.SPEC]
+export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC]
 
 -- Subconjuntos (para perfiles de agente): registry/catálogo filtrados por nombre.
 export task registry_subset(names)

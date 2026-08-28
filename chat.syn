@@ -42,6 +42,7 @@ use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
+use "./lib/tools/todo.syn" as todo
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -155,6 +156,7 @@ let COMMANDS be [
     ["/memory", "[nombre]", "notas que el agente guardó sobre ESTE proyecto (memory/<proyecto>/*.md); con nombre, la muestra"],
     ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
     ["/agents", "", "subagentes lanzados con delegate: estado, pasos y log de cada uno"],
+    ["/todo", "", "lista de tareas del agente para este proyecto (la mantiene con la tool todo)"],
     ["/mcp", "", "servers MCP conectados (globales: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json) y sus tools"],
     ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
@@ -574,6 +576,9 @@ while running
                     print("  " + yellow(it["name"]) + "  " + it["title"])
             otherwise
                 print(memo.note_read(nm))
+        otherwise when input == "/todo"
+            let items be todo.load()
+            print(when length(items) == 0 then "  sin tareas (el agente las crea con la tool todo)" otherwise "  " + replace_text(todo.format(items), "\n", "\n  "))
         otherwise when input == "/mcp"
             let sm be mcp.summary()
             when length(sm) == 0

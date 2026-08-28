@@ -23,8 +23,113 @@
 use "./provider.syn" as provider
 use "./permission.syn" as permission
 use "./mcp.syn" as mcp
+use "./tools/todo.syn" as todo
 
 let MAX_ERRORS_PER_TURN be 8
+-- Conciencia de progreso (2026-08-28, la mejor idea de cada harness — ver notes/*.md):
+--   * SPILL (deepseek): un resultado > SPILL_CAP se guarda entero en .lampson/spill/<call>.txt y el modelo ve
+--     cabeza + cola + "Full result saved to …"; `read` queda exento (ya pagina con offset/limit).
+--   * RECIBOS (hermes): antes de cada llamada, los tool results más allá de los últimos PROTECT_TOKENS se
+--     reemplazan por una línea "[read result pruned: ok · 412 lines/18k chars]" — el modelo conserva QUÉ
+--     hizo y cómo salió, sin re-enviar 30 archivos en cada request.
+--   * REPETICIÓN (deepseek): misma tool + mismos args (JSON canónico) 3 y 5 veces → se ejecuta igual pero
+--     el resultado lleva un recordatorio; 8 → se rechaza (opencode). Nunca cuenta entre turnos.
+--   * PRESUPUESTO (hermes + opencode): al 80% un aviso anexado al ÚLTIMO tool result (cache-safe, sin
+--     mensaje user nuevo); al 95% último paso sin tools con resumen obligatorio.
+--   * TODO (hermes): la lista activa se re-inyecta SOLO tras una compaction.
+export let SPILL_DIR be ".lampson/spill"
+export let SPILL_CAP be 10000
+export let PROTECT_TOKENS be 40000
+let REPEAT_TIERS be [3, 5, 8]
+let REPEAT_HARD be 8
+
+-- JSON canónico (claves ordenadas en profundidad): reordenar propiedades no engaña al detector
+export task canon(v)
+    let t be type_of(v)
+    when t == "map"
+        let parts be []
+        each k in sort_by(keys(v), (x) => x)
+            set parts to append(parts, json_encode(k) + ":" + canon(v[k]))
+        give "{" + join(parts, ",") + "}"
+    when t == "list"
+        give "[" + join(apply((x) => canon(x), v), ",") + "]"
+    give json_encode(v)
+
+task safe_id(id, step)
+    let t be text(id)
+    when matches(t, "[A-Za-z0-9_-]{1,80}")
+        give t
+    give "call-" + text(step)
+
+-- cabeza + cola, el resto a disco
+export task spill(name, id, out)
+    require file(".lampson")
+    require file(".lampson/*")
+    when name == "read" or length(out) <= SPILL_CAP
+        give out
+    let path be SPILL_DIR + "/" + id + ".txt"
+    write_file(path, out)
+    let half be floor(SPILL_CAP / 2)
+    give slice(out, 0, half) + "\n\n[... " + text(length(out) - SPILL_CAP) + " chars omitted. Full result saved to " + path + " — grep it, or read it with offset/limit; do not re-run the command ...]\n\n" + slice(out, length(out) - half, length(out))
+
+-- recibo de una línea para un tool result viejo
+export task receipt(m)
+    let out be text(m["content"])
+    when starts_with(out, "[") and contains(out, " result pruned: ")
+        give out
+    let status be "ok"
+    when starts_with(out, "ERROR") or starts_with(out, "DENIED")
+        set status to slice(replace_text(split(out, "\n")[0], "\r", ""), 0, 120)
+    otherwise
+        let codes be find_all(out, "\\[exit code [0-9]+\\]")
+        when length(codes) > 0
+            let last be codes[length(codes) - 1]
+            set status to slice(last, 1, length(last) - 1)
+    let saved be find_all(out, "Full result saved to [^ ]+")
+    let where_full be when length(saved) > 0 then " · " + saved[0] otherwise ""
+    give "[" + text(m["name"]) + " result pruned: " + status + " · " + text(length(split(out, "\n"))) + " lines/" + text(length(out)) + " chars" + where_full + " — re-run the tool only if you really need the content again]"
+
+-- reemplaza por recibos los tool results anteriores a los últimos PROTECT_TOKENS tokens de resultados
+export task prune_results(msgs)
+    let total be 0
+    each m in msgs
+        when m["role"] == "tool"
+            set total to total + floor(length(text(m["content"])) / 4)
+    when total <= PROTECT_TOKENS
+        give msgs
+    let acc be 0
+    let cut be length(msgs)
+    let i be length(msgs) - 1
+    while i >= 0 and acc < PROTECT_TOKENS
+        let m be msgs[i]
+        when m["role"] == "tool"
+            set acc to acc + floor(length(text(m["content"])) / 4)
+        set cut to i
+        set i to i - 1
+    let out be []
+    each e in enumerate(msgs)
+        let m be e["item"]
+        when e["index"] < cut and m["role"] == "tool" and length(text(m["content"])) > 200
+            set out to append(out, {"role": "tool", "tool_call_id": m["tool_call_id"], "name": m["name"], "content": receipt(m)})
+        otherwise
+            set out to append(out, m)
+    give out
+
+-- anexa un aviso al ÚLTIMO tool result (canal cache-safe, hermes); ok=false si no hay ninguno
+task append_to_last_tool(msgs, note)
+    let i be length(msgs) - 1
+    while i >= 0
+        when msgs[i]["role"] == "tool"
+            let m be msgs[i]
+            let out be slice(msgs, 0, i) + [{"role": "tool", "tool_call_id": m["tool_call_id"], "name": m["name"], "content": text(m["content"]) + "\n\n" + note}] + slice(msgs, i + 1, length(msgs))
+            give {"ok": true, "msgs": out}
+        set i to i - 1
+    give {"ok": false, "msgs": msgs}
+
+task repeat_note(tc, n)
+    when n < REPEAT_TIERS[1]
+        give "\n\n[harness] You are repeating the exact same tool call with identical arguments (" + text(n) + " times in a row). Carefully analyze the previous result before calling again: if the task is not complete, try a different approach or different arguments instead of repeating the call."
+    give "\n\n[harness] The repeated calls are not making progress (" + tc["name"] + ", " + text(n) + " consecutive calls with the same arguments). Do not call this tool with these exact arguments again. Inspect the latest result and choose a different action, different arguments, or finish the task if enough evidence has been gathered."
 
 task emit(on_event, kind, data, tag)
     when on_event != nothing
@@ -144,6 +249,9 @@ task execute(tc, opts, on_event)
 export task run_turn(cfg, messages, opts, on_event)
     require net
     require time
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
     let msgs be messages
     let steps be 0
     let spent be 0
@@ -162,8 +270,14 @@ export task run_turn(cfg, messages, opts, on_event)
     when estimate_tokens(msgs) > opts["compact_at_tokens"]
         emit(on_event, "compact", {"before": estimate_tokens(msgs)}, tag)
         set msgs to compact(cfg, msgs, 6)
+        -- la lista de tareas activa sobrevive a la compaction (solo lo pendiente)
+        let td be todo.active_text()
+        when td != ""
+            set msgs to append(msgs, {"role": "user", "content": td})
     while steps < max_steps and spent <= budget
         set steps to steps + 1
+        -- recibos: los tool results viejos dejan de viajar completos en cada request
+        set msgs to prune_results(msgs)
         -- buzón: avisos de subagentes (padre) / steer y stop (hijo)
         when opts["inbox_fn"] != nothing
             let inb be call(opts["inbox_fn"], {"step": steps, "tag": tag})
@@ -175,13 +289,15 @@ export task run_turn(cfg, messages, opts, on_event)
                     emit(on_event, "error", "stopped by the parent agent", tag)
                     give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": "stopped"}
         -- último paso: sin tools + instrucción explícita → respuesta final (truco de llm.md: catálogo vacío)
-        -- presupuesto de tokens: al 50% un empujón (visto 2026-08-28: 16 pasos leyendo 30 archivos, 420k tokens,
-        -- 0 ediciones), al 90% respuesta final sin tools — igual que con max_steps, en vez de cortar en silencio
-        when spent >= budget * 0.5 and not nudged
-            set nudged to true
-            set msgs to append(msgs, {"role": "user", "content": "[harness] Half of this turn's token budget is spent (" + text(spent) + " of " + text(floor(budget)) + " tokens), mostly on context re-sent with every call. Stop exploring: act on what you already know (edit, run), or report. Read only the files you will change, with offset/limit for long ones."})
-            emit(on_event, "inbox", "presupuesto de tokens al 50% (" + text(spent) + "/" + text(floor(budget)) + "): el harness le pidió al modelo que deje de explorar y actúe", tag)
-        let over_budget be spent >= budget * 0.9
+        -- presupuesto de tokens (visto 2026-08-28: 16 pasos leyendo 30 archivos, 420k tokens, 0 ediciones):
+        -- al 80% un aviso anexado al último tool result (una sola vez, cache-safe); al 95% respuesta final sin tools
+        when spent >= budget * 0.8 and not nudged
+            let noted be append_to_last_tool(msgs, "[SYSTEM NOTICE — token budget nearly exhausted: " + text(spent) + " of " + text(floor(budget)) + "] Stop new discovery/verification work now. Produce the required deliverable (the edits, the answer, the summary) from the state you already have, completing only mandatory writes.")
+            when noted["ok"]
+                set nudged to true
+                set msgs to noted["msgs"]
+                emit(on_event, "inbox", "presupuesto de tokens al 80% (" + text(spent) + "/" + text(floor(budget)) + "): el harness le pidió al modelo que cierre", tag)
+        let over_budget be spent >= budget * 0.95
         let last_step be steps == max_steps or over_budget
         let cat be when last_step then [] otherwise catalog
         when last_step
@@ -206,16 +322,18 @@ export task run_turn(cfg, messages, opts, on_event)
             give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": when over_budget then "budget" otherwise (when last_step then "max_steps" otherwise "done")}
         each tc in r["tool_calls"]
             emit(on_event, "tool_call", tc, tag)
-            -- doom loop: la misma tool con los mismos args 3 veces seguidas → cortar
-            let sig be json_encode({"n": tc["name"], "a": tc["args"]})
+            -- repetición: misma tool + mismos args (JSON canónico); 3 y 5 → recordatorio en el resultado; 8 → rechazo
+            let sig be tc["name"] + " " + canon(tc["args"])
             set repeats to when sig == last_sig then repeats + 1 otherwise 1
             set last_sig to sig
             let out be ""
-            when repeats >= 3
+            when repeats >= REPEAT_HARD
                 set out to "ERROR: you already called " + tc["name"] + " with these exact arguments " + text(repeats) + " times in a row. The result will not change; try a different approach or report the problem."
-                emit(on_event, "tool_denied", {"call": tc, "reason": "doom loop (" + text(repeats) + "x)"}, tag)
+                emit(on_event, "tool_denied", {"call": tc, "reason": "repeated call (" + text(repeats) + "x)"}, tag)
             otherwise
-                set out to execute(tc, opts, on_event)
+                set out to spill(tc["name"], safe_id(tc["id"], steps), execute(tc, opts, on_event))
+                when contains(REPEAT_TIERS, repeats)
+                    set out to out + repeat_note(tc, repeats)
             when starts_with(out, "ERROR") or starts_with(out, "DENIED")
                 set errors to errors + 1
             emit(on_event, "tool_result", {"call": tc, "output": out}, tag)

@@ -203,6 +203,19 @@ while steps < max_steps and tokens <= budget
   `permission.syn`: **ask** by default, allow in yolo, deny in strict — and lands in the session trace.
 - Not yet: HTTP/SSE transports, resources/prompts, sampling.
 
+### Keeping the model aware of what it did
+
+Borrowed from the harness that does each part best (see `notes/*.md`):
+
+| Problem | Mechanism | From |
+|---|---|---|
+| A huge tool result floods the context | **Spill**: results over 10k chars are saved whole to `.lampson/spill/<call>.txt`; the model sees head + tail + the path (`read` is exempt, it pages) | deepseek |
+| Old results are re-sent with every call | **Receipts**: before each model call, tool results beyond the last 40k tokens become one line — `[bash result pruned: exit code 0 · 412 lines/18k chars · Full result saved to …]` | hermes / opencode |
+| Same call, same args, again and again | **Repeat reminder**: 3rd and 5th identical call (canonical JSON) still run but carry a reminder; the 8th is refused | deepseek / opencode |
+| Budget runs out silently | 80 %: a notice appended to the latest tool result (no new user message, cache stays warm); 95 %: last step without tools, summary required | hermes / opencode |
+| Edits a file it never read, or one that changed | **Observation gate in code**: `read` records the file hash; `edit`/`write` on an existing file are rejected without it, or if the file changed since | deepseek |
+| Loses the plan | `todo` tool (whole-list replacement, one `in_progress` at a time); re-injected only after context compaction, active items only | hermes |
+
 ### Sub-agents
 
 `delegate(tasks=[{agent, brief, context}…], background?)` — or `action=list|steer|stop|result`.

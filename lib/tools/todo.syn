@@ -1,0 +1,86 @@
+-- lib/tools/todo.syn — lista de tareas del agente (reemplazo total), por proyecto
+--
+-- Diseño (deepseek-harness tool-todo + hermes todo_tool): el modelo manda la lista ENTERA cada vez (nada de
+-- merges ambiguos), como máximo UNA tarea in_progress (se valida en código y la llamada falla si no), y la
+-- lista NO se re-inyecta en cada paso — los tres harnesses coinciden: gasta tokens y compite con el prompt.
+-- Sí se re-inyecta al COMPACTAR el contexto (lib/loop.syn), y solo los items pending/in_progress: incluir los
+-- completados hace que el modelo rehaga trabajo terminado (hermes todo_tool.py:136). Persistida en
+-- .lampson/todo/<proyecto>.json (fuera del repo); la UI web y /todo la muestran.
+use "./common.syn" as c
+use "./memo.syn" as memo
+
+export let DIR be ".lampson/todo"
+let STATES be ["pending", "in_progress", "completed", "cancelled"]
+
+task path()
+    require env("LAMPSON_*")
+    give DIR + "/" + memo.slug() + ".json"
+
+export task load()
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    try
+        give json_decode(read_file(path()))
+    recover err
+        give []
+
+task mark(s)
+    when s == "completed"
+        give "[x]"
+    when s == "in_progress"
+        give "[>]"
+    when s == "cancelled"
+        give "[-]"
+    give "[ ]"
+
+export task format(items)
+    let lines be []
+    each e in enumerate(items)
+        let it be e["item"]
+        set lines to append(lines, text(e["index"] + 1) + ". " + mark(it["status"]) + " " + it["content"] + (when it["status"] == "in_progress" then "  ← in progress" otherwise ""))
+    give join(lines, "\n")
+
+-- texto para re-inyectar tras una compaction: solo lo activo; "" si no hay nada activo
+export task active_text()
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let active be where(load(), (it) => it["status"] == "pending" or it["status"] == "in_progress")
+    when length(active) == 0
+        give ""
+    give "[Your active task list was preserved across context compression — completed items omitted]\n" + format(active)
+
+export task tool(items)
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    when items == nothing
+        let cur be load()
+        give when length(cur) == 0 then "(empty task list)" otherwise format(cur)
+    let clean be []
+    let in_progress be 0
+    each it in items
+        when not contains(it, "content") or trim(text(it["content"])) == ""
+            raise("every item needs a non-empty content")
+        let st be when contains(it, "status") then lower(text(it["status"])) otherwise "pending"
+        when not contains(STATES, st)
+            raise("invalid status '" + st + "' (pending | in_progress | completed | cancelled)")
+        when st == "in_progress"
+            set in_progress to in_progress + 1
+        set clean to append(clean, {"content": trim(text(it["content"])), "status": st})
+    when in_progress > 1
+        raise("at most ONE item may be in_progress at a time (you sent " + text(in_progress) + "): finish or cancel the others first")
+    write_file(path(), json_encode(clean))
+    give when length(clean) == 0 then "(empty task list)" otherwise format(clean)
+
+export let SPEC be {
+    "name": "todo",
+    "description": "Your task list for this project. Send the WHOLE list every time (it replaces the previous one); with no items it just returns the current list. Statuses: pending, in_progress (at most ONE at a time), completed, cancelled. Use it for any task with 3+ steps: write the plan first, mark an item in_progress when you start it, and completed only after it is verified done — never on intent; if something fails, cancel it and add a revised item. The list is shown to the user and preserved across context compression; it is not re-sent to you every step, so keep it current yourself.",
+    "parameters": {"type": "object", "properties": {
+        "items": {"type": "array", "items": {"type": "object", "properties": {
+            "content": {"type": "string"},
+            "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}
+        }, "required": ["content"]}}
+    }}
+}

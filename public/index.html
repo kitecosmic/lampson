@@ -289,6 +289,10 @@
     <h2 title="procesos que el agente arranca con la tool process"><span class="caret">▸</span>Procesos<span class="cnt" id="procCount"></span></h2>
     <div class="body" id="procs"></div>
   </section>
+  <section class="sec" data-sec="todo">
+    <h2 title="lista de tareas que el agente mantiene con la tool todo (una en curso a la vez)"><span class="caret">▸</span>Tareas<span class="cnt" id="todoCount"></span></h2>
+    <div class="body" id="todoBox"></div>
+  </section>
   <section class="sec" data-sec="agents">
     <h2 title="subagentes que el agente lanza con la tool delegate (en paralelo o en background); clic = log en vivo"><span class="caret">▸</span>Subagentes<span class="cnt" id="agentCount"></span></h2>
     <div class="body" id="agentsBox"></div>
@@ -736,6 +740,17 @@ function connectEvents() {
 }
 connectEvents();
 
+// ---- lista de tareas del agente ----
+async function loadTodo() {
+  let r; try { r = await (await fetch('/api/todo')).json(); } catch (e) { return; }
+  const box = $('#todoBox'); box.innerHTML = '';
+  const items = r.items || []; const open = items.filter(i => i.status === 'pending' || i.status === 'in_progress').length;
+  $('#todoCount').textContent = items.length ? (open ? `${open} · ${items.length}` : `${items.length}`) : ''; autoSec('todo', open > 0);
+  if (!items.length) { box.innerHTML = '<div class="p none">ninguna</div>'; return; }
+  const mark = { completed: '☑', in_progress: '▶', cancelled: '✕', pending: '☐' };
+  for (const it of items) { const d = document.createElement('div'); d.className = 'p' + (it.status === 'in_progress' ? ' run' : ''); d.style.cursor = 'default'; d.innerHTML = `<span class="nm" style="opacity:${it.status === 'completed' || it.status === 'cancelled' ? .5 : 1}">${mark[it.status] || '☐'} ${esc(it.content)}</span>`; box.appendChild(d); }
+}
+
 // ---- servers MCP ----
 async function loadMcp() {
   let r; try { r = await (await fetch('/api/mcp')).json(); } catch (e) { return; }
@@ -858,7 +873,7 @@ function handle(chunk, thinking) {
   const k = ev.kind, d = ev.data;
   if (k === 'session') { session = d; localStorage.setItem('lampson.session', d); }
   else if (k === 'assistant') add('assistant', md(d));
-  else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); if (d.name === 'delegate') { setTimeout(loadAgents, 800); setTimeout(loadAgents, 4000); } }
+  else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); if (d.name === 'delegate') { setTimeout(loadAgents, 800); setTimeout(loadAgents, 4000); } if (d.name === 'todo') setTimeout(loadTodo, 300); }
   else if (k === 'inbox') { add('meta', '✉ ' + esc(String(d).split('\n')[0].slice(0, 160))); loadAgents(); }
   else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out); const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }
@@ -873,7 +888,7 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if ((!t && !attachments.length) || busy) return; $('#in').value = ''; send(t || '(imagen adjunta)'); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadTodo(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, events ? 60000 : 10000);
 setInterval(() => { if (!events && ($('#agentCount').textContent.includes('●') || busy)) loadAgents(); }, 5000);
 </script>

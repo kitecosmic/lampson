@@ -28,6 +28,7 @@ use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
+use "./lib/tools/todo.syn" as todo
 
 let REG be tools.registry()
 
@@ -140,11 +141,82 @@ let T be "_lampson_test"
 
 test "edit exige old_string único y write/read funcionan (vía call_tool = least-privilege)"
     call_tool(REG["write"], {"path": T + "/s.txt", "content": "aaa\nbbb\naaa\n"})
+    call_tool(REG["read"], {"path": T + "/s.txt"})
     assert_error(() => call_tool(REG["edit"], {"path": T + "/s.txt", "old_string": "aaa", "new_string": "ccc"}))
     assert_eq(call_tool(REG["edit"], {"path": T + "/s.txt", "old_string": "aaa", "new_string": "ccc", "replace_all": true}), "edited " + T + "/s.txt: 2 replacement(s)")
     assert_eq(call_tool(REG["edit"], {"path": "./" + T + "/s.txt", "old_string": "bbb", "new_string": "ddd"}), "edited " + T + "/s.txt: 1 replacement(s)")
     assert_eq(call_tool(REG["read"], {"path": T + "/s.txt"}), "ccc\nddd\nccc\n")
     assert_error(() => call_tool(REG["edit"], {"path": T + "/s.txt", "old_string": "zzz", "new_string": "y"}))
+
+test "observación: edit/write sobre un archivo existente exigen read previo y detectan cambios en disco"
+    call_tool(REG["write"], {"path": T + "/o.txt", "content": "uno\n"})
+    -- write lo creó y lo marcó observado; una tool externa (bash) lo cambia → hash distinto
+    call_tool(REG["bash"], {"command": "echo dos > " + T + "/o.txt"})
+    let e1 be ""
+    try
+        call_tool(REG["edit"], {"path": T + "/o.txt", "old_string": "dos", "new_string": "tres"})
+    recover err
+        set e1 to text(err)
+    assert(contains(e1, "changed on disk since you read it"), e1)
+    call_tool(REG["write"], {"path": T + "/p.txt", "content": "x\n"})
+    call_tool(REG["bash"], {"command": "echo y > " + T + "/p.txt"})
+    let e2 be ""
+    try
+        call_tool(REG["write"], {"path": T + "/p.txt", "content": "z"})
+    recover err
+        set e2 to text(err)
+    assert(contains(e2, "write") and contains(e2, "read"), e2)
+    call_tool(REG["read"], {"path": T + "/o.txt"})
+    assert_eq(call_tool(REG["edit"], {"path": T + "/o.txt", "old_string": "dos", "new_string": "tres"}), "edited " + T + "/o.txt: 1 replacement(s)")
+    -- un archivo NUNCA leído en esta sesión
+    call_tool(REG["bash"], {"command": "echo n > " + T + "/never.txt"})
+    let e3 be ""
+    try
+        call_tool(REG["edit"], {"path": T + "/never.txt", "old_string": "n", "new_string": "m"})
+    recover err
+        set e3 to text(err)
+    assert(contains(e3, "requires reading"), e3)
+
+test "todo: reemplazo total, un solo in_progress, texto activo para la compaction"
+    let out be call_tool(REG["todo"], {"items": [{"content": "a", "status": "completed"}, {"content": "b", "status": "in_progress"}, {"content": "c"}]})
+    assert(contains(out, "1. [x] a") and contains(out, "2. [>] b  ← in progress") and contains(out, "3. [ ] c"), out)
+    assert_error(() => call_tool(REG["todo"], {"items": [{"content": "a", "status": "in_progress"}, {"content": "b", "status": "in_progress"}]}))
+    assert_error(() => call_tool(REG["todo"], {"items": [{"content": "", "status": "pending"}]}))
+    let act be todo.active_text()
+    assert(contains(act, "preserved across context compression") and contains(act, "b") and contains(act, "c") and not contains(act, "[x] a"), act)
+    assert(contains(call_tool(REG["todo"], {}), "[>] b"))
+    assert_eq(call_tool(REG["todo"], {"items": []}), "(empty task list)")
+    assert_eq(todo.active_text(), "")
+
+test "loop: JSON canónico, spill cabeza+cola, recibos y poda de resultados viejos"
+    assert_eq(loop.canon({"b": [1, {"y": 2, "x": 1}], "a": "s"}), "{\"a\":\"s\",\"b\":[1,{\"x\":1,\"y\":2}]}")
+    let big be repeat_text("línea de relleno 0123456789\n", 600)
+    let sp be loop.spill("bash", "call-7", big)
+    assert(length(sp) < length(big) and contains(sp, "chars omitted. Full result saved to .lampson/spill/call-7.txt"), text(length(sp)))
+    assert(starts_with(sp, "línea de relleno") and ends_with_text(sp, "0123456789\n"), "cabeza y cola")
+    assert_eq(loop.spill("read", "c", big), big)
+    let r1 be loop.receipt({"name": "bash", "content": "salida\nmás\n[exit code 3]"})
+    assert(contains(r1, "[bash result pruned: exit code 3 · 3 lines/"), r1)
+    let r2 be loop.receipt({"name": "edit", "content": "ERROR: old_string not found in x.ts — read the file"})
+    assert(starts_with(r2, "[edit result pruned: ERROR: old_string not found"), r2)
+    assert_eq(loop.receipt({"name": "x", "content": r1}), r1)
+    let old be {"role": "tool", "tool_call_id": "1", "name": "read", "content": big}
+    let recent be {"role": "tool", "tool_call_id": "2", "name": "bash", "content": repeat_text("x", 170000)}
+    let pruned be loop.prune_results([{"role": "user", "content": "u"}, {"role": "assistant", "content": "", "tool_calls": []}, old, {"role": "assistant", "content": "", "tool_calls": []}, recent])
+    assert(contains(pruned[2]["content"], "[read result pruned: ok") and pruned[4]["content"] == recent["content"], pruned[2]["content"])
+    let small be loop.prune_results([{"role": "user", "content": "u"}, old])
+    assert_eq(small[1]["content"], big)
+
+task repeat_text(s, n)
+    let out be ""
+    let i be 0
+    while i < n
+        set out to out + s
+        set i to i + 1
+    give out
+
+task ends_with_text(s, suffix)
+    give slice(s, length(s) - length(suffix), length(s)) == suffix
 
 test "find con glob mínimo, ls y grep (paths relativos al workspace)"
     call_tool(REG["write"], {"path": T + "/deep/a.syn", "content": "export task run_turn()\n    give 1\n"})

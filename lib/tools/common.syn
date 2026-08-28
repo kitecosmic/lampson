@@ -61,3 +61,27 @@ export task glob_match(name, pat)
     when star_last
         give starts_with(name, slice(pat, 0, length(pat) - 1))
     give name == pat
+
+-- ---------- leer antes de editar (política de observación, tomada de deepseek-harness fs-observation-policy) ----------
+-- `read` registra en el blackboard el hash del archivo que el modelo vio ("observed:<path>"); `edit` y `write`
+-- sobre un archivo existente exigen esa observación y que el archivo no haya cambiado desde entonces (CAS por
+-- hash). Es un gate en CÓDIGO, no una regla de prompt: elimina "edita a ciegas y pisa" sin gastar tokens.
+export task file_hash(real)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    give decode(sha256(read_file(real)), "hex")
+
+export task mark_observed(real)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    share file_hash(real) as "observed:" + real
+
+export task check_observed(real, action)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    observe "observed:" + real as seen
+    let shown be unws(real)
+    when seen == nothing
+        raise(action + " requires reading \"" + shown + "\" first: call read on it (the whole file, or the region you will change), then " + action)
+    when seen != file_hash(real)
+        raise("\"" + shown + "\" changed on disk since you read it (another tool, a build, or the user): read it again, then " + action)
