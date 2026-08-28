@@ -149,6 +149,7 @@ export task run_turn(cfg, messages, opts, on_event)
     let stopped be "done"
     let last_sig be ""
     let repeats be 0
+    let nudged be false
     let catalog be opts["catalog"]
     let max_steps be opts["max_steps"]
     let budget be opts["budget_tokens"]
@@ -170,10 +171,18 @@ export task run_turn(cfg, messages, opts, on_event)
                     emit(on_event, "error", "stopped by the parent agent", tag)
                     give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": "stopped"}
         -- último paso: sin tools + instrucción explícita → respuesta final (truco de llm.md: catálogo vacío)
-        let last_step be steps == max_steps
+        -- presupuesto de tokens: al 50% un empujón (visto 2026-08-28: 16 pasos leyendo 30 archivos, 420k tokens,
+        -- 0 ediciones), al 90% respuesta final sin tools — igual que con max_steps, en vez de cortar en silencio
+        when spent >= budget * 0.5 and not nudged
+            set nudged to true
+            set msgs to append(msgs, {"role": "user", "content": "[harness] Half of this turn's token budget is spent (" + text(spent) + " of " + text(floor(budget)) + " tokens), mostly on context re-sent with every call. Stop exploring: act on what you already know (edit, run), or report. Read only the files you will change, with offset/limit for long ones."})
+            emit(on_event, "inbox", "presupuesto de tokens al 50% (" + text(spent) + "/" + text(floor(budget)) + "): el harness le pidió al modelo que deje de explorar y actúe", tag)
+        let over_budget be spent >= budget * 0.9
+        let last_step be steps == max_steps or over_budget
         let cat be when last_step then [] otherwise catalog
         when last_step
-            set msgs to append(msgs, {"role": "user", "content": "[harness] Step limit reached for this turn (" + text(max_steps) + " tool calls). Do NOT call tools now. Reply with a short status: what you completed, what is verified, and exactly what remains to do next. The user can say 'continue' to resume."})
+            let why be when over_budget then "Token budget for this turn is exhausted (" + text(spent) + " of " + text(floor(budget)) + " tokens)" otherwise "Step limit reached for this turn (" + text(max_steps) + " tool calls)"
+            set msgs to append(msgs, {"role": "user", "content": "[harness] " + why + ". Do NOT call tools now. Reply with a short status: what you completed, what is verified, and exactly what remains to do next. The user can say 'continue' to resume."})
         let r be provider.chat_retry(cfg, msgs, cat, 3)
         when r["error"] != nothing
             emit(on_event, "error", r["error"], tag)
@@ -190,7 +199,7 @@ export task run_turn(cfg, messages, opts, on_event)
             emit(on_event, "assistant", clean_text, tag)
         when length(r["tool_calls"]) == 0
             set final_text to clean_text
-            give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": when last_step then "max_steps" otherwise "done"}
+            give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": when over_budget then "budget" otherwise (when last_step then "max_steps" otherwise "done")}
         each tc in r["tool_calls"]
             emit(on_event, "tool_call", tc, tag)
             -- doom loop: la misma tool con los mismos args 3 veces seguidas → cortar

@@ -50,6 +50,9 @@ check(up, "mock LLM arriba en :8765")
 
 let cfg be provider.config()
 check(contains(cfg["base_url"], "8765"), "provider apunta al mock: " + text(cfg["base_url"]))
+-- arrancar sin restos de corridas anteriores (incluidos "running" fantasma de un crash)
+run("C:\\Program Files\\Git\\bin\\bash.exe", ["-c", "rm -f .lampson/agents/explore-*"], 10)
+check(length(agents.list_children()) == 0, "sin hijos al empezar")
 let REG be agents.registry_for("build")
 
 print("delegate batch: dos explore en paralelo, informe consolidado")

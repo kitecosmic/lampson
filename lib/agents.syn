@@ -226,7 +226,8 @@ export task prune(keep, max_age_s)
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
-    let finished be where(list_children(), (c) => c["status"] != "running")
+    -- un "running" de hace más de 6 h es un fantasma (lampson cerrado con el hijo vivo, o un crash viejo)
+    let finished be where(list_children(), (c) => c["status"] != "running" or now() - c["started"] > 21600)
     let victims be []
     let n be length(finished)
     let i be 0
@@ -279,18 +280,21 @@ export task run_child(spec)
     let cfg be provider.config()
     write_json(id, {"id": id, "agent": agent, "brief": spec["brief"], "status": "running", "steps": 0, "tokens": 0, "started": spec["started"], "finished": nothing, "delivered": not spec["background"], "text": "", "background": spec["background"]})
     write_file(path(id, "log"), "# sub-agent " + id + " (" + agent + ")\n# " + one_line(spec["brief"], 300) + "\n")
-    let system be {"role": "system", "content": prompt.build(env_info(cfg), p["addendum"] + CHILD_NOTE)}
-    let full_brief be when spec["context"] == nothing or spec["context"] == "" then spec["brief"] otherwise spec["brief"] + "\n\nContext from the delegating agent:\n" + spec["context"]
-    let messages be [system, {"role": "user", "content": full_brief}]
-    let opts be loop.default_opts(tools.registry_subset(p["tools"]), tools.catalog_subset(p["tools"]), nothing)
-    set opts to loop.with_steps(opts, p["steps"])
-    set opts to loop.with_mode(opts, when spec["mode"] == "yolo" then "yolo" otherwise "strict")
-    set opts to loop.with_inbox(opts, child_inbox, id)
+    -- TODO lo que puede fallar va dentro del try: si algo revienta (prompt, provider, loop) el hijo queda
+    -- en status "error" y no como un "running" fantasma (pasó 2026-08-28 con un prompt.syn roto)
     let result be nothing
     try
+        let system be {"role": "system", "content": prompt.build(env_info(cfg), p["addendum"] + CHILD_NOTE)}
+        let full_brief be when spec["context"] == nothing or spec["context"] == "" then spec["brief"] otherwise spec["brief"] + "\n\nContext from the delegating agent:\n" + spec["context"]
+        let messages be [system, {"role": "user", "content": full_brief}]
+        let opts be loop.default_opts(tools.registry_subset(p["tools"]), tools.catalog_subset(p["tools"]), nothing)
+        set opts to loop.with_steps(opts, p["steps"])
+        set opts to loop.with_mode(opts, when spec["mode"] == "yolo" then "yolo" otherwise "strict")
+        set opts to loop.with_inbox(opts, child_inbox, id)
         set result to loop.run_turn(cfg, messages, opts, child_event)
     recover err
-        set result to {"text": "", "steps": 0, "usage": {"input": 0, "output": 0}, "stopped": "error: " + text(err)}
+        append_file(path(id, "log"), "‼ " + one_line(err, 300) + "\n")
+        set result to {"text": "(the sub-agent crashed: " + one_line(err, 300) + ")", "steps": 0, "usage": {"input": 0, "output": 0}, "stopped": "error"}
     let status be when result["stopped"] == "done" then "done" otherwise result["stopped"]
     let tokens be result["usage"]["input"] + result["usage"]["output"]
     let final be {"id": id, "agent": agent, "brief": spec["brief"], "status": status, "steps": result["steps"], "tokens": tokens, "started": spec["started"], "finished": now(), "delivered": not spec["background"], "text": when result["text"] == "" then "(the sub-agent produced no final text)" otherwise result["text"], "background": spec["background"]}

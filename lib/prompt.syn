@@ -33,6 +33,8 @@ export task build(env_info, addendum)
 
 # Working rules
 - Understand before changing: read the relevant files (read/grep/find) before editing. Never guess file contents.
+- But read ONLY what you will change or must understand for it — not the whole project. Every file you read is re-sent with every later call; a turn that reads 30 files runs out of budget before editing. Use grep/find to locate, then read the few files that matter (offset/limit for long ones).
+- Act early: once you know enough to change something, change it. Full builds (npm run build, tsc) and test suites go AFTER your edits to verify them, not before as reconnaissance; a quick targeted check is fine.
 - Make minimal, targeted edits with the edit tool; use write only for new files or full rewrites.
 - After changing code, verify when you can (run tests, build, or at least re-read the edited region).
 - Do exactly what was asked — no unrequested refactors, no extra features, no gratuitous comments.

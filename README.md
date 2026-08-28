@@ -173,6 +173,7 @@ while steps < max_steps and tokens <= budget
     if no tool_calls → return
     for each call:
         doom loop (3× identical) → error back to the model
+    50% of the token budget → nudge (stop exploring, act); 90% → final answer without tools
         permission.evaluate → deny | ask | allow
         out = call_tool(registry[name], args)          -- least-privilege; errors go back as text
         messages += tool(id, out)                      -- everything is kept, including failures
