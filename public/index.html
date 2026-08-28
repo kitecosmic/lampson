@@ -293,6 +293,10 @@
     <h2 title="subagentes que el agente lanza con la tool delegate (en paralelo o en background); clic = log en vivo"><span class="caret">▸</span>Subagentes<span class="cnt" id="agentCount"></span></h2>
     <div class="body" id="agentsBox"></div>
   </section>
+  <section class="sec" data-sec="mcp">
+    <h2 title="servers MCP conectados: globales (lampson/.lampson/mcp.json, valen para todos los proyectos) y del proyecto (.lampson/mcp.json)"><span class="caret">▸</span>MCP<span class="cnt" id="mcpCount"></span></h2>
+    <div class="body" id="mcpBox"></div>
+  </section>
   <section class="sec" data-sec="memory">
     <h2 title="notas que el agente guarda sobre este proyecto con la tool memory"><span class="caret">▸</span>Memoria<span class="cnt" id="memCount"></span></h2>
     <div class="body" id="memory"></div>
@@ -720,6 +724,8 @@ function connectEvents() {
       const name = ev.data && ev.data.name;
       if (!ev.data || ev.data.line === undefined) debounce('procs', loadProcs, 300);        // cambio de estado
       if (name && procOpen === name) debounce('procview', () => refreshProcViewer(name), 250);
+    } else if (t.startsWith('mcp.')) {
+      debounce('mcp', loadMcp, 300);
     } else if (t.startsWith('subagent.')) {
       debounce('agents', loadAgents, 300);
       const id = t.slice('subagent.'.length);
@@ -729,6 +735,23 @@ function connectEvents() {
   events.onerror = () => { events.close(); events = null; setTimeout(connectEvents, evBackoff); evBackoff = Math.min(evBackoff * 2, 30000); };
 }
 connectEvents();
+
+// ---- servers MCP ----
+async function loadMcp() {
+  let r; try { r = await (await fetch('/api/mcp')).json(); } catch (e) { return; }
+  const box = $('#mcpBox'); box.innerHTML = '';
+  const list = r.servers || []; const ready = list.filter(s => s.status === 'ready').length;
+  $('#mcpCount').textContent = list.length ? (ready ? `${ready} ● · ${list.length}` : `${list.length}`) : ''; autoSec('mcp', list.some(s => s.status === 'error'));
+  if (!list.length) { box.innerHTML = `<div class="p none">ninguno · global: <code>${esc(r.global || '')}</code> · proyecto: <code>${esc(r.project || '')}</code></div>`; return; }
+  for (const sv of list) {
+    const d = document.createElement('div'); d.className = 'p' + (sv.status === 'ready' ? ' run' : ''); d.style.cursor = 'default';
+    d.title = `${sv.scope} · $ ${sv.command}` + (sv.error ? `
+${sv.error}` : '') + (sv.tools.length ? `
+tools: ${sv.tools.join(', ')}` : '');
+    d.innerHTML = `<span class="st"></span><span class="nm">${esc(sv.name)}</span><span class="cm">${esc(sv.status)} · ${sv.tools.length} tools${sv.error ? ' · ' + esc(sv.error) : ''}</span>`;
+    box.appendChild(d);
+  }
+}
 
 // ---- traza legible de una sesión (.lampson/trace/<sid>.log) ----
 async function openTrace(id) {
@@ -850,7 +873,7 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if ((!t && !attachments.length) || busy) return; $('#in').value = ''; send(t || '(imagen adjunta)'); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, events ? 60000 : 10000);
 setInterval(() => { if (!events && ($('#agentCount').textContent.includes('●') || busy)) loadAgents(); }, 5000);
 </script>

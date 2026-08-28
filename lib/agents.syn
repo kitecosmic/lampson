@@ -31,6 +31,7 @@ use "./tools.syn" as tools
 use "./loop.syn" as loop
 use "./provider.syn" as provider
 use "./prompt.syn" as prompt
+use "./mcp.syn" as mcp
 
 export let DIR be ".lampson/agents"
 let MAX_TASKS be 6
@@ -85,19 +86,35 @@ export task steps_for(name)
 export task addendum_for(name)
     give profile(name)["addendum"]
 
+-- tools MCP: build/worker ven todas; plan/review/explore solo las de lectura (annotations.readOnlyHint)
+task mcp_readonly_only(name)
+    give not (name == "build" or name == "worker")
+
 export task registry_for(name)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
     let p be profile(name)
     let reg be tools.registry_subset(p["tools"])
     when contains(p["tools"], "delegate")
         set reg["delegate"] to delegate
+    each m in mcp.names(mcp_readonly_only(name))
+        set reg[m] to "mcp"
     give reg
 
 export task catalog_for(name)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
     let p be profile(name)
     let cat be tools.catalog_subset(p["tools"])
     when contains(p["tools"], "delegate")
         set cat to append(cat, DELEGATE_SPEC)
-    give cat
+    give cat + mcp.catalog(mcp_readonly_only(name))
 
 -- Info de entorno para el system prompt (compartida por chat.syn / web.syn / delegate)
 export task env_info(cfg)

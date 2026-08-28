@@ -27,6 +27,7 @@ use "./lib/skills.syn" as skills
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/trace.syn" as trace
+use "./lib/mcp.syn" as mcp
 
 let REG be tools.registry()
 
@@ -77,6 +78,13 @@ test "skill install: human in the loop siempre (ask incluso en yolo, deny en str
     assert_eq(permission.describe_call("skill", ins), "skill install anthropics/skills --skill frontend-design (global)")
     assert(contains(call_tool(REG["skill"], {"name": "", "action": "list"}), "lampson (harness)"))
     assert_error(() => call_tool(REG["skill"], {"name": "x", "action": "install", "source": "not a repo!"}))
+
+test "tools MCP: ask por defecto, yolo permite, strict deniega; describe_call legible"
+    assert_eq(permission.evaluate("mcp_github_create_issue", {"title": "x"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("mcp_github_create_issue", {"title": "x"}, "yolo")["decision"], "allow")
+    assert_eq(permission.evaluate("mcp_github_create_issue", {"title": "x"}, "strict")["decision"], "deny")
+    assert_eq(permission.describe_call("mcp_github_create_issue", {"title": "x"}), "mcp_github_create_issue {\"title\": \"x\"}")
+    assert_eq(length(mcp.servers()), 0)
 
 test "describe_call"
     assert_eq(permission.describe_call("bash", {"command": "ls"}), "$ ls")

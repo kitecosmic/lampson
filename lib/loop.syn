@@ -22,6 +22,7 @@
 
 use "./provider.syn" as provider
 use "./permission.syn" as permission
+use "./mcp.syn" as mcp
 
 let MAX_ERRORS_PER_TURN be 8
 
@@ -132,6 +133,9 @@ task execute(tc, opts, on_event)
             emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
     try
+        -- tools MCP: no son tasks Synsema (args libres); el registry las marca con "mcp"
+        when registry[name] == "mcp"
+            give text(mcp.call(name, args))
         let result be call_tool(registry[name], args)
         give text(result)
     recover err

@@ -1,0 +1,58 @@
+-- mcp_test.syn — cliente MCP contra tests/mock_mcp.js (node). Corre con `synsema run` desde tests/run.ps1|sh
+-- con LAMPSON_MCP_CONFIG=.lampson/tmp/mcp_test.json (el script lo escribe). Vive en la raíz (un módulo no puede importar ../).
+require exec
+require time
+require env("LAMPSON_*")
+require env("OS")
+require file(".lampson")
+require file(".lampson/*")
+require file("workspace")
+require file("workspace/*")
+use "./lib/mcp.syn" as mcp
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+-- el config del test vive bajo .lampson/ (único lugar fuera del workspace que las tools pueden leer)
+write_file(".lampson/tmp/mcp_test.json", json_encode({"mcpServers": {"mock": {"command": "node", "args": ["tests/mock_mcp.js"], "cwd": "."}, "broken": {"command": "node", "args": ["-e", "process.exit(3)"], "cwd": "."}, "off": {"command": "x", "disabled": true}}}))
+let servers be mcp.servers()
+check(length(servers) >= 2 and length(where(servers, (s) => s["name"] == "off")) == 0, "config: mock y broken; off (disabled) ignorado")
+mcp.start_all(15)
+let sm be mcp.summary()
+each s in sm
+    print("  " + s["name"] + " (" + s["scope"] + ") " + s["status"] + " tools=" + json_encode(s["tools"]) + (when s["error"] != nothing then " · " + text(s["error"]) otherwise ""))
+let mock be mcp.state("mock")
+check(mock != nothing and mock["status"] == "ready" and length(mock["tools"]) == 4, "mock listo con 4 tools")
+let broken be mcp.state("broken")
+check(broken != nothing and broken["status"] == "error", "server que muere → status error, no cuelga")
+let cat be mcp.catalog(false)
+check(length(where(cat, (t) => t["name"] == "mcp_mock_echo")) == 1, "catálogo con mcp_mock_echo")
+check(contains(mcp.names(true), "mcp_mock_echo") and not contains(mcp.names(true), "mcp_mock_add"), "readonly_only deja solo echo (readOnlyHint)")
+check(mcp.call("mcp_mock_echo", {"text": "hola"}) == "echo: hola", "call echo")
+check(mcp.call("mcp_mock_add", {"a": 2, "b": 3}) == "5", "call add")
+check(starts_with(mcp.call("mcp_mock_fail", {}), "ERROR: boom"), "isError → ERROR: …")
+check(mcp.call("mcp_mock_slow", {"ms": 300}) == "done after 300", "respuesta demorada")
+let e1 be ""
+try
+    mcp.call("mcp_mock_nope", {})
+recover err
+    set e1 to text(err)
+check(contains(e1, "MCP error") and contains(e1, "unknown tool"), "tool inexistente → error JSON-RPC legible: " + e1)
+let e2 be ""
+try
+    mcp.call("mcp_zzz_x", {})
+recover err
+    set e2 to text(err)
+check(contains(e2, "unknown MCP tool"), "server desconocido → error")
+mcp.stop_all()
+sleep(1)
+let after be mcp.state("mock")
+check(after["status"] == "stopped", "stop_all → stopped: " + after["status"])
+when length(failures) > 0
+    raise(text(length(failures)) + " fallos en mcp_test")
+print("mcp_test: todo OK")

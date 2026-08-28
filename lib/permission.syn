@@ -79,7 +79,14 @@ export task evaluate(name, args, mode)
                 give {"decision": "allow", "reason": "yolo mode (.env)"}
             give {"decision": "ask", "reason": "writes a .env file (secrets)"}
         give {"decision": "allow", "reason": "workspace write"}
-    when name == "skill" and is_install(args)
+    when starts_with(name, "mcp_")
+        -- tool de un server MCP (terceros, efectos fuera del workspace): humano por defecto; yolo permite; strict deniega
+        when mode == "yolo"
+            give {"decision": "allow", "reason": "yolo mode (MCP tool)"}
+        when mode == "strict"
+            give {"decision": "deny", "reason": "strict mode (MCP tool)"}
+        give {"decision": "ask", "reason": "MCP tool " + name}
+    when name == "skill" and is_install(args)
         -- instala instrucciones/scripts de terceros FUERA del workspace (~/.agents/skills): humano siempre, incluso en yolo
         when mode == "strict"
             give {"decision": "deny", "reason": "strict mode (installs a third-party skill)"}
@@ -94,6 +101,8 @@ task one_line(s, max)
     give t
 
 export task describe_call(name, args)
+    when starts_with(name, "mcp_")
+        give name + " " + one_line(json_encode(args), 160)
     when name == "skill" and is_install(args)
         give "skill install " + text(args["source"]) + " --skill " + text(args["name"]) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "bash"

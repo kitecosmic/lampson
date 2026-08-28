@@ -18,6 +18,9 @@ language itself — and every step is visible, in the terminal or in a web UI.
 - **Managed processes**: the agent starts servers with `process`, and the new log lines of every
   server are appended to each command result — it *sees its own console*. Live logs in the web UI.
 - **Skills**: Markdown procedures the model loads on demand (yours in `workspace/skills/`).
+- **MCP servers**: global (`lampson/.lampson/mcp.json` — one config, every project you open) or per
+  project (`.lampson/mcp.json` in the repo), same JSON as Claude Code / Cursor. Their tools join the
+  model's catalog as `mcp_<server>_<tool>`; calling one asks you first (yolo allows, strict denies).
 - **Project memory**: the agent keeps its own notes per project (`memory/<project>/*.md`, outside
   the repo) — how to run it, gotchas, decisions — and rereads them in the next session. You can read
   and edit them (web panel, `/memory`).
@@ -178,6 +181,27 @@ while steps < max_steps and tokens <= budget
         out = call_tool(registry[name], args)          -- least-privilege; errors go back as text
         messages += tool(id, out)                      -- everything is kept, including failures
 ```
+
+### MCP servers
+
+`lib/mcp.syn` is a stdio MCP client. Config, in the format you already have elsewhere:
+
+```json
+{"mcpServers": {"github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+                           "env": {"GITHUB_TOKEN": "…"}}}}
+```
+
+- `lampson/.lampson/mcp.json` is **global**: lampson is installed once, so a server declared there is
+  available in every repo you open. `workspace/.lampson/mcp.json` is per project (a server with the same
+  name overrides the global one). `"disabled": true` keeps an entry without starting it; `"cwd"` defaults
+  to the workspace.
+- Each server runs inside a supervisor `agent` (like managed processes): `initialize` → `tools/list`,
+  then requests travel over the bus (`mcp.req.<server>` / `mcp.res.<server>.<id>`). State on the
+  blackboard (`mcp:<server>`), status in `/mcp` and the web sidebar; a server that dies shows `error`.
+- Tools appear to the model as `mcp_<server>_<tool>` with the server's JSON Schema. `build`/`worker` see
+  all of them; `plan`/`review`/`explore` only those marked `readOnlyHint`. Every call goes through
+  `permission.syn`: **ask** by default, allow in yolo, deny in strict — and lands in the session trace.
+- Not yet: HTTP/SSE transports, resources/prompts, sampling.
 
 ### Sub-agents
 

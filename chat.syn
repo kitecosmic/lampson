@@ -41,6 +41,7 @@ use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
+use "./lib/mcp.syn" as mcp
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -154,6 +155,7 @@ let COMMANDS be [
     ["/memory", "[nombre]", "notas que el agente guardó sobre ESTE proyecto (memory/<proyecto>/*.md); con nombre, la muestra"],
     ["/skills", "", "skills disponibles (instrucciones que el agente puede cargar)"],
     ["/agents", "", "subagentes lanzados con delegate: estado, pasos y log de cada uno"],
+    ["/mcp", "", "servers MCP conectados (globales: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json) y sus tools"],
     ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
     ["/new", "", "empezar una sesión nueva (historial vacío)"],
@@ -389,6 +391,11 @@ task run_interactive(cmd)
     give join(captured, "\n")
 
 let system_msg be system_for(profile)
+-- servers MCP (globales en .lampson/mcp.json, del proyecto en workspace/.lampson/mcp.json): arrancan antes
+-- de armar el catálogo de tools; hasta 8 s de espera a que estén listos
+let mcp_servers be mcp.start_all(8)
+each ms in mcp.summary()
+    print("  " + (when ms["status"] == "ready" then green("● mcp " + ms["name"]) otherwise red("○ mcp " + ms["name"] + " " + ms["status"])) + dim(" (" + ms["scope"] + ") " + text(length(ms["tools"])) + " tools" + (when ms["error"] != nothing then " · " + text(ms["error"]) otherwise "")))
 let opts be opts_for(profile, lower(env("LAMPSON_PERMISSION", "ask")))
 
 let sid be env("LAMPSON_SESSION", "")
@@ -567,6 +574,17 @@ while running
                     print("  " + yellow(it["name"]) + "  " + it["title"])
             otherwise
                 print(memo.note_read(nm))
+        otherwise when input == "/mcp"
+            let sm be mcp.summary()
+            when length(sm) == 0
+                print("  sin servers MCP. Global (todos los proyectos): lampson\.lampson\mcp.json · por proyecto: .lampson\mcp.json en el repo")
+                print("  " + dim("{\"mcpServers\": {\"github\": {\"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"], \"env\": {\"GITHUB_TOKEN\": \"…\"}}}}"))
+            each ms in sm
+                print("  " + (when ms["status"] == "ready" then green("● ") otherwise red("○ ")) + pad(ms["name"], 14) + dim(pad(ms["scope"], 8) + ms["status"] + "  $ " + ms["command"]) + (when ms["error"] != nothing then red("  " + text(ms["error"])) otherwise ""))
+                when length(ms["tools"]) > 0
+                    print("      " + dim(join(ms["tools"], ", ")))
+            -- servers que se pusieron listos después del arranque: recomponer el catálogo
+            set opts to opts_for(profile, mode)
         otherwise when input == "/agents"
             agents.prune(10, 1800)
             let kids be agents.list_children()
@@ -634,5 +652,6 @@ while running
     flush()
 -- los procesos gestionados (servidores) y los subagentes en background mueren con lampson
 agents.stop_all()
+mcp.stop_all()
 proc.halt_all()
 print("bye · sesión " + sid)

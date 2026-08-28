@@ -48,6 +48,7 @@ use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
+use "./lib/mcp.syn" as mcp
 
 let APPROVAL_TIMEOUT be 180
 
@@ -99,6 +100,9 @@ task boot(profile, mode, ask_fn, pname, model)
 -- programa; esta es su puerta de entrada. Bajo serve el agente sobrevive al request que lo lanzó.
 task lampson_subagent(spec_json)
     give agents.run_child_json(spec_json)
+
+-- servers MCP: supervisores (agentes) lanzados al arrancar; los handlers leen su estado del blackboard
+mcp.start_all(8)
 
 serve on 8080
     max_streams 50
@@ -206,6 +210,9 @@ serve on 8080
         let cfg be provider.config_for(pname, "")
         give provider.list_models(cfg)
 
+    route "GET /api/mcp" requires auth
+        give {"servers": mcp.summary(), "global": mcp.GLOBAL_CONFIG, "project": mcp.PROJECT_CONFIG}
+
     route "GET /api/agents" requires auth
         agents.prune(10, 1800)
         give {"agents": agents.list_children()}
@@ -215,7 +222,7 @@ serve on 8080
     -- tiene su cola acotada (drop_oldest). Heartbeat cada 25 s para que el proxy/navegador no cierre.
     route "GET /api/events" requires auth
         stream
-            let sub be bus_subscribe(["proc.*", "subagent.*"], {"max_queue": 512})
+            let sub be bus_subscribe(["proc.*", "subagent.*", "mcp.*"], {"max_queue": 512})
             let open be true
             while open
                 let ev be bus_recv(sub, 25)

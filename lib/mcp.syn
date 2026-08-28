@@ -1,0 +1,280 @@
+-- lib/mcp.syn — cliente MCP (Model Context Protocol) por stdio: servers globales y por proyecto
+--
+-- Config (mismo formato que Claude Code / Cursor, para copiar y pegar):
+--   .lampson/mcp.json             GLOBAL: lampson se instala una vez (~/lampson), así que esto vale para
+--                                 TODOS los proyectos que abras — "el mcp de GitHub en todos los repos"
+--   workspace/.lampson/mcp.json   por proyecto (no committeado); un server con el mismo nombre pisa al global
+--   {"mcpServers": {"github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+--                              "env": {"GITHUB_TOKEN": "…"}, "disabled": false}}}
+--
+-- Arquitectura (la misma que los procesos gestionados, lib/tools/proc.syn):
+--   * un agente supervisor `McpSup` por server: proc_spawn (pipes, una línea JSON por mensaje), handshake
+--     initialize → notifications/initialized → tools/list, y después un loop `select` entre el proceso y
+--     el bus. Vive mientras vive lampson; bajo `serve` sobrevive a los requests. Al cerrar, muere el árbol.
+--   * estado en el blackboard "mcp:<server>" = {status, tools: [{name, description, inputSchema,
+--     readonly}], error}; lo leen chat/web/registry con observe.
+--   * llamada: el tool publica "mcp.req.<server>" {id, method, params} y espera "mcp.res.<server>.<id>";
+--     el supervisor serializa las requests por server (un MCP stdio es secuencial de todos modos).
+--   * cada tool MCP entra al catálogo del modelo como `mcp_<server>_<tool>` con su inputSchema tal cual;
+--     loop.execute las despacha acá (no son tasks Synsema: los args son libres). permission.syn: ask por
+--     defecto (una tool de terceros con efectos fuera del workspace), yolo permite, strict deniega; las
+--     de solo lectura (annotations.readOnlyHint) están también en plan/review/explore.
+-- Sin HTTP/SSE por ahora (stdio cubre casi todos los servers publicados); es el siguiente paso natural.
+
+use "./tools/common.syn" as c
+
+export let GLOBAL_CONFIG be ".lampson/mcp.json"
+export let PROJECT_CONFIG be "workspace/.lampson/mcp.json"
+let CALL_TIMEOUT be 120
+
+task valid_name(name)
+    when name == nothing or name == ""
+        give false
+    give matches(name, "[a-zA-Z0-9_-]{1,32}")
+
+task read_config(path, scope)
+    let out be []
+    try
+        let doc be json_decode(read_file(path))
+        when contains(doc, "mcpServers")
+            each name in keys(doc["mcpServers"])
+                let s be doc["mcpServers"][name]
+                let disabled be false
+                when contains(s, "disabled")
+                    set disabled to s["disabled"] == true
+                when valid_name(name) and contains(s, "command") and not disabled
+                    set out to append(out, {"name": name, "command": text(s["command"]), "args": when contains(s, "args") then s["args"] otherwise [], "env": when contains(s, "env") then s["env"] otherwise {}, "cwd": when contains(s, "cwd") then text(s["cwd"]) otherwise "workspace", "scope": scope})
+    recover err
+        give out
+    give out
+
+-- servers configurados: proyecto pisa a global por nombre. LAMPSON_MCP_CONFIG = un archivo extra (tests).
+export task servers()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let by_name be {}
+    each s in read_config(GLOBAL_CONFIG, "global")
+        set by_name[s["name"]] to s
+    each s in read_config(PROJECT_CONFIG, "project")
+        set by_name[s["name"]] to s
+    when env("LAMPSON_MCP_CONFIG", "") != ""
+        each s in read_config(env("LAMPSON_MCP_CONFIG", ""), "extra")
+            set by_name[s["name"]] to s
+    let out be []
+    each n in sort_by(keys(by_name), (x) => x)
+        set out to append(out, by_name[n])
+    give out
+
+-- ---------- supervisor: un agente por server ----------
+-- Parámetros del spawn: name, command, args_json, env_json, cwd (un agente no ve el módulo: todo va por spawn,
+-- y las constantes PROTOCOL/timeouts van como literales acá adentro).
+agent McpSup
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let key be "mcp:" + name
+    let args be json_decode(args_json)
+    let envs be json_decode(env_json)
+    share {"status": "starting", "tools": [], "error": nothing, "started": now()} as key
+    let p be nothing
+    try
+        set p to proc_spawn(command, args, {"cwd": cwd, "env": envs, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
+    recover err
+        share {"status": "error", "tools": [], "error": "cannot start: " + text(err), "started": now()} as key
+    when p != nothing
+        let seq be 0
+        let pending be nothing
+        let sub be bus_subscribe(["mcp.req." + name, "mcp.stop." + name, "mcp.stop_all"])
+        -- request síncrona (handshake y tools/list): manda y espera la respuesta con ese id, saltando
+        -- notificaciones y basura; devuelve {result} | {error} | nothing (timeout / proceso muerto)
+        task rpc(method, params, timeout)
+            set seq to seq + 1
+            let id be seq
+            proc_send(p, json_encode({"jsonrpc": "2.0", "id": id, "method": method, "params": params}) + "\n")
+            let deadline be now() + timeout
+            let answer be nothing
+            while answer == nothing and now() < deadline
+                let ev be proc_recv(p, deadline - now())
+                when ev == nothing
+                    set answer to {"error": "timeout waiting for " + method}
+                otherwise when ev["type"] == "exit"
+                    set answer to {"error": "server exited with code " + text(ev["data"]["exit_code"])}
+                otherwise when ev["type"] == "stdout"
+                    try
+                        let m be json_decode(ev["data"])
+                        when contains(m, "id") and m["id"] == id
+                            set answer to when contains(m, "error") then {"error": text(m["error"]["message"])} otherwise {"result": m["result"]}
+                    recover e2
+                        set answer to answer
+            give answer
+        task notify(method, params)
+            proc_send(p, json_encode({"jsonrpc": "2.0", "method": method, "params": params}) + "\n")
+        let init be rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "lampson", "version": "0.1"}}, 30)
+        when init == nothing or contains(init, "error")
+            share {"status": "error", "tools": [], "error": "initialize failed: " + (when init == nothing then "no answer" otherwise init["error"]), "started": now()} as key
+            proc_close(p)
+        otherwise
+            notify("notifications/initialized", {})
+            let listed be rpc("tools/list", {}, 30)
+            let tools be []
+            when listed != nothing and contains(listed, "result") and contains(listed["result"], "tools")
+                each t in listed["result"]["tools"]
+                    let ro be false
+                    when contains(t, "annotations") and contains(t["annotations"], "readOnlyHint")
+                        set ro to t["annotations"]["readOnlyHint"] == true
+                    set tools to append(tools, {"name": t["name"], "description": when contains(t, "description") then t["description"] otherwise "", "inputSchema": when contains(t, "inputSchema") then t["inputSchema"] otherwise {"type": "object", "properties": {}}, "readonly": ro})
+            share {"status": "ready", "tools": tools, "error": nothing, "started": now()} as key
+            bus_publish("mcp." + name, {"name": name, "status": "ready", "tools": length(tools)})
+            -- loop de servicio: requests por bus, salida/muerte del proceso
+            let open be true
+            while open
+                let ev be select({"p": p, "bus": sub}, 60)
+                when ev == nothing
+                    set open to proc_status(p) == "running"
+                otherwise when ev["name"] == "bus"
+                    when ev["topic"] == "mcp.req." + name
+                        let r be ev["data"]
+                        let ans be rpc(r["method"], r["params"], 120)
+                        bus_publish("mcp.res." + name + "." + text(r["id"]), when ans == nothing then {"error": "no answer"} otherwise ans)
+                    otherwise
+                        set open to false
+                otherwise when ev["type"] == "exit"
+                    share {"status": "exited", "tools": [], "error": "server exited with code " + text(ev["data"]["exit_code"]), "started": now()} as key
+                    bus_publish("mcp." + name, {"name": name, "status": "exited"})
+                    set open to false
+                otherwise when ev["type"] == "stderr"
+                    bus_publish("mcp." + name, {"name": name, "status": "ready", "line": ev["data"]})
+            proc_close(p)
+            when proc_status(p) != "running"
+                observe key as st
+                when st["status"] == "ready"
+                    share {"status": "stopped", "tools": [], "error": nothing, "started": now()} as key
+        bus_unsubscribe(sub)
+
+export task state(name)
+    observe "mcp:" + name as st
+    give st
+
+-- arrancar todos los servers configurados (chat/web al iniciar); espera hasta `wait_s` a que estén listos
+export task start_all(wait_s)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let list be servers()
+    each s in list
+        let st be state(s["name"])
+        when st == nothing or (st["status"] != "ready" and st["status"] != "starting")
+            spawn McpSup with name = s["name"], command = s["command"], args_json = json_encode(s["args"]), env_json = json_encode(s["env"]), cwd = s["cwd"]
+    let waited be 0
+    while waited < wait_s * 10 and length(where(list, (s) => state(s["name"]) == nothing or state(s["name"])["status"] == "starting")) > 0
+        sleep(0.1)
+        set waited to waited + 1
+    give list
+
+export task stop_all()
+    bus_publish("mcp.stop_all", {})
+
+-- [{name, scope, status, error, tools: n}]
+export task summary()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let out be []
+    each s in servers()
+        let st be state(s["name"])
+        set out to append(out, {"name": s["name"], "scope": s["scope"], "command": s["command"] + " " + join(apply((a) => text(a), s["args"]), " "), "status": when st == nothing then "off" otherwise st["status"], "error": when st == nothing then nothing otherwise st["error"], "tools": when st == nothing then [] otherwise apply((t) => t["name"], st["tools"])})
+    give out
+
+-- ---------- tools para el modelo ----------
+
+export task tool_name(server, tool)
+    give "mcp_" + server + "_" + tool
+
+-- catálogo (specs OpenAI-style) de las tools MCP listas; readonly_only = true para perfiles de solo lectura
+export task catalog(readonly_only)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let out be []
+    each s in servers()
+        let st be state(s["name"])
+        when st != nothing and st["status"] == "ready"
+            each t in st["tools"]
+                when t["readonly"] or not readonly_only
+                    set out to append(out, {"name": tool_name(s["name"], t["name"]), "description": "[MCP " + s["name"] + (when t["readonly"] then ", read-only" otherwise "") + "] " + t["description"], "parameters": t["inputSchema"]})
+    give out
+
+export task names(readonly_only)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    give apply((s) => s["name"], catalog(readonly_only))
+
+task split_name(full)
+    -- mcp_<server>_<tool>: el server no tiene "_" garantizado, así que probamos cada server configurado
+    let rest be slice(full, 4, length(full))
+    each s in servers()
+        let pre be s["name"] + "_"
+        when length(rest) > length(pre) and slice(rest, 0, length(pre)) == pre
+            give {"server": s["name"], "tool": slice(rest, length(pre), length(rest))}
+    give nothing
+
+-- llamada: request por bus al supervisor, respuesta por bus; el contenido vuelve como texto para el modelo
+export task call(full_name, args)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let parts be split_name(full_name)
+    when parts == nothing
+        raise("unknown MCP tool " + full_name)
+    let st be state(parts["server"])
+    when st == nothing or st["status"] != "ready"
+        raise("MCP server '" + parts["server"] + "' is not ready (" + (when st == nothing then "off" otherwise st["status"]) + ")")
+    let id be text(floor(now() * 1000000))
+    let sub be bus_subscribe("mcp.res." + parts["server"] + "." + id)
+    bus_publish("mcp.req." + parts["server"], {"id": id, "method": "tools/call", "params": {"name": parts["tool"], "arguments": when args == nothing then {} otherwise args}})
+    let ev be bus_recv(sub, CALL_TIMEOUT + 5)
+    bus_unsubscribe(sub)
+    when ev == nothing
+        raise("MCP call timed out (" + full_name + ")")
+    let ans be ev["data"]
+    when contains(ans, "error")
+        raise("MCP error: " + text(ans["error"]))
+    give render(ans["result"])
+
+-- resultado MCP → texto: bloques text concatenados; otros tipos se describen; isError → ERROR: …
+task render(result)
+    let parts be []
+    when contains(result, "content")
+        each b in result["content"]
+            let ty be when contains(b, "type") then b["type"] otherwise "?"
+            when ty == "text"
+                set parts to append(parts, text(b["text"]))
+            otherwise when ty == "image"
+                set parts to append(parts, "[image " + (when contains(b, "mimeType") then b["mimeType"] otherwise "") + ", " + text(length(text(b["data"]))) + " base64 chars]")
+            otherwise when ty == "resource"
+                set parts to append(parts, "[resource] " + json_encode(b["resource"]))
+            otherwise
+                set parts to append(parts, json_encode(b))
+    when length(parts) == 0 and contains(result, "structuredContent")
+        set parts to append(parts, json_encode(result["structuredContent"]))
+    let out be join(parts, "\n")
+    when contains(result, "isError") and result["isError"] == true
+        give "ERROR: " + out
+    give c.truncate(out, c.MAX_OUTPUT)

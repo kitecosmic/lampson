@@ -23,6 +23,8 @@ LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema test unit.test.syn
 code=$?
 # procesos gestionados: supervisor-agente + proc_spawn — corre con `run` (el swarm no existe bajo `test`)
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema run proc_test.syn || code=1
+# cliente MCP contra tests/mock_mcp.js (node)
+LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_MCP_CONFIG=.lampson/tmp/mcp_test.json synsema run mcp_test.syn || code=1
 # subagentes (delegate) contra el mock LLM (el script lo arranca en :8765)
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run agents_test.syn || code=1
 exit "${code:-0}"
