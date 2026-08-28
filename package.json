@@ -1,0 +1,40 @@
+{
+  "name": "lampson",
+  "version": "0.1.0",
+  "description": "A coding agent written in Synsema: terminal + web, tools confined to the mounted project, lamps (your own tool plugins), LSP, MCP, sub-agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kitecosmic/lampson.git"
+  },
+  "homepage": "https://github.com/kitecosmic/lampson#readme",
+  "bugs": "https://github.com/kitecosmic/lampson/issues",
+  "keywords": ["agent", "coding-agent", "synsema", "llm", "cli", "lsp", "mcp"],
+  "bin": {
+    "lampson": "bin/lampson.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "public/",
+    "skills/",
+    "lamps/",
+    "chat.syn",
+    "web.syn",
+    "lampson.ps1",
+    "lampson.sh",
+    "lampson.cmd",
+    ".env.example",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "synsema": "^0.6.10"
+  },
+  "scripts": {
+    "test": "pwsh -NoProfile -File tests/run.ps1"
+  }
+}

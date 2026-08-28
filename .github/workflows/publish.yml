@@ -1,0 +1,30 @@
+name: publish to npm
+# Publishes the package when a version tag is pushed (v0.1.0, v0.2.3…). No npm token in the repo:
+# npm "trusted publishing" lets this workflow publish via GitHub's OIDC identity, and the release gets
+# a signed provenance attestation. Configure once on npmjs.com → package → Settings → Trusted Publisher:
+#   repository kitecosmic/lampson · workflow publish.yml · environment (leave empty)
+# The tag must match package.json ("version") — the job refuses otherwise.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: npm ≥ 11.5 (trusted publishing needs it)
+        run: npm install -g npm@latest
+      - name: tag must match package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "refs/tags/v$v" = "$GITHUB_REF" ] || { echo "tag $GITHUB_REF ≠ package.json v$v"; exit 1; }
+      - run: npm publish --provenance --access public

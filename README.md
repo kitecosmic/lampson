@@ -46,7 +46,20 @@ language itself — and every step is visible, in the terminal or in a web UI.
 
 ## Install
 
-One line. It installs `synsema` if missing, puts Lampson in `~/lampson`, adds it to your PATH and
+With npm (brings `synsema` along as a dependency):
+
+```sh
+npm i -g lampson
+cd /path/to/your/project
+lampson            # terminal
+lampson --web      # http://127.0.0.1:8080
+```
+
+The package keeps your config, sessions, memory and global lamps in `~/lampson` (`LAMPSON_HOME` to change
+it) and refreshes the code there whenever you `npm i -g lampson@latest`. On Windows it needs PowerShell
+(pwsh or the built-in one) and Git for Windows (its bash is what the `bash` tool uses).
+
+Or the git-based installer — same result, `lampson --update` then means `git pull`. One line. It installs `synsema` if missing, puts Lampson in `~/lampson`, adds it to your PATH and
 asks for your provider + API key.
 
 **Windows (PowerShell)**

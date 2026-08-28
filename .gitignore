@@ -13,3 +13,5 @@ web_test.syn
 tests/*.log
 tests/*.txt
 *.tmp
+
+*.tgz
