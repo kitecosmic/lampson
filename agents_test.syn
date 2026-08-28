@@ -121,6 +121,8 @@ let r3 be loop.run_turn(cfg, r2["messages"] + [{"role": "user", "content": "otra
 check(contains(r3["text"], "final notice"), "el buzón inyectó el aviso antes del siguiente paso del padre: " + slice(r3["text"], 0, 120))
 
 proc_close(mock)
+check(agents.prune(0, 0) >= 3, "prune(0,0) borra los hijos del test")
+check(length(agents.list_children()) == 0, "sin residuos en .lampson/agents")
 when length(failures) > 0
     raise(text(length(failures)) + " fallos en agents_test")
 print("agents_test: todo OK")

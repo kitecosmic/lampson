@@ -657,12 +657,12 @@ async function openProc(name) {
   $('#vpath').textContent = 'proceso ' + name; $('#vmeta').textContent = r.running ? '● corriendo · log en vivo' : '○ terminado';
   const pre = $('#vbody'); pre.className = 'log'; pre.textContent = r.log || '(sin salida todavía)';
   showPane('viewer'); $('#stage').scrollTop = $('#stage').scrollHeight;
-  clearInterval(procTimer); if (r.running) procTimer = setInterval(async () => { if (procOpen !== name || $('#viewer').style.display === 'none') { clearInterval(procTimer); return; } const x = await (await fetch('/api/proc/log?name=' + encodeURIComponent(name) + '&tail=400')).json(); pre.textContent = x.log || ''; $('#vmeta').textContent = x.running ? '● corriendo · log en vivo' : '○ terminado'; if (!x.running) { clearInterval(procTimer); loadProcs(); } }, 2000);
+  clearInterval(procTimer); if (r.running && !events) procTimer = setInterval(() => refreshProcViewer(name), 2000); // sin stream de eventos: respaldo por timer
   loadProcs();
 }
 
 // ---- subagentes (delegate): lista + log vivo por hijo ----
-let agentOpen = null, agentTimer = null;
+let agentOpen = null, agentTimer = null, agentPaint = null;
 async function loadAgents() {
   let r; try { r = await (await fetch('/api/agents')).json(); } catch (e) { return; }
   const box = $('#agentsBox'); box.innerHTML = '';
@@ -687,10 +687,44 @@ async function openAgent(id) {
     const pre = $('#vbody'); pre.className = 'log'; pre.textContent = (r.log || '(sin salida todavía)') + (meta.status && meta.status !== 'running' && meta.text ? '\n\n── informe ──\n' + meta.text : '');
     return meta.status === 'running';
   };
+  agentPaint = async () => { if (agentOpen !== id || $('#viewer').style.display === 'none') return; const still = await paint(); if (!still) loadAgents(); };
   const running = await paint(); showPane('viewer'); $('#stage').scrollTop = $('#stage').scrollHeight;
-  clearInterval(agentTimer); if (running) agentTimer = setInterval(async () => { if (agentOpen !== id || $('#viewer').style.display === 'none') { clearInterval(agentTimer); return; } const still = await paint(); if (!still) { clearInterval(agentTimer); loadAgents(); } }, 2000);
+  clearInterval(agentTimer); if (running && !events) agentTimer = setInterval(agentPaint, 2000); // respaldo sin stream
   loadAgents();
 }
+
+async function refreshProcViewer(name) {
+  if (procOpen !== name || $('#viewer').style.display === 'none') { clearInterval(procTimer); return; }
+  const x = await (await fetch('/api/proc/log?name=' + encodeURIComponent(name) + '&tail=400')).json();
+  $('#vbody').textContent = x.log || ''; $('#vmeta').textContent = x.running ? '● corriendo · log en vivo' : '○ terminado';
+  if (!x.running) { clearInterval(procTimer); loadProcs(); }
+}
+
+// ---- eventos en vivo (SSE /api/events, alimentado por el bus de Synsema) ----
+// Los supervisores de procesos publican cada línea y cambio de estado; los subagentes, inicio/fin/pasos.
+// La UI reacciona a eso (con un pequeño debounce) en vez de recargar por timer; los timers quedan como
+// respaldo lento por si el stream se cae (reconexión automática con backoff).
+let events = null, evBackoff = 1000; const debounces = {};
+function debounce(key, fn, ms) { clearTimeout(debounces[key]); debounces[key] = setTimeout(fn, ms); }
+function connectEvents() {
+  try { events = new EventSource('/api/events'); } catch (e) { events = null; return; }
+  events.onopen = () => { evBackoff = 1000; };
+  events.addEventListener('event', e => {
+    let ev; try { ev = JSON.parse(e.data); } catch { return; }
+    const t = ev.topic || '';
+    if (t.startsWith('proc.')) {
+      const name = ev.data && ev.data.name;
+      if (!ev.data || ev.data.line === undefined) debounce('procs', loadProcs, 300);        // cambio de estado
+      if (name && procOpen === name) debounce('procview', () => refreshProcViewer(name), 250);
+    } else if (t.startsWith('subagent.')) {
+      debounce('agents', loadAgents, 300);
+      const id = t.slice('subagent.'.length);
+      if (id && agentOpen === id && agentPaint) debounce('agentview', agentPaint, 250);
+    }
+  });
+  events.onerror = () => { events.close(); events = null; setTimeout(connectEvents, evBackoff); evBackoff = Math.min(evBackoff * 2, 30000); };
+}
+connectEvents();
 
 // ---- sessions ----
 async function loadSessions() {
@@ -803,8 +837,8 @@ $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); i
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
 loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
-setInterval(loadProcs, 10000);
-setInterval(() => { if ($('#agentCount').textContent.includes('●') || busy) loadAgents(); }, 5000);
+setInterval(loadProcs, events ? 60000 : 10000);
+setInterval(() => { if (!events && ($('#agentCount').textContent.includes('●') || busy)) loadAgents(); }, 5000);
 </script>
 </body>
 </html>

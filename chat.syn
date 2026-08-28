@@ -551,6 +551,7 @@ while running
             otherwise
                 print(memo.note_read(nm))
         otherwise when input == "/agents"
+            agents.prune(10, 1800)
             let kids be agents.list_children()
             when length(kids) == 0
                 print("  sin subagentes todavía (el agente los lanza con la tool delegate)")

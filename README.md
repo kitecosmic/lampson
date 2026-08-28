@@ -186,6 +186,11 @@ while steps < max_steps and tokens <= budget
 - **Permissions**: a child never asks the user — it runs `strict` (dangerous → denied with the reason;
   it reports the limitation) or `yolo` if `LAMPSON_PERMISSION=yolo`. Reports are self-reports: the
   prompt tells the parent to verify (read the file, run the test) before claiming success.
+- **History**: finished sub-agents are pruned (older than 30 min, or beyond the last 10) whenever a new one
+  is delegated or the list is shown; the test suite cleans its own.
+- **Live UI**: `GET /api/events` is an SSE stream fed by the Synsema bus — process supervisors publish every
+  log line and status change (`proc.<name>`), sub-agents their start/steps/end (`subagent.*`) — so the web
+  panels and open logs refresh on events, not on timers (timers stay only as a slow fallback).
 - Runtime detail: a Synsema `agent` only sees its spawn parameters, the builtins and the *top-level* tasks
   of the entry program, so `chat.syn`/`web.syn` define `task lampson_subagent(spec)` as the child's door.
 

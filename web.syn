@@ -191,7 +191,26 @@ serve on 8080
         give {"name": query.name, "content": memo.note_read(query.name)}
 
     route "GET /api/agents" requires auth
+        agents.prune(10, 1800)
         give {"agents": agents.list_children()}
+
+    -- Eventos en vivo para la UI (SSE): lo que publican los supervisores de procesos (proc.<name>: líneas y
+    -- cambios de estado) y los subagentes (subagent.started|done|<id>). Un bus por programa; cada cliente
+    -- tiene su cola acotada (drop_oldest). Heartbeat cada 25 s para que el proxy/navegador no cierre.
+    route "GET /api/events" requires auth
+        stream
+            let sub be bus_subscribe(["proc.*", "subagent.*"], {"max_queue": 512})
+            let open be true
+            while open
+                let ev be bus_recv(sub, 25)
+                try
+                    when ev == nothing
+                        send {"topic": "ping"} as "event"
+                    otherwise
+                        send {"topic": ev["topic"], "data": ev["data"]} as "event"
+                recover err
+                    set open to false
+            bus_unsubscribe(sub)
 
     route "GET /api/agents/log" requires auth
         when not contains(query, "id")
@@ -214,6 +233,7 @@ serve on 8080
         when not matches(b["id"], "[a-z]+-[0-9]+")
             give fail(400, "bad id")
         write_file(agents.DIR + "/" + b["id"] + ".stop", "stop")
+        bus_publish("subagent." + b["id"], {"kind": "stop", "line": "stop requested from the UI"})
         give {"result": "stop requested for " + b["id"]}
 
     route "GET /api/proc" requires auth

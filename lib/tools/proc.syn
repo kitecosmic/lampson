@@ -65,6 +65,7 @@ agent Sup
         share {"status": "exited", "exit_code": -1, "pid": 0, "started": now()} as key
     when p != nothing
         share {"status": "running", "exit_code": nothing, "pid": proc_stats(p)["pid"], "started": now()} as key
+        bus_publish("proc." + name, {"name": name, "status": "running"})
         let sub be bus_subscribe(["proc.stop." + name, "proc.stop_all"])
         let open be true
         while open
@@ -75,14 +76,18 @@ agent Sup
                 proc_close(p)
                 append_file(log, "[process stopped by lampson]\n")
                 share {"status": "stopped", "exit_code": -1, "pid": 0, "started": nothing} as key
+                bus_publish("proc." + name, {"name": name, "status": "stopped"})
                 set open to false
             otherwise when ev["type"] == "exit"
                 let code be ev["data"]["exit_code"]
                 append_file(log, "[process exited with code " + text(code) + "]\n")
                 share {"status": "exited", "exit_code": code, "pid": 0, "started": nothing} as key
+                bus_publish("proc." + name, {"name": name, "status": "exited", "exit_code": code})
                 set open to false
             otherwise
                 append_file(log, ev["data"] + "\n")
+                -- la UI web lo recibe por /api/events (SSE) y refresca el log sin timers
+                bus_publish("proc." + name, {"name": name, "status": "running", "line": ev["data"]})
         proc_close(p)
         bus_unsubscribe(sub)
 

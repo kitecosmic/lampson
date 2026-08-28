@@ -217,6 +217,37 @@ export task list_children()
         give []
     give sort_by(out, (x) => x["started"])
 
+-- poda del historial: los terminados hace más de `max_age_s` segundos, y los que sobran por encima de
+-- `keep` terminados (los más viejos primero). No hay builtin de borrado → rm por bash con ids validados.
+export task prune(keep, max_age_s)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    let finished be where(list_children(), (c) => c["status"] != "running")
+    let victims be []
+    let n be length(finished)
+    let i be 0
+    each c in finished
+        set i to i + 1
+        let fin be when c["finished"] == nothing then c["started"] otherwise c["finished"]
+        let old be false
+        when fin != nothing
+            set old to now() - fin > max_age_s
+        when (old or n - i >= keep) and matches(c["id"], "[a-z]+-[0-9]+")
+            set victims to append(victims, c["id"])
+    when length(victims) > 0
+        let files be []
+        each v in victims
+            each ext in ["json", "log", "steer", "stop"]
+                set files to append(files, "'" + DIR + "/" + v + "." + ext + "'")
+        let is_win be env("OS", "") == "Windows_NT"
+        let sh be env("LAMPSON_SHELL", when is_win then "C:\Program Files\Git\bin\bash.exe" otherwise "bash")
+        run(sh, ["-c", "rm -f " + join(files, " ")], 30, {"cwd": "."})
+    give length(victims)
+
 -- pedir a todos los hijos vivos que paren (salida de lampson)
 export task stop_all()
     require file(".lampson")
@@ -356,6 +387,7 @@ export task delegate(agent, brief, context, tasks, background, action, id, messa
         append_file(path(id, "steer"), message + "\n")
         give "message queued for " + id + " (it reads it before its next step)"
     -- spawn
+    prune(10, 1800)
     let items be [{"agent": agent, "brief": brief, "context": context}]
     when tasks != nothing
         when length(tasks) > 0
@@ -380,6 +412,7 @@ export task delegate(agent, brief, context, tasks, background, action, id, messa
             write_json(sp["id"], {"id": sp["id"], "agent": sp["agent"], "brief": sp["brief"], "status": "running", "steps": 0, "tokens": 0, "started": sp["started"], "finished": nothing, "delivered": false, "text": "", "background": true})
             write_file(path(sp["id"], "log"), "# starting…\n")
             spawn Child with spec_json = json_encode(sp)
+            bus_publish("subagent.started", {"id": sp["id"], "agent": sp["agent"]})
             set lines to append(lines, "started sub-agent " + sp["id"] + " (" + sp["agent"] + ") in the background · live log: " + DIR + "/" + sp["id"] + ".log")
         give join(lines, "\n") + "\nYou will receive each report automatically as a new message when it finishes — keep working on independent steps; do NOT poll or sleep. delegate(action=steer|stop, id=…) to redirect or cut it."
     let results be parallel_map(run_child, specs, PARALLEL)
