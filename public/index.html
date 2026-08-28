@@ -327,6 +327,14 @@
   .modal .box.lampsbox .tool .th { display:grid; grid-template-columns:auto 1fr auto; gap:8px 10px; align-items:baseline; }
   .modal .box.lampsbox .tool .th .ds { text-transform:none; }
   .modal .box.lampsbox .lhead .eyebrow { margin:0; }
+  .modal .box.lampsbox .lghost { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; margin:0; box-sizing:border-box; font:400 13px/1 var(--mono); letter-spacing:0; text-transform:none; border:1px solid var(--rule); border-radius:var(--r); background:transparent; color:var(--ink-3); }
+  .modal .box.lampsbox .lghost + .lghost { margin-left:6px; }
+  .modal .box.lampsbox .lhelp { flex:1; min-height:0; overflow:auto; max-width:none; padding:16px 24px 8px 6px; }
+  .modal .box.lampsbox .lhelp h4, .modal .box.lampsbox .lhelp p, .modal .box.lampsbox .lhelp ul { max-width: 78ch; }
+  .modal .box.lampsbox .lhelp p { margin:0 0 12px; }
+  .modal .box.lampsbox .lhelp ul { margin:0 0 16px 20px; }
+  .modal .box.lampsbox .lhelp code { font:400 .9em/1.4 var(--mono); background:var(--paper-2); padding:.05em .3em; border-radius:2px; color:var(--ink); }
+  .modal .box.lampsbox .lhelp button { text-transform:none; letter-spacing:0; font:400 12px/1 var(--mono); padding:6px 10px; }
   .s .del { margin-left:auto; color:var(--ink-3); visibility:hidden; font-size:11px; padding:0 4px; }
   .s:hover .del { visibility:visible; }
   .s .del:hover { color:var(--rubric); }
