@@ -1,6 +1,6 @@
 {
   "name": "lampson",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A coding agent written in Synsema: terminal + web, tools confined to the mounted project, lamps (your own tool plugins), LSP, MCP, sub-agents.",
   "license": "MIT",
   "repository": {

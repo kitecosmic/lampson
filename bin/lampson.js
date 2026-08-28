@@ -24,11 +24,17 @@ const marker = path.join(home, '.npm-installed');
 // what gets copied into the home: the runtime, never state. Keep in sync with "files" in package.json.
 const CODE = ['lib', 'public', 'skills', 'chat.syn', 'web.syn', 'lampson.ps1', 'lampson.sh', 'lampson.cmd', '.env.example', 'README.md', 'LICENSE'];
 
+// copia un archivo; en unix, los scripts de shell y los .syn salen con LF aunque el paquete se haya armado
+// en Windows (un CRLF en lampson.sh rompe bash: "set: pipefail\r: invalid option")
+function copyFile(s, d) {
+  if (process.platform !== 'win32' && /\.(sh|syn)$/.test(s)) fs.writeFileSync(d, fs.readFileSync(s, 'utf8').replace(/\r\n/g, '\n'), { mode: /\.sh$/.test(s) ? 0o755 : 0o644 });
+  else fs.copyFileSync(s, d);
+}
 function copyDir(src, dst) {
   fs.mkdirSync(dst, { recursive: true });
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, e.name), d = path.join(dst, e.name);
-    if (e.isDirectory()) copyDir(s, d); else fs.copyFileSync(s, d);
+    if (e.isDirectory()) copyDir(s, d); else copyFile(s, d);
   }
 }
 
@@ -44,7 +50,7 @@ function sync() {
     if (!fs.existsSync(src)) continue;
     const dst = path.join(home, item);
     if (fs.statSync(src).isDirectory()) { fs.rmSync(dst, { recursive: true, force: true }); copyDir(src, dst); }
-    else fs.copyFileSync(src, dst);
+    else copyFile(src, dst);
   }
   // global lamps are user content: seed the example once, never overwrite what the user put there
   const lampsSrc = path.join(pkgDir, 'lamps'), lampsDst = path.join(home, 'lamps');

@@ -1,0 +1,7 @@
+# Todo texto con LF en el repo y en el checkout (también en Windows): lampson.sh con CRLF rompe bash en
+# Linux ("set: pipefail\r: invalid option"), y el paquete npm se arma desde el working tree.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.woff2 binary
+*.png binary
+*.tgz binary
