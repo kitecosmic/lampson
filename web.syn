@@ -23,6 +23,7 @@ require serve(8080)
 require net
 require time
 require exec
+require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
@@ -54,6 +55,10 @@ use "./lib/mcp.syn" as mcp
 use "./lib/lamps.syn" as lamps
 use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
+use "./lib/schedule.syn" as schedule
+use "./lib/sched_run.syn" as sched_run
+use "./lib/approvals.syn" as approvals
+use "./lib/permission.syn" as permission
 
 let APPROVAL_TIMEOUT be 180
 
@@ -105,6 +110,15 @@ task boot(profile, mode, ask_fn, pname, model)
 -- programa; esta es su puerta de entrada. Bajo serve el agente sobrevive al request que lo lanzó.
 task lampson_subagent(spec_json)
     give agents.run_child_json(spec_json)
+
+-- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
+-- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada
+-- 30 s (cron_every de Synsema: intervalo puro; la hora de reloj la resuelve schedule.syn) corre lo vencido:
+-- lámparas, comandos y corridas del agente con su sobre de permisos; una aprobación en una corrida desatendida
+-- sale por lib/approvals.syn (panel «Aprobaciones» de la UI, webhook firmado, link de un solo uso).
+task sched_tick()
+    give sched_run.tick()
+cron_every(schedule.TICK_SECONDS, sched_tick)
 
 -- servers MCP: supervisores (agentes) lanzados al arrancar; los handlers leen su estado del blackboard
 mcp.start_all(8)
@@ -311,7 +325,7 @@ serve on 8080
     -- tiene su cola acotada (drop_oldest). Heartbeat cada 25 s para que el proxy/navegador no cierre.
     route "GET /api/events" requires auth
         stream
-            let sub be bus_subscribe(["proc.*", "subagent.*", "mcp.*"], {"max_queue": 512})
+            let sub be bus_subscribe(["proc.*", "subagent.*", "mcp.*", "approval.*", "schedule.*"], {"max_queue": 512})
             let open be true
             while open
                 let ev be bus_recv(sub, 25)
@@ -375,11 +389,88 @@ serve on 8080
             give fail(400, "path required")
         give tree.file_content(query.path)
 
+    -- configuración general (rueda de la UI): zona horaria, URL pública, webhook… → .lampson/config.json
+    route "GET /api/settings/values" requires auth
+        give {"values": settings.values(), "tz_detected": schedule.tz_offset()}
+
+    route "POST /api/settings/values" requires auth
+        let b be json of request
+        try
+            each k in keys(b)
+                settings.set_value(k, b[k])
+            -- la zona horaria cacheada en el blackboard se recalcula
+            share nothing as "lampson:tz"
+            give {"ok": true, "values": settings.values(), "tz_detected": schedule.tz_offset()}
+        recover err
+            give fail(400, text(err))
+
+    -- aprobaciones (lib/approvals.syn): las del chat y las de tareas programadas comparten la cola
     route "POST /api/approve" requires auth
         expect body {id: text, decision: bool}
         let b be json of request
-        state_set("approval:" + b["id"], when b["decision"] then "yes" otherwise "no")
-        give {"ok": true}
+        give {"ok": approvals.answer(text(b["id"]), b["decision"])}
+
+    route "GET /api/approvals" requires auth
+        give {"approvals": approvals.list(), "public_url": approvals.public_url(), "webhook": approvals.webhook_url() != ""}
+
+    -- link de decisión (PÚBLICO a propósito: lo abre el humano desde el teléfono; el token de un solo uso es la
+    -- autorización, como en el `approve` nativo de Synsema bajo serve). GET porque un link en un chat es un GET.
+    route "GET /approve/:id/:token"
+        let d be when contains(query, "d") then lower(text(query.d)) otherwise ""
+        when d != "yes" and d != "no"
+            give html(approvals.html_page("¿Permitir?", "<a href='?d=yes' style='display:inline-block;padding:10px 18px;border-radius:4px;background:#1d1c1a;color:#fff;text-decoration:none;margin-right:10px'>Sí, permitir</a> <a href='?d=no' style='display:inline-block;padding:10px 18px;border-radius:4px;border:1px solid #a33;color:#a33;text-decoration:none'>No, denegar</a>"))
+        let r be approvals.answer_with_token(text(params.id), text(params.token), d == "yes")
+        when not r["ok"]
+            give html(approvals.html_page("Este link ya no sirve", "La aprobación venció, ya fue respondida o el link no es válido (" + r["why"] + ")."))
+        give html(approvals.html_page(when d == "yes" then "✓ Permitido" otherwise "✗ Denegado", "Lampson sigue con la tarea. Podés cerrar esta pestaña."))
+
+    -- tareas programadas (lib/schedule.syn): listar, crear, quitar, encender/apagar, correr ahora, log
+    route "GET /api/schedules" requires auth
+        let age be schedule.daemon_age()
+        -- este proceso tiene su propio tick (cron_every): las tareas corren mientras la web esté abierta
+        give {"tasks": schedule.summary(), "tick": schedule.TICK_SECONDS, "alive": true, "heartbeat_age": age, "mount_ok": schedule.mount_ok(), "workspace": env("LAMPSON_WORKSPACE", ""), "tz": schedule.tz_offset(), "lamps": lamps.summary()}
+
+    route "POST /api/schedules/add" requires auth
+        let b be json of request
+        try
+            let t be schedule.add(b)
+            give {"ok": true, "task": t, "result": "programada «" + t["name"] + "»: " + schedule.describe_plan(t["plan"]) + " · próxima " + schedule.fmt_local(t["next_run"])}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/schedules/remove" requires auth
+        expect body {id: text}
+        let b be json of request
+        try
+            give {"ok": true, "result": schedule.remove(text(b["id"]))}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/schedules/toggle" requires auth
+        expect body {id: text}
+        let b be json of request
+        let on be contains(b, "enabled") and b["enabled"] == true
+        try
+            give {"ok": true, "result": schedule.set_enabled(text(b["id"]), on)}
+        recover err
+            give fail(400, text(err))
+
+    -- correr ahora: la marca run_now la levanta el próximo tick (así el request no se queda minutos abierto
+    -- y la corrida vive en el hilo del cron, no en el del request)
+    route "POST /api/schedules/run" requires auth
+        expect body {id: text}
+        let b be json of request
+        try
+            let t be schedule.request_run(text(b["id"]))
+            give {"ok": true, "result": "«" + t["name"] + "» corre en el próximo tick (≤ " + text(schedule.TICK_SECONDS) + " s)"}
+        recover err
+            give fail(400, text(err))
+
+    route "GET /api/schedules/log" requires auth
+        when not contains(query, "id")
+            give fail(400, "id required")
+        let n be when contains(query, "tail") then floor(number(query.tail)) otherwise 300
+        give {"id": query.id, "log": schedule.log_tail(query.id, n), "task": schedule.get(query.id)}
 
     route "POST /api/chat" requires auth
         expect body {message: text}
@@ -396,20 +487,14 @@ serve on 8080
             task emit(kind, data, tag)
                 trace.event(sid, kind, data, tag)
                 send {"kind": kind, "data": data, "tag": tag} as "event"
-            -- aprobación humana desde la UI: pregunta por SSE y espera la respuesta (o el timeout)
+            -- aprobación humana: la cola de lib/approvals.syn (id + token) — la UI responde por SSE/POST /api/approve,
+            -- y si hay webhook/LAMPSON_PUBLIC_URL también llega un link al canal del usuario (aprobar desde el móvil)
             task ask_web(name, args, why)
-                let id be text(floor(now() * 1000)) + "-" + name
+                let id be approvals.open("chat", permission.describe_call(name, args), why, APPROVAL_TIMEOUT)
                 send {"kind": "approval_request", "data": {"id": id, "name": name, "args": args, "why": why, "timeout": APPROVAL_TIMEOUT}} as "event"
-                let waited be 0
-                let answer be nothing
-                while answer == nothing and waited < APPROVAL_TIMEOUT
-                    set answer to state_get("approval:" + id, nothing)
-                    when answer == nothing
-                        sleep(0.5)
-                        set waited to waited + 0.5
-                state_delete("approval:" + id)
-                let ok be answer == "yes"
-                send {"kind": "approval_result", "data": {"id": id, "approved": ok, "timeout": answer == nothing}} as "event"
+                let t0 be now()
+                let ok be approvals.wait(id, APPROVAL_TIMEOUT)
+                send {"kind": "approval_result", "data": {"id": id, "approved": ok, "timeout": (not ok) and now() - t0 >= APPROVAL_TIMEOUT - 1}} as "event"
                 give ok
             let ctx be boot(want, mode, ask_web, pname, pmodel)
             let messages be [ctx["system"]]

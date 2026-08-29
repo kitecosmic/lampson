@@ -114,6 +114,17 @@ export task evaluate(name, args, mode)
                 give {"decision": "deny", "reason": "strict mode (" + act + " MCP server)"}
             give {"decision": "ask", "reason": act + "s MCP server '" + (when contains(args, "name") then text(args["name"]) otherwise "?") + "'" + (when act == "add" then " → runs: " + (when contains(args, "command") then text(args["command"]) otherwise "?") otherwise "")}
         give {"decision": "allow", "reason": "read-only tool"}
+    when name == "schedule"
+        -- programar = autorizar corridas futuras SIN nadie mirando (un comando, una lámpara, o el agente entero
+        -- con un sobre de permisos): humano siempre, incluso en yolo. list/log son lectura.
+        let sact be when contains(args, "action") then text(args["action"]) otherwise "list"
+        when sact == "list" or sact == "log"
+            give {"decision": "allow", "reason": "read-only tool"}
+        when mode == "strict"
+            give {"decision": "deny", "reason": "strict mode (schedule " + sact + ")"}
+        when sact == "add"
+            give {"decision": "ask", "reason": "schedules an unattended " + (when contains(args, "kind") then text(args["kind"]) otherwise "?") + " task" + (when contains(args, "permission") then " with permission=" + text(args["permission"]) otherwise " with permission=ask")}
+        give {"decision": "ask", "reason": "schedule " + sact + " " + (when contains(args, "id") then text(args["id"]) otherwise "?")}
     when name == "skill" and is_install(args)
         -- instala instrucciones/scripts de terceros FUERA del workspace (~/.agents/skills): humano siempre, incluso en yolo
         when mode == "strict"
@@ -145,6 +156,13 @@ export task describe_call(name, args)
         when act == "remove"
             give "mcp remove " + (when contains(args, "name") then text(args["name"]) otherwise "?")
         give "mcp list"
+    when name == "schedule"
+        let sact be arg(args, "action", "list")
+        when sact == "add"
+            let what be arg(args, "kind", "?")
+            let body be when what == "lamp" then "lamp " + arg(args, "lamp", "?") + "." + arg(args, "tool", "?") + (when contains(args, "args") then " " + one_line(json_encode(args["args"]), 80) otherwise "") otherwise (when what == "bash" then "$ " + one_line(arg(args, "command", "?"), 120) otherwise "agent " + arg(args, "agent", "build") + ": " + one_line(arg(args, "prompt", "?"), 160))
+            give "schedule add «" + arg(args, "name", "?") + "» · " + arg(args, "at", "?") + " · " + body + " · permission " + arg(args, "permission", "ask") + (when contains(args, "notify") then " · notify " + text(args["notify"]) otherwise "")
+        give "schedule " + sact + (when contains(args, "id") then " " + text(args["id"]) otherwise "")
     when name == "skill" and is_install(args)
         give "skill install " + text(args["source"]) + " --skill " + text(args["name"]) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "bash"

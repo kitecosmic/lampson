@@ -1,0 +1,176 @@
+-- lib/approvals.syn — aprobaciones humanas fuera de la terminal: cola compartida + webhook + links de decisión
+--
+-- Un solo mecanismo para las puertas por las que un humano aprueba algo que el agente quiere hacer:
+--   1. la UI web (POST /api/approve desde el chat, o desde el panel «Aprobaciones» para las tareas programadas);
+--   2. la terminal: /approve <id> yes|no (una tarea programada corriendo en background mientras chateás);
+--   3. un LINK firmado que llega por el canal que sea (Telegram, mail, Slack…): GET /approve/<id>/<token>?d=yes|no
+--      — de un solo uso; el token es un secreto por aprobación (32 bytes CSPRNG), igual que el `approve` nativo
+--      de Synsema bajo serve (doc 62-human), solo que acá también sirve para las tareas del cron y para la UI;
+--   4. la consola del proceso (el link se imprime ahí también).
+-- Además, si LAMPSON_WEBHOOK_URL está configurado (o config.json {"webhook_url"}), cada aprobación pendiente dispara
+-- un POST JSON con {id, message, why, expires_at, respond_link_yes, respond_link_no} firmado con HMAC-SHA256
+-- (X-Lampson-Signature: sha256=<hex>, secreto LAMPSON_WEBHOOK_SECRET) — el mismo patrón que Stripe/GitHub, así
+-- cualquier receptor (n8n, un bot, otro .syn) reenvía los links. Los links necesitan LAMPSON_PUBLIC_URL (la URL
+-- por la que se llega a este lampson desde afuera: un túnel, el VPS, un edge Synsema con TLS).
+-- Fire-and-forget (10 s, un intento): un canal caído nunca bloquea; la UI y la consola quedan como respaldo.
+--
+-- Estado: BLACKBOARD (share/observe), que existe bajo `serve` y bajo `run` y lo ven handlers, agentes y ticks
+-- (`state_*` solo existe bajo serve — verificado 2026-08-29). Claves: "approval:meta:<id>" (visible, sin token),
+-- "approval:token:<id>", "approval:answer:<id>" (yes|no) y el índice "approval:index" (lista de ids).
+--
+-- Garantía: NUNCA se auto-aprueba. Sin respuesta al vencer el plazo → denegado (fail-closed), como Synsema.
+
+use "./settings.syn" as settings
+
+task read_cfg(key, envname)
+    let v be env(envname, "")
+    when v != ""
+        give v
+    let doc be settings.load()
+    when contains(doc, key)
+        give text(doc[key])
+    give ""
+
+export task webhook_url()
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    give read_cfg("webhook_url", "LAMPSON_WEBHOOK_URL")
+
+export task public_url()
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let u be read_cfg("public_url", "LAMPSON_PUBLIC_URL")
+    while length(u) > 0 and slice(u, length(u) - 1, length(u)) == "/"
+        set u to slice(u, 0, length(u) - 1)
+    give u
+
+task secret_text()
+    give read_cfg("webhook_secret", "LAMPSON_WEBHOOK_SECRET")
+
+task index()
+    observe "approval:index" as ix
+    give when ix == nothing then [] otherwise ix
+
+task meta_of(id)
+    observe "approval:meta:" + id as m
+    give m
+
+task set_meta(id, m)
+    share m as "approval:meta:" + id
+
+-- abre una aprobación: id único, token de un solo uso, metadatos visibles (sin token) para la UI.
+-- source = "chat" | "schedule:<id>"; message = lo que se quiere hacer; why = por qué pide permiso.
+export task open(source, message, why, timeout_s)
+    require time
+    require random
+    require net
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let id be "a" + slice(text(floor(now() * 1000)), 4, 13) + "-" + slice(token(16), 0, 6)
+    let tok be token(32)
+    let meta be {"id": id, "source": source, "message": message, "why": why, "created": now(), "expires_at": floor(now() + timeout_s), "status": "pending"}
+    set_meta(id, meta)
+    share tok as "approval:token:" + id
+    share nothing as "approval:answer:" + id
+    share append(index(), id) as "approval:index"
+    bus_publish("approval.request", meta)
+    let links be links_for(id, tok)
+    print("[lampson] aprobación pendiente " + id + " — " + message + " (vence en " + text(floor(timeout_s)) + " s)" + (when links["yes"] != "" then "\n  sí: " + links["yes"] + "\n  no: " + links["no"] otherwise "\n  respondé desde la UI web (Aprobaciones), con /approve " + id + " yes|no en la terminal, o configurá la URL pública para recibir links"))
+    notify(meta, links)
+    give id
+
+task links_for(id, tok)
+    let base be public_url()
+    when base == ""
+        give {"yes": "", "no": "", "path": "/approve/" + id + "/" + tok}
+    give {"yes": base + "/approve/" + id + "/" + tok + "?d=yes", "no": base + "/approve/" + id + "/" + tok + "?d=no", "path": "/approve/" + id + "/" + tok}
+
+-- webhook firmado (fire-and-forget)
+task notify(meta, links)
+    let url be webhook_url()
+    when url == ""
+        give false
+    let payload be {"id": meta["id"], "type": "approve", "source": meta["source"], "message": meta["message"], "why": meta["why"], "expires_at": meta["expires_at"], "respond_path": links["path"], "respond_link_yes": links["yes"], "respond_link_no": links["no"]}
+    let body be json_encode(payload)
+    let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
+    let sec be secret_text()
+    when sec != ""
+        set headers["X-Lampson-Signature"] to "sha256=" + hmac_sha256(body, sec)
+    try
+        let r be http_post(url, body, headers)
+        when not r["ok"]
+            print("[lampson] webhook " + url + " respondió " + text(r["status"]))
+        give r["ok"]
+    recover err
+        print("[lampson] webhook falló: " + text(err))
+        give false
+
+-- espera (polling) hasta que alguien responda o venza el plazo. Devuelve true/false; sin respuesta = false.
+export task wait(id, timeout_s)
+    require time
+    let deadline be now() + timeout_s
+    let answer be nothing
+    while answer == nothing and now() < deadline
+        observe "approval:answer:" + id as a
+        set answer to a
+        when answer == nothing
+            sleep(0.5)
+    let meta be meta_of(id)
+    let ok be answer == "yes"
+    when meta != nothing
+        set meta["status"] to when answer == nothing then "expired" otherwise (when ok then "approved" otherwise "denied")
+        set meta["answered"] to now()
+        set_meta(id, meta)
+        bus_publish("approval.result", meta)
+    share nothing as "approval:token:" + id
+    give ok
+
+-- responder desde la UI (loopback, ya autenticado) o desde la terminal: sin token
+export task answer(id, decision)
+    let meta be meta_of(id)
+    when meta == nothing
+        give false
+    when meta["status"] != "pending"
+        give false
+    let v be when decision then "yes" otherwise "no"
+    share v as "approval:answer:" + id
+    give true
+
+-- responder por link: el token debe coincidir (comparación en tiempo constante) y ser de un solo uso
+export task answer_with_token(id, tok, decision)
+    observe "approval:token:" + id as want
+    when want == nothing
+        give {"ok": false, "why": "expired"}
+    when not verify_hmac(id, hmac_sha256(id, tok), want)
+        give {"ok": false, "why": "bad token"}
+    share nothing as "approval:token:" + id
+    let v be when decision then "yes" otherwise "no"
+    share v as "approval:answer:" + id
+    give {"ok": true, "why": ""}
+
+-- pendientes y recientes para la UI (nunca incluye tokens); las resueltas hace más de 1 h se olvidan
+export task list()
+    require time
+    let out be []
+    let keep be []
+    each id in index()
+        let m be meta_of(id)
+        when m != nothing
+            when m["status"] != "pending" and contains(m, "answered") and now() - m["answered"] > 3600
+                share nothing as "approval:meta:" + id
+            otherwise
+                set out to append(out, m)
+                set keep to append(keep, id)
+    when length(keep) != length(index())
+        share keep as "approval:index"
+    give sort_by(out, (m) => 0 - m["created"])
+
+export task pending()
+    give where(list(), (m) => m["status"] == "pending")
+
+-- página mínima que ve quien abre el link
+export task html_page(title, body)
+    give "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>" + title + "</title><body style='font:16px/1.5 system-ui;margin:0;display:grid;place-items:center;min-height:100vh;background:#f6f4ef;color:#1d1c1a'><div style='max-width:520px;padding:32px;border:1px solid #d9d4c7;border-radius:6px;background:#fffdf8'><p style='margin:0 0 6px;font:11px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:#a33'>lampson</p><h1 style='font-size:22px;margin:0 0 12px'>" + title + "</h1><p style='margin:0'>" + body + "</p></div></body>"

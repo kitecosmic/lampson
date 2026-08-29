@@ -40,6 +40,22 @@ description: How this harness works — tools, workspace mount, permissions, age
   brief — a child does not see this conversation, cannot ask the user and cannot delegate. Reports are
   self-reports: verify before claiming success. Live logs: `.lampson/agents/<id>.log`.
 
+## Scheduled tasks (`schedule` tool)
+- When the user says "every day at 9", "each 6 hours", "on Mondays", "periodically", "send me", propose
+  `schedule(action=add, name, at, kind, …)`: `at` = `every 6h` | `daily 09:00` | `mon,wed 08:30` |
+  `weekdays 09:00`; one-time: `today 15:14` | `tomorrow 09:00` | `once 2026-08-29 15:14` | `in 2h` (it turns itself off after running) — the USER'S LOCAL time: write the hour as they say it, never convert to UTC (the tool result shows the next run with its offset). Tasks belong to the current workspace. `kind=lamp` (a lamp that is ON: lamp + tool + args), `kind=bash` (one
+  command that finishes on its own), `kind=prompt` (an unattended agent run: write a self-contained prompt —
+  what to do, how to verify, what to report — and pick `agent` build/review/plan/explore).
+- `permission` is the envelope of a `prompt` run with nobody watching: `strict` (dangerous → denied),
+  `ask` (default: the user gets an approval request in the web UI and, if configured, a link on their
+  phone; denied if unanswered within `approval_timeout`), `yolo`. Prefer `strict` or `review`/`plan` profiles
+  for reports; `ask`/`build` only when the task must change things.
+- `add` ALWAYS asks the user (it authorizes future runs). `notify` = a webhook URL that receives the result
+  as JSON — the way to "search X and send it to me" without an MCP.
+- Tasks are executed by Lampson's resident process. If `schedule(action=list)` says no scheduler is running,
+  tell the user: `lampson --daemon start` (or keep `lampson --web` open). A `prompt` run's report lands in a NEW session named
+  `⏰ <name>` (never in the current chat — say so); `action=log` shows the runs.
+
 ## When you need the USER to run something
 The user can run any command themselves from the chat by prefixing it with `!` — e.g. `!npm run dev`,
 `!cat .env`, `!git push`. Their command runs without the permission policy and its output is added to

@@ -1,0 +1,161 @@
+-- lib/sched_run.syn — ejecutar UNA tarea programada (lamp | bash | prompt) y dejar registro
+--
+-- Separado de lib/schedule.syn porque las corridas `prompt` necesitan agents/loop/provider, y schedule.syn es
+-- importado por tools.syn (que agents.syn importa): acá no hay ciclo. Lo usan web.syn (tick del cron y
+-- POST /api/schedules/run) y chat.syn (/schedule run).
+--
+-- Una corrida `prompt` es un turno del agente con historial nuevo: system prompt del perfil + el texto de la
+-- tarea como mensaje de usuario, sin subagentes (ni delegate ni mcp: un cron no debería multiplicarse) y con
+-- el sobre de permisos de la tarea:
+--   strict → lo peligroso se deniega y el agente lo informa;   yolo → pasa;
+--   ask    → sale una aprobación por lib/approvals.syn (UI web / webhook / link) y se espera hasta
+--            approval_timeout (default 2 h); sin respuesta = denegado.
+-- La sesión queda guardada como cualquier otra (título «⏰ nombre», meta.schedule = id) con su traza, así se
+-- revisa en la web o con /resume.
+
+use "./schedule.syn" as schedule
+use "./approvals.syn" as approvals
+use "./agents.syn" as agents
+use "./loop.syn" as loop
+use "./provider.syn" as provider
+use "./prompt.syn" as prompt
+use "./session.syn" as session
+use "./trace.syn" as trace
+use "./permission.syn" as permission
+use "./tools.syn" as tools
+use "./lamps.syn" as lamps
+
+let PROMPT_NOTE be "\n\n# Scheduled run\n- This is an UNATTENDED scheduled run (no user is watching). Do the task, verify, and finish with a short report: what you found or changed, with paths. Do not ask questions - if something is missing, say so in the report.\n- A permission request may take hours to be answered (the user gets a link). Prefer actions that need no approval; if one is denied, do not retry it - report it.\n- ONLY the workspace is accessible: absolute paths, `..`, home folders, other projects and skill folders outside it do NOT exist for your tools (a `File not found` there is final - never retry). Work with what is inside the workspace and what you already know."
+
+-- ask_fn para corridas desatendidas en modo ask: cola + webhook + link, espera acotada. La tarea en curso
+-- viaja por el blackboard (un tick corre las tareas en secuencia; el loop llama ask_fn con args nombrados).
+export task ask_remote(name, args, why)
+    require net
+    require time
+    require random
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    observe "lampson:sched:current" as t
+    let timeout be when t == nothing then 7200 otherwise t["approval_timeout"]
+    let label be when t == nothing then "" otherwise "[" + t["name"] + "] "
+    let id be approvals.open(when t == nothing then "schedule" otherwise "schedule:" + t["id"], label + permission.describe_call(name, args), why, timeout)
+    give approvals.wait(id, timeout)
+
+-- on_event por defecto: solo la traza de la sesión en curso
+task trace_only(kind, data, tag)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    observe "lampson:sched:session" as s
+    when s != nothing
+        trace.event(s, kind, data, tag)
+    give true
+
+-- corre la tarea; ask_fn = nothing → aprobaciones remotas (approvals.syn); on_event = nothing → solo traza
+export task run(t, ask_fn, on_event)
+    require net
+    require time
+    require exec
+    require random
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let started be now()
+    schedule.mark_started(t)
+    when t["action"]["type"] != "prompt"
+        let out be ""
+        let status be "ok"
+        try
+            set out to schedule.run_simple(t)
+        recover err
+            set out to "ERROR: " + text(err)
+        when starts_with(out, "ERROR") or starts_with(out, "DENIED")
+            set status to "error"
+        give schedule.record(t, started, status, out, {})
+    -- prompt: un turno del agente con contexto nuevo
+    let sid be session.new_id()
+    let result be nothing
+    try
+        let cfg be provider.config()
+        let p be t["action"]["agent"]
+        let names be where(agents.profile(p)["tools"], (n) => n != "delegate" and n != "mcp" and n != "schedule")
+        let reg be tools.registry_subset(names)
+        let cat be tools.catalog_subset(names)
+        -- lámparas encendidas también (las de solo lectura si el perfil no edita)
+        let ro be not (p == "build")
+        each ln in lamps.names(ro)
+            set reg[ln] to "lamp"
+        set cat to cat + lamps.catalog(ro)
+        let asker be ask_fn
+        when asker == nothing and t["permission"] == "ask"
+            set asker to ask_remote
+        share t as "lampson:sched:current"
+        let opts be loop.default_opts(reg, cat, asker)
+        set opts to loop.with_steps(opts, agents.steps_for(p))
+        set opts to loop.with_mode(opts, t["permission"])
+        let system be {"role": "system", "content": prompt.build(agents.env_info(cfg), agents.addendum_for(p) + PROMPT_NOTE)}
+        let messages be [system, {"role": "user", "content": t["action"]["prompt"]}]
+        -- sesión de ESTA corrida (no pisar "lampson:session": en la terminal el chat del usuario sigue vivo al lado)
+        share sid as "lampson:sched:session"
+        schedule.set_session(t["id"], sid)
+        trace.user(sid, "(scheduled: " + t["name"] + ") " + t["action"]["prompt"], p, t["permission"], cfg["model"])
+        let emitter be when on_event == nothing then trace_only otherwise on_event
+        set result to loop.run_turn(cfg, messages, opts, emitter)
+        trace.turn_end(sid, result)
+        session.save(sid, result["messages"], {"title": "⏰ " + t["name"], "schedule": t["id"]})
+    recover err
+        set result to {"text": "ERROR: " + text(err), "steps": 0, "usage": {"input": 0, "output": 0}, "stopped": "error"}
+    let status be when result["stopped"] == "done" then "ok" otherwise ("error: " + result["stopped"])
+    let out be when result["text"] == "" then "(the agent produced no final text)" otherwise result["text"]
+    give schedule.record(t, started, status, out, {"session": sid, "steps": result["steps"], "tokens": result["usage"]["input"] + result["usage"]["output"]})
+
+-- un tick del daemon: corre lo vencido (secuencial; el cron nunca solapa dos ticks)
+export task tick()
+    require net
+    require time
+    require exec
+    require random
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    schedule.heartbeat()
+    -- la junction ./workspace apunta a OTRO proyecto (el usuario abrió lampson en otra carpeta): no correr nada acá
+    when not schedule.mount_ok()
+        observe "lampson:sched:mount_warned" as warned
+        when warned == nothing
+            print("[lampson] ./workspace ya no apunta a " + env("LAMPSON_WORKSPACE", "?") + ": las tareas programadas de este workspace quedan en pausa hasta reiniciar el daemon desde su carpeta (lampson --daemon restart)")
+            share true as "lampson:sched:mount_warned"
+        bus_publish("schedule.mount", {"ok": false})
+        give 0
+    share nothing as "lampson:sched:mount_warned"
+    let n be 0
+    each t in schedule.due(now())
+        set n to n + 1
+        try
+            run(t, nothing, nothing)
+        recover err
+            print("[lampson] scheduled task " + t["id"] + " failed: " + text(err))
+    give n

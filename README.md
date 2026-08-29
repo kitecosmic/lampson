@@ -29,6 +29,14 @@ language itself — and every step is visible, in the terminal or in a web UI.
   under a capability ceiling, or any executable (js, py, sh…). Global in `lampson/lamps/<name>/`, per
   project in `.lampson/lamps/<name>/` (the agent can write those). **Off by default**: you turn them on
   from the top bar of the web UI or `/lamps on <name>`; their tools join the catalog as `lamp_<lamp>_<tool>`.
+- **Scheduled tasks**: "every 6h", "daily 09:00", "mon,wed 08:30" — a lamp tool, a fixed shell command, or a
+  full unattended agent run from a prompt with a permission envelope fixed when you create it (`strict` /
+  `ask` / `yolo`). They run inside Lampson's resident process (`lampson --daemon start`, or the open web UI),
+  the run's session shows up as `⏰ name`, and a webhook can receive each result (for "search and send me" tasks).
+- **Approvals from anywhere**: an unattended run that hits something dangerous waits for you — in the web UI
+  («Aprobaciones»), and, with `LAMPSON_PUBLIC_URL` + `LAMPSON_WEBHOOK_URL`, through a signed webhook carrying
+  one-time **decision links** you can open from your phone (Telegram, mail, Slack…). Never auto-approved:
+  no answer in time = denied.
 - **Project memory**: the agent keeps its own notes per project (`memory/<project>/*.md`, outside
   the repo) — how to run it, gotchas, decisions — and rereads them in the next session. You can read
   and edit them (web panel, `/memory`).
@@ -115,6 +123,46 @@ does the same with persistent sessions and memory.
 
 > Status: developed and tested on Windows 11; the Docker image (Ubuntu 24.04) is built by CI. The Linux/macOS
 > installer is written but not yet exercised on a real machine — issues welcome.
+
+## Scheduled tasks and the resident process
+
+Lampson can run things with nobody at the keyboard. Scheduled tasks run inside **any** open Lampson — the web UI
+or the terminal REPL (a background thread ticks every 30 s). To run them with nothing open:
+
+```
+lampson --daemon start      # web UI + scheduler + approvals, in the background (synsema daemon)
+lampson --daemon status     # also: stop · logs · restart
+```
+
+Timezone, public URL and webhook are set from the ⚙ button of the web header (tabs: General · Aprobaciones a
+distancia · Proveedor; stored in `lampson/.lampson/config.json`, `.env` wins) or from `.env`.
+
+Create a task from the chat («todos los días a las 9 corré los tests y avisame» — the agent calls the
+`schedule` tool and asks you to approve the task, showing exactly what will run and with which permissions),
+from the web sidebar («Programadas» → +), or from the terminal (`/schedule add <json>`). Three kinds:
+
+| kind | what runs | authorization |
+|---|---|---|
+| `lamp` | a tool of a lamp that is ON | turning the lamp on |
+| `bash` | one fixed command (must finish on its own) | approved once, at creation |
+| `prompt` | a full agent turn with your instructions and a profile (`build` / `review` / `plan` / `explore`) | the permission envelope: `strict` (dangerous → denied), `ask` (dangerous → approval request, denied if unanswered within `approval_timeout`, 2 h by default), `yolo` |
+
+Schedules: `every 6h` · `every 30m` · `daily 09:00` · `mon,wed 08:30` · `weekdays 09:00` (local time; `LAMPSON_TZ`
+overrides). Synsema's `cron_every` is a pure interval, so a 30 s tick in `web.syn` translates it to wall-clock time;
+a run missed while the daemon was down executes when it comes back and is marked as late. State lives in
+`.lampson/schedules.json`, logs in `.lampson/schedules/<id>.log`; a `prompt` run also leaves a normal session (`⏰ name`)
+with its trace. `notify` = a webhook URL that receives each result as JSON.
+
+**Approving from your phone.** Set `LAMPSON_PUBLIC_URL` (how this Lampson is reached from outside — a tunnel, a VPS,
+or a Synsema edge with TLS in front) and `LAMPSON_WEBHOOK_URL` (+ `LAMPSON_WEBHOOK_SECRET`, HMAC-SHA256 in
+`X-Lampson-Signature`). Every pending approval — from a scheduled run or from the chat — POSTs `{id, message, why,
+expires_at, respond_link_yes, respond_link_no}`; forward the links wherever you read (n8n, a bot, a 6-line `.syn`).
+`GET /approve/<id>/<token>?d=yes|no` is public on purpose: the 32-byte one-time token is the authorization, and it
+dies with the deadline. `GET /api/approvals` (loopback) lists what is pending, never the tokens.
+
+For a real server use systemd (`synsema serve web.syn`, `Restart=always`) instead of `synsema daemon`, which has no
+boot start / crash restart. One box, several projects: one `web.syn` per project on its own port, behind a Synsema
+edge that terminates TLS and routes by host (see the Synsema deploy docs).
 
 ## Use
 

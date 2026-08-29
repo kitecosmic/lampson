@@ -558,3 +558,143 @@ test "diff: líneas cambiadas con contexto y números; archivo nuevo = todo +; e
     assert_eq(e["old"], "x\ny\n")
     assert_eq(e["new"], "x\nz\n")
     assert_eq(diff.diff(e["old"], e["new"], 1, false)["removed"], 1)
+
+-- ---------- tareas programadas (lib/schedule.syn) ----------
+use "./lib/schedule.syn" as schedule
+
+test "schedule: parseo de horarios (intervalo, diario, semanal, español) y descripción"
+    let e be schedule.parse_when("every 6h")
+    assert(e["ok"], json_encode(e))
+    assert_eq(e["plan"]["seconds"], 21600)
+    assert_eq(schedule.describe_plan(e["plan"]), "cada 6 h")
+    assert_eq(schedule.parse_when("cada 30 min")["plan"]["seconds"], 1800)
+    assert_eq(schedule.parse_when("every 2d")["plan"]["seconds"], 172800)
+    let d be schedule.parse_when("daily 09:30")
+    assert_eq(d["plan"]["kind"], "daily")
+    assert_eq(d["plan"]["hh"], 9)
+    assert_eq(d["plan"]["mm"], 30)
+    assert_eq(schedule.parse_when("todos los días a las 7")["plan"]["hh"], 7)
+    assert_eq(schedule.parse_when("18:45")["plan"]["kind"], "daily")
+    let w be schedule.parse_when("lun,mie,vie 08:30")
+    assert_eq(w["plan"]["kind"], "weekly")
+    assert_eq(w["plan"]["days"], [1, 3, 5])
+    assert_eq(schedule.describe_plan(w["plan"]), "lunes, miércoles, viernes a las 08:30")
+    assert_eq(schedule.parse_when("weekdays 9:00")["plan"]["days"], [1, 2, 3, 4, 5])
+    assert_eq(schedule.parse_when("weekend")["plan"]["days"], [6, 7])
+    assert(not schedule.parse_when("every 10s")["ok"], "min 60 s")
+    assert(not schedule.parse_when("cuando quieras")["ok"], "texto libre")
+    assert(not schedule.parse_when("daily 25:00")["ok"], "hora inválida")
+    -- una sola vez
+    let o1 be schedule.parse_when("hoy 15:14")["plan"]
+    assert_eq(o1["kind"], "once")
+    assert_eq(o1["rel"], "today")
+    assert_eq(schedule.parse_when("tomorrow 9:00")["plan"]["rel"], "tomorrow")
+    assert_eq(schedule.parse_when("once 2026-08-29 15:14")["plan"]["date"], "2026-08-29")
+    assert_eq(schedule.parse_when("2026-08-29 15:14")["plan"]["hh"], 15)
+    assert_eq(schedule.parse_when("in 2h")["plan"]["delay"], 7200)
+    assert_eq(schedule.describe_plan(o1), "una vez, hoy a las 15:14")
+    assert(not schedule.parse_when("hoy")["ok"], "hoy sin hora")
+    assert_eq(schedule.parse_offset("-0300"), -10800)
+    assert_eq(schedule.parse_offset("+02:00"), 7200)
+    assert_eq(schedule.parse_offset("-3"), -10800)
+
+test "schedule: próxima corrida en hora local (diario, semanal, intervalo desde el fin de la anterior)"
+    -- 2026-08-29 fue sábado. Zona -03:00: las 12:00 UTC son las 09:00 locales
+    let off be -10800
+    let sat_noon_utc be parse_time("2026-08-29 12:00", "%Y-%m-%d %H:%M")
+    let daily be schedule.parse_when("daily 09:00")["plan"]
+    -- a las 08:00 locales (11:00 UTC) la próxima es hoy a las 09:00 locales = 12:00 UTC
+    assert_eq(schedule.next_run(daily, sat_noon_utc - 3600, nothing, off), sat_noon_utc)
+    -- justo a las 09:00 locales ya pasó → mañana
+    assert_eq(schedule.next_run(daily, sat_noon_utc, nothing, off), sat_noon_utc + 86400)
+    let weekly be schedule.parse_when("mon 09:00")["plan"]
+    -- desde el sábado 08:00 local, el próximo lunes 09:00 local = 2 días después del sábado 12:00 UTC
+    assert_eq(schedule.next_run(weekly, sat_noon_utc - 3600, nothing, off), sat_noon_utc + 2 * 86400)
+    let sat be schedule.parse_when("sab 08:00")["plan"]
+    -- sábado 08:00 local desde el sábado 08:00 local exacto → la semana que viene
+    assert_eq(schedule.next_run(sat, sat_noon_utc - 3600, nothing, off), sat_noon_utc - 3600 + 7 * 86400)
+    -- una sola vez: fecha puntual en hora local; tras correr no hay próxima
+    let once be schedule.parse_when("once 2026-08-29 09:00")["plan"]
+    assert_eq(schedule.next_run(once, sat_noon_utc - 7200, nothing, off), sat_noon_utc)
+    assert_eq(schedule.next_run(once, sat_noon_utc, sat_noon_utc, off), nothing)
+    let today be schedule.parse_when("today 09:00")["plan"]
+    assert_eq(schedule.next_run(today, sat_noon_utc - 7200, nothing, off), sat_noon_utc)
+    assert_eq(schedule.next_run(schedule.parse_when("in 2h")["plan"], 1000, nothing, off), 8200)
+    let every be schedule.parse_when("every 2h")["plan"]
+    assert_eq(schedule.next_run(every, 1000, 5000, off), 5000 + 7200)
+    assert_eq(schedule.next_run(every, 1000, nothing, off), 1000 + 7200)
+
+test "schedule: alta, validación, corrida bash con historial y borrado (.lampson/schedules.json)"
+    -- limpiar tareas de tests anteriores
+    each t in schedule.all()
+        when starts_with(t["id"], "test-")
+            schedule.remove(t["id"])
+    let t be schedule.add({"name": "test sched", "when": "every 1h", "action": {"type": "bash", "command": "echo hola-cron"}, "permission": "strict"})
+    assert(starts_with(t["id"], "test-sched-"), t["id"])
+    -- por workspace: la tarea lleva el slug del proyecto y no se ve desde otro
+    assert_eq(t["project"], memo.slug())
+    assert(schedule.mount_ok(), "la junction apunta al workspace de los tests")
+    assert_eq(t["enabled"], true)
+    assert(t["next_run"] > now() + 3500, "próxima en ~1 h")
+    -- validaciones
+    let bad1 be ""
+    try
+        schedule.add({"when": "daily 09:00", "action": {"type": "bash", "command": "rm -rf / "}})
+    recover err
+        set bad1 to text(err)
+    assert(contains(bad1, "refused"), bad1)
+    let bad2 be ""
+    try
+        schedule.add({"when": "daily 09:00", "action": {"type": "lamp", "lamp": "nope", "tool": "x"}})
+    recover err
+        set bad2 to text(err)
+    assert(contains(bad2, "not available"), bad2)
+    let bad3 be ""
+    try
+        schedule.add({"when": "daily 09:00", "action": {"type": "bash", "command": "npm run dev"}})
+    recover err
+        set bad3 to text(err)
+    assert(contains(bad3, "server"), bad3)
+    -- corrida: marca, salida, registro, próxima recalculada
+    schedule.mark_started(t)
+    assert_eq(schedule.get(t["id"])["running"], true)
+    let out be schedule.run_simple(t)
+    assert(contains(out, "hola-cron"), out)
+    let done be schedule.record(t, now() - 1, "ok", out, {"steps": 0})
+    assert_eq(done["running"], false)
+    assert_eq(done["last_status"], "ok")
+    assert_eq(length(done["history"]), 1)
+    assert_eq(done["history"][0]["steps"], 0)
+    assert(contains(schedule.log_tail(t["id"], 20), "hola-cron"), "log en disco")
+    assert_eq(length(schedule.due(now())), 0)
+    -- run_now la hace vencer
+    schedule.request_run(t["id"])
+    assert_eq(length(where(schedule.due(now()), (x) => x["id"] == t["id"])), 1)
+    assert(contains(schedule.set_enabled(t["id"], false), "OFF"), "apagar")
+    assert_eq(length(schedule.due(now())), 0)
+    assert(contains(schedule.remove(t["id"]), "removed"), "borrar")
+    assert_eq(schedule.get(t["id"]), nothing)
+    -- una sola vez: corre y se apaga sola; una hora ya pasada se rechaza
+    let o be schedule.add({"name": "test once", "when": "in 1h", "action": {"type": "bash", "command": "echo una-vez"}})
+    schedule.mark_started(o)
+    let od be schedule.record(o, now() - 1, "ok", "una-vez", {})
+    assert_eq(od["enabled"], false)
+    assert_eq(od["next_run"], nothing)
+    schedule.remove(o["id"])
+    let past be ""
+    try
+        schedule.add({"name": "test past", "when": "once 2020-01-01 09:00", "action": {"type": "bash", "command": "echo x"}})
+    recover err
+        set past to text(err)
+    assert(contains(past, "passed"), past)
+
+test "schedule: la tool pide humano al programar (incluso en yolo) y describe la tarea en el preview"
+    let v be permission.evaluate("schedule", {"action": "add", "kind": "bash", "at": "daily 09:00", "command": "npm test"}, "yolo")
+    assert_eq(v["decision"], "ask")
+    assert_eq(permission.evaluate("schedule", {"action": "list"}, "strict")["decision"], "allow")
+    assert_eq(permission.evaluate("schedule", {"action": "remove", "id": "x-1"}, "strict")["decision"], "deny")
+    let d be permission.describe_call("schedule", {"action": "add", "name": "tests", "at": "daily 09:00", "kind": "prompt", "prompt": "run the tests and report", "agent": "review", "permission": "strict"})
+    assert(contains(d, "«tests»") and contains(d, "daily 09:00") and contains(d, "agent review") and contains(d, "permission strict"), d)
+    assert(contains(keys(REG), "schedule"), "registrada")
+    assert(contains(agents.PROFILES["build"]["tools"], "schedule"), "build la ve")
+    assert(not contains(agents.PROFILES["worker"]["tools"], "schedule"), "worker no")

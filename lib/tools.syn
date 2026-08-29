@@ -27,6 +27,7 @@ use "./skills.syn" as skills
 use "./mcp.syn" as mcp
 use "./lamps.syn" as lamps
 use "./lsp.syn" as lsp
+use "./schedule.syn" as schedule
 
 -- la task de la tool skill (su SPEC está en tools/skill.syn)
 task skill_tool(name, action, source, scope)
@@ -155,6 +156,96 @@ let LSP_SPEC be {
     }, "required": ["op"]}
 }
 
+-- la tool schedule (lib/schedule.syn): tareas programadas. add/remove/enable/run piden humano SIEMPRE (permission.syn):
+-- crear una tarea = autorizar de una vez todo lo que va a hacer sin nadie mirando. Las corridas las hace el daemon
+-- (web.syn); desde acá solo se corren en el acto las lamp/bash (una prompt anidaría un loop dentro del turno).
+task schedule_tool(action, id, name, at, kind, lamp, tool, args, command, prompt, agent, permission, approval_timeout, notify)
+    require exec
+    require time
+    require net
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    let act be when action == nothing then "list" otherwise action
+    when act == "add"
+        let a be {"type": kind}
+        when kind == "lamp"
+            set a to {"type": "lamp", "lamp": lamp, "tool": tool, "args": when args == nothing then {} otherwise args}
+        otherwise when kind == "bash"
+            set a to {"type": "bash", "command": command}
+        otherwise when kind == "prompt"
+            set a to {"type": "prompt", "prompt": prompt, "agent": when agent == nothing then "build" otherwise agent}
+        let spec be {"name": name, "when": at, "action": a, "permission": when permission == nothing then "ask" otherwise permission}
+        when approval_timeout != nothing
+            set spec["approval_timeout"] to approval_timeout
+        when notify != nothing
+            set spec["notify"] to notify
+        let t be schedule.add(spec)
+        give "scheduled '" + t["name"] + "' (id " + t["id"] + "): " + schedule.describe_plan(t["plan"]) + " (local time) · " + schedule.describe_action(t["action"]) + " · permission " + t["permission"] + " · next run " + schedule.fmt_local(t["next_run"]) + " — tell the user this next-run time as is. The run's report lands in a NEW session named ⏰ <name> (sidebar «Sesiones» / /sessions) and, if notify is set, in that webhook — NOT in this chat: say so. " + daemon_note()
+    when act == "remove"
+        give schedule.remove(id)
+    when act == "enable"
+        give schedule.set_enabled(id, true)
+    when act == "disable"
+        give schedule.set_enabled(id, false)
+    when act == "run"
+        let t be schedule.get(id)
+        when t == nothing
+            raise("no scheduled task '" + text(id) + "'")
+        when t["action"]["type"] == "prompt"
+            schedule.request_run(id)
+            give "run requested: it runs within " + text(schedule.TICK_SECONDS) + " s in the background and its report lands in a NEW session (⏰ " + t["name"] + "), not in this chat. " + daemon_note()
+        schedule.mark_started(t)
+        let started be now()
+        let out be schedule.run_simple(t)
+        schedule.record(t, started, when starts_with(out, "ERROR") or starts_with(out, "DENIED") then "error" otherwise "ok", out, {})
+        give out
+    when act == "log"
+        let tail be schedule.log_tail(id, 80)
+        give when tail == "" then "no runs yet for " + text(id) otherwise tail
+    let sm be schedule.summary()
+    when length(sm) == 0
+        give "no scheduled tasks. " + daemon_note()
+    let lines be []
+    each s in sm
+        set lines to append(lines, s["id"] + (when s["enabled"] then " ON " otherwise " off") + " · " + s["plan"] + " · " + s["action_text"] + " · permission " + s["permission"] + " · next " + s["next_local"] + (when s["last_run"] != nothing then " · last " + s["last_status"] + ": " + s["last_summary"] otherwise ""))
+    give join(lines, "\n") + "\n" + daemon_note()
+
+task daemon_note()
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    let age be schedule.daemon_age()
+    when age == nothing or age > schedule.TICK_SECONDS * 3
+        give "NOTE: no scheduler is running right now (scheduled tasks run inside the web/daemon process): the user starts it with `lampson --daemon start` (or keeps `lampson --web` open)."
+    give "Scheduler alive (last tick " + text(floor(age)) + " s ago)."
+
+let SCHEDULE_SPEC be {
+    "name": "schedule",
+    "description": "Scheduled tasks: run something on a schedule with nobody watching — a lamp tool, a fixed shell command, or a full agent run from a prompt (kind=prompt: the agent works unattended with the chosen profile and writes a report; its session appears as ⏰ <name>). `at` formats — recurring: 'every 6h' | 'every 30m' | 'daily 09:00' | 'mon,wed 08:30' | 'weekdays 09:00'; ONE-TIME (runs once, then turns itself off): 'today 15:14' | 'tomorrow 09:00' | 'once 2026-08-29 15:14' | 'in 2h'. Times are the USER'S LOCAL time (the machine's timezone): write the hour exactly as the user says it — NEVER convert to UTC. Tasks belong to the current workspace. permission = what a prompt run may do without asking: strict (dangerous actions denied), ask (default: a dangerous action sends the user an approval link/notification and waits up to approval_timeout seconds, denied if unanswered), yolo (allowed). notify = optional webhook URL that receives the result as JSON (for 'search and send me' tasks). action=add ALWAYS asks the user (it authorizes future unattended runs); remove/enable/disable/run also ask; list and log do not. The tasks are executed by Lampson's resident process (`lampson --daemon start` or the open web UI) — say so if the list shows no scheduler running. Use it when the user says 'every day at', 'each N hours', 'on Mondays', 'periodically', 'remind me', 'send me'.",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["list", "add", "remove", "enable", "disable", "run", "log"], "description": "Default: list"},
+        "id": {"type": "string", "description": "remove/enable/disable/run/log: the task id (from list)"},
+        "name": {"type": "string", "description": "add: short human name"},
+        "at": {"type": "string", "description": "add: the schedule — 'every 6h' | 'daily 09:00' | 'mon,wed 08:30' | 'weekdays 09:00'"},
+        "kind": {"type": "string", "enum": ["lamp", "bash", "prompt"], "description": "add: what runs"},
+        "lamp": {"type": "string", "description": "add kind=lamp: lamp name (must be ON)"},
+        "tool": {"type": "string", "description": "add kind=lamp: tool of that lamp"},
+        "args": {"type": "object", "description": "add kind=lamp: arguments for the tool"},
+        "command": {"type": "string", "description": "add kind=bash: the shell command (must finish on its own; no servers)"},
+        "prompt": {"type": "string", "description": "add kind=prompt: self-contained instructions for the unattended agent run (what to do, how to verify, what to report)"},
+        "agent": {"type": "string", "enum": ["build", "plan", "review", "explore"], "description": "add kind=prompt: profile (default build)"},
+        "permission": {"type": "string", "enum": ["strict", "ask", "yolo"], "description": "add: permission envelope for unattended runs (default ask)"},
+        "approval_timeout": {"type": "integer", "description": "add: seconds to wait for a remote approval (default 7200)"},
+        "notify": {"type": "string", "description": "add: webhook URL that receives each result as JSON"}
+    }, "required": ["action"]}
+}
+
 -- Allow-list nombre → task. El modelo solo devuelve NOMBRES; el loop decide si se ejecuta.
 export task registry()
     give {
@@ -171,10 +262,11 @@ export task registry()
         "skill": skill_tool,
         "mcp": mcp_tool,
         "lamp": lamp_tool,
-        "lsp": lsp_tool
+        "lsp": lsp_tool,
+        "schedule": schedule_tool
     }
 
-export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, LAMP_SPEC]
+export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, LAMP_SPEC, SCHEDULE_SPEC]
 
 -- Subconjuntos (para perfiles de agente): registry/catálogo filtrados por nombre.
 export task registry_subset(names)

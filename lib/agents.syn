@@ -40,7 +40,7 @@ let PARALLEL be 4
 
 export let PROFILES be {
     "build": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "bash", "process", "memory", "todo", "skill", "mcp", "lamp", "delegate"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "bash", "process", "memory", "todo", "skill", "mcp", "lamp", "schedule", "delegate"],
         "steps": 40,
         "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context; several independent questions can go in one delegate call (they run in parallel)."
     },

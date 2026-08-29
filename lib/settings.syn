@@ -68,3 +68,58 @@ export task set_default(name, model)
     set doc["model"] to model
     save(doc)
     give true
+
+-- valores de configuración generales (rueda de la UI): tz, public_url, webhook_url, webhook_secret…
+-- Vacío = borrar la clave. Nunca se devuelven secretos al navegador: `values()` marca webhook_secret como has_*.
+export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret"]
+
+-- el archivo REAL, ignorando LAMPSON_NO_CONFIG: escribir con el doc en blanco de los tests pisaría provider/keys
+-- (pasó el 2026-08-29 probando la rueda con un web de test)
+task load_raw()
+    try
+        let doc be json_decode(read_file(PATH))
+        when not contains(doc, "keys")
+            set doc["keys"] to {}
+        when not contains(doc, "provider")
+            set doc["provider"] to ""
+        when not contains(doc, "model")
+            set doc["model"] to ""
+        give doc
+    recover err
+        give {"provider": "", "model": "", "keys": {}}
+
+export task set_value(key, value)
+    require file(".lampson")
+    require file(".lampson/*")
+    require env("LAMPSON_*")
+    when not contains(KEYS, key)
+        raise("unknown setting '" + text(key) + "'")
+    let doc be load_raw()
+    when trim(text(value)) == ""
+        let clean be {}
+        each k in keys(doc)
+            when k != key
+                set clean[k] to doc[k]
+        set doc to clean
+    otherwise
+        set doc[key] to trim(text(value))
+    save(doc)
+    give true
+
+export task values()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let doc be load_raw()
+    let out be {}
+    each k in KEYS
+        when k == "webhook_secret"
+            set out["has_webhook_secret"] to (contains(doc, k) and text(doc[k]) != "") or env("LAMPSON_WEBHOOK_SECRET", "") != ""
+        otherwise
+            set out[k] to when contains(doc, k) then text(doc[k]) otherwise ""
+            -- lo fijado en .env gana y se muestra como tal
+            let e be env("LAMPSON_" + upper(k), "")
+            when e != ""
+                set out[k] to e
+                set out[k + "_from_env"] to true
+    give out

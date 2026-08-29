@@ -1,0 +1,660 @@
+-- lib/schedule.syn — tareas programadas: "cada 6 h", "todos los días a las 9", "lunes 8:30"
+--
+-- Qué se programa (action.type):
+--   lamp   → una tool de una lámpara ENCENDIDA: {lamp, tool, args}. Encenderla ya fue la autorización.
+--   bash   → un comando fijo desde el workspace: {command, timeout}. Aprobado UNA vez, al crear la tarea.
+--   prompt → una corrida completa del agente con un texto: {prompt, agent}. Sin humano al lado: corre con el
+--            sobre de permisos que se fijó al crearla (permission: strict | ask | yolo). En `ask`, cuando el
+--            agente quiere algo peligroso la aprobación sale por la cola de lib/approvals.syn (UI web, webhook,
+--            link de un solo uso) y espera hasta approval_timeout; sin respuesta = denegado.
+--
+-- Horarios (campo `when`, texto libre y corto):
+--   every 6h · every 30m · every 2d · cada 6h                         → intervalo (desde el fin de la corrida anterior)
+--   daily 09:00 · diario 09:00 · 09:00                                 → todos los días a esa hora LOCAL
+--   mon 08:30 · lun,mie,vie 08:30 · weekdays 09:00 · weekend 10:00     → esos días a esa hora local
+-- Synsema trae `cron_every` (intervalo puro, sin reloj — doc 34-cron): la traducción a hora de reloj vive acá:
+-- un tick cada 30 s compara `now()` con `next_run` de cada tarea. Persistido en .lampson/schedules.json: una
+-- corrida perdida (daemon apagado) se ejecuta al volver y queda marcada como atrasada en el historial.
+--
+-- Quién ejecuta: el proceso residente (`lampson --daemon start` = `synsema daemon start web.syn`, o el web
+-- abierto) — chat.syn en terminal NO tiene tick (el hilo principal está bloqueado en el teclado): desde ahí se
+-- crean, listan y corren a mano (/schedule). Historial: .lampson/schedules/<id>.log + últimas corridas en el json.
+--
+-- Este módulo no importa agents/loop (ciclo con tools.syn): las corridas `prompt` las hace lib/sched_run.syn.
+
+use "./tools/bash.syn" as t_bash
+use "./lamps.syn" as lamps
+use "./permission.syn" as permission
+use "./tools/common.syn" as c
+use "./tools/memo.syn" as memo
+use "./settings.syn" as settings
+
+export let FILE be ".lampson/schedules.json"
+export let LOG_DIR be ".lampson/schedules"
+export let HEARTBEAT be ".lampson/schedules.heartbeat"
+export let TICK_SECONDS be 30
+let KEEP_HISTORY be 20
+let DAY be 86400
+let DAYS_EN be ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+let DAYS_ES be ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
+let DAY_NAMES be ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+
+-- ---------- zona horaria ----------
+-- format_time/parse_time trabajan en UTC; el usuario piensa en hora local. LAMPSON_TZ ("-03:00" | "+0200")
+-- gana; si no, se le pregunta al shell (`date +%z`, Git Bash en Windows) una vez por corrida (blackboard).
+export task tz_offset()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    observe "lampson:tz" as cached
+    when cached != nothing
+        give cached
+    let raw be env("LAMPSON_TZ", "")
+    when raw == ""
+        let doc be settings.load()
+        when contains(doc, "tz")
+            set raw to text(doc["tz"])
+    when raw == ""
+        try
+            let sc be t_bash.shell_config()
+            let r be run(sc["shell"], [sc["flag"], "date +%z"], 10)
+            set raw to trim(text(r["stdout"]))
+        recover err
+            set raw to "+0000"
+    let off be parse_offset(raw)
+    share off as "lampson:tz"
+    give off
+
+-- "+0200" | "-03:00" | "-3" → segundos
+export task parse_offset(raw)
+    let s be replace_text(trim(raw), ":", "")
+    when s == ""
+        give 0
+    let sign be when starts_with(s, "-") then -1 otherwise 1
+    when starts_with(s, "-") or starts_with(s, "+")
+        set s to slice(s, 1, length(s))
+    when not matches(s, "[0-9]{1,4}")
+        give 0
+    when length(s) <= 2
+        give sign * floor(number(s)) * 3600
+    while length(s) < 4
+        set s to "0" + s
+    give sign * (floor(number(slice(s, 0, 2))) * 3600 + floor(number(slice(s, 2, 4))) * 60)
+
+task fmt_offset(off)
+    let a be when off < 0 then 0 - off otherwise off
+    let h be floor(a / 3600)
+    let m be floor((a - h * 3600) / 60)
+    give (when off < 0 then "-" otherwise "+") + pad2(h) + ":" + pad2(m)
+
+task pad2(n)
+    let t be text(floor(n))
+    when length(t) < 2
+        give "0" + t
+    give t
+
+-- ---------- parseo del horario ----------
+task day_index(tok)
+    let t be lower(tok)
+    each e in enumerate(DAYS_EN)
+        when starts_with(t, e["item"])
+            give e["index"] + 1
+    each e in enumerate(DAYS_ES)
+        when starts_with(t, e["item"])
+            give e["index"] + 1
+    when starts_with(t, "mié")
+        give 3
+    when starts_with(t, "sáb")
+        give 6
+    give 0
+
+task parse_hhmm(tok)
+    when not matches(tok, "[0-9]{1,2}(:[0-9]{2})?")
+        give nothing
+    let parts be split(tok, ":")
+    let h be floor(number(parts[0]))
+    let m be when length(parts) > 1 then floor(number(parts[1])) otherwise 0
+    when h > 23 or m > 59
+        give nothing
+    give {"hh": h, "mm": m}
+
+-- "6h" | "30m" | "2d" | "90s" → segundos
+task parse_span(tok)
+    let t be lower(tok)
+    when not matches(t, "[0-9]+(\.[0-9]+)?(s|m|h|d|min|h?ora?s?|d[ií]as?|seg(undos)?|minutos?)?")
+        give nothing
+    let num be number(capture(t, "[0-9]+(?:\.[0-9]+)?"))
+    let unit be replace_re(t, "^[0-9.]+", "")
+    when unit == "s" or starts_with(unit, "seg")
+        give floor(num)
+    when unit == "m" or starts_with(unit, "min")
+        give floor(num * 60)
+    when unit == "" or unit == "h" or starts_with(unit, "hora")
+        give floor(num * 3600)
+    give floor(num * DAY)
+
+-- → {ok, plan: {kind: every|daily|weekly, seconds?, hh?, mm?, days?}, error}
+export task parse_when(spec)
+    let s be lower(trim(text(spec)))
+    set s to replace_text(replace_text(replace_text(s, " a las ", " "), " at ", " "), "todos los días", "daily")
+    set s to replace_text(replace_text(s, "todos los dias", "daily"), "every day", "daily")
+    let toks be where(split(replace_text(s, ",", " "), " "), (x) => x != "")
+    when length(toks) == 0
+        give {"ok": false, "error": "empty schedule"}
+    let head be toks[0]
+    -- una sola vez: once 2026-08-29 15:14 · today 15:14 · hoy 15:14 · tomorrow 09:00 · mañana 09:00 · in 2h · en 30m
+    when head == "in" or head == "en"
+        when length(toks) < 2
+            give {"ok": false, "error": "in needs a span: in 2h, in 30m"}
+        let secs be parse_span(when length(toks) >= 3 and matches(toks[1], "[0-9.]+") then toks[1] + toks[2] otherwise toks[1])
+        when secs == nothing or secs < 60
+            give {"ok": false, "error": "bad delay '" + join(slice(toks, 1, length(toks)), " ") + "' (min 60 s; e.g. in 2h, in 30m)"}
+        give {"ok": true, "plan": {"kind": "once", "delay": secs, "date": "", "rel": "", "hh": 0, "mm": 0}}
+    when head == "today" or head == "hoy" or head == "tomorrow" or head == "mañana" or head == "manana"
+        let hm be when length(toks) > 1 then parse_hhmm(toks[1]) otherwise nothing
+        when hm == nothing
+            give {"ok": false, "error": head + " needs a time: " + head + " 15:14"}
+        give {"ok": true, "plan": {"kind": "once", "delay": 0, "date": "", "rel": when head == "today" or head == "hoy" then "today" otherwise "tomorrow", "hh": hm["hh"], "mm": hm["mm"]}}
+    when head == "once"
+        let rest be slice(toks, 1, length(toks))
+        when length(rest) < 2 or not matches(rest[0], "[0-9]{4}-[0-9]{2}-[0-9]{2}")
+            give {"ok": false, "error": "once needs a date and time: once 2026-08-29 15:14"}
+        let hm be parse_hhmm(rest[1])
+        when hm == nothing
+            give {"ok": false, "error": "bad time '" + rest[1] + "' (HH:MM, 24 h)"}
+        give {"ok": true, "plan": {"kind": "once", "delay": 0, "date": rest[0], "rel": "", "hh": hm["hh"], "mm": hm["mm"]}}
+    when matches(head, "[0-9]{4}-[0-9]{2}-[0-9]{2}") and length(toks) >= 2
+        let hm be parse_hhmm(toks[1])
+        when hm == nothing
+            give {"ok": false, "error": "bad time '" + toks[1] + "' (HH:MM, 24 h)"}
+        give {"ok": true, "plan": {"kind": "once", "delay": 0, "date": head, "rel": "", "hh": hm["hh"], "mm": hm["mm"]}}
+    when head == "every" or head == "cada"
+        when length(toks) < 2
+            give {"ok": false, "error": "every needs a span: every 6h, every 30m, every 2d"}
+        let secs be parse_span(when length(toks) >= 3 and matches(toks[1], "[0-9.]+") then toks[1] + toks[2] otherwise toks[1])
+        when secs == nothing or secs < 60
+            give {"ok": false, "error": "bad interval '" + join(slice(toks, 1, length(toks)), " ") + "' (min 60 s; e.g. every 6h, every 30m, every 2d)"}
+        give {"ok": true, "plan": {"kind": "every", "seconds": secs}}
+    when head == "daily" or head == "diario" or head == "diaria"
+        let hm be when length(toks) > 1 then parse_hhmm(toks[1]) otherwise {"hh": 9, "mm": 0}
+        when hm == nothing
+            give {"ok": false, "error": "bad time '" + toks[1] + "' (HH:MM, 24 h)"}
+        give {"ok": true, "plan": {"kind": "daily", "hh": hm["hh"], "mm": hm["mm"]}}
+    let solo be parse_hhmm(head)
+    when solo != nothing and length(toks) == 1
+        give {"ok": true, "plan": {"kind": "daily", "hh": solo["hh"], "mm": solo["mm"]}}
+    -- días de la semana + hora
+    let days be []
+    let time_tok be nothing
+    let i be 0
+    each tok in toks
+        when tok == "weekly" or tok == "semanal" or tok == "on" or tok == "los"
+            set days to days
+        otherwise when tok == "weekdays" or tok == "laborables"
+            set days to [1, 2, 3, 4, 5]
+        otherwise when tok == "weekend" or tok == "finde"
+            set days to [6, 7]
+        otherwise when day_index(tok) > 0
+            set days to append(days, day_index(tok))
+        otherwise when parse_hhmm(tok) != nothing
+            set time_tok to parse_hhmm(tok)
+        otherwise
+            give {"ok": false, "error": "cannot understand '" + tok + "' — use: every 6h | daily 09:00 | mon,wed 08:30 | weekdays 09:00"}
+    when length(days) == 0
+        give {"ok": false, "error": "no day found in '" + spec + "' (mon…sun / lun…dom, weekdays, weekend)"}
+    when time_tok == nothing
+        set time_tok to {"hh": 9, "mm": 0}
+    give {"ok": true, "plan": {"kind": "weekly", "days": sort_by(days, (d) => d), "hh": time_tok["hh"], "mm": time_tok["mm"]}}
+
+export task describe_plan(plan)
+    when plan["kind"] == "once"
+        when plan["delay"] > 0
+            give "una vez, en " + (when plan["delay"] >= 3600 then text(floor(plan["delay"] / 3600)) + " h" otherwise text(floor(plan["delay"] / 60)) + " min")
+        let hhmm0 be pad2(plan["hh"]) + ":" + pad2(plan["mm"])
+        when plan["rel"] != ""
+            give "una vez, " + (when plan["rel"] == "today" then "hoy" otherwise "mañana") + " a las " + hhmm0
+        give "una vez, el " + plan["date"] + " a las " + hhmm0
+    when plan["kind"] == "every"
+        let s be plan["seconds"]
+        when s >= DAY and s - floor(s / DAY) * DAY == 0
+            give "cada " + text(floor(s / DAY)) + (when s == DAY then " día" otherwise " días")
+        when s >= 3600 and s - floor(s / 3600) * 3600 == 0
+            give "cada " + text(floor(s / 3600)) + " h"
+        give "cada " + text(floor(s / 60)) + " min"
+    let hhmm be pad2(plan["hh"]) + ":" + pad2(plan["mm"])
+    when plan["kind"] == "daily"
+        give "todos los días a las " + hhmm
+    let names be apply(plan["days"], (d) => DAY_NAMES[d - 1])
+    give join(names, ", ") + " a las " + hhmm
+
+-- ---------- próxima corrida ----------
+-- (parse_time exige fecha Y hora: solo "%Y-%m-%d" da "not enough for unique date and time")
+task local_day_start(local_ts)
+    give parse_time(format_time(local_ts, "%Y-%m-%d") + " 00:00", "%Y-%m-%d %H:%M")
+
+-- próxima corrida (timestamp UTC) después de `from`, con `last` = fin de la corrida anterior (o nothing)
+export task next_run(plan, from, last, off)
+    require time
+    when plan["kind"] == "every"
+        give (when last == nothing then from otherwise last) + plan["seconds"]
+    -- una sola vez: después de correr no hay próxima (record la apaga)
+    when plan["kind"] == "once" and last != nothing
+        give nothing
+    let local be from + off
+    let day0 be local_day_start(local)
+    let at be plan["hh"] * 3600 + plan["mm"] * 60
+    when plan["kind"] == "once"
+        when plan["delay"] > 0
+            give from + plan["delay"]
+        when plan["date"] != ""
+            give parse_time(plan["date"] + " " + pad2(plan["hh"]) + ":" + pad2(plan["mm"]), "%Y-%m-%d %H:%M") - off
+        give day0 + (when plan["rel"] == "tomorrow" then DAY otherwise 0) + at - off
+    when plan["kind"] == "daily"
+        let cand be day0 + at
+        when cand <= local
+            set cand to cand + DAY
+        give cand - off
+    let i be 0
+    while i < 8
+        let d be day0 + i * DAY
+        let wd be floor(number(format_time(d + 3600, "%u")))
+        when contains(plan["days"], wd) and d + at > local
+            give d + at - off
+        set i to i + 1
+    give from + DAY * 7
+
+export task fmt_local(ts)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    when ts == nothing
+        give "—"
+    let off be tz_offset()
+    give format_time(ts + off, "%Y-%m-%d %H:%M") + " (" + fmt_offset(off) + ")"
+
+-- ---------- persistencia ----------
+task load_doc()
+    try
+        let doc be json_decode(read_file(FILE))
+        when not contains(doc, "tasks")
+            set doc["tasks"] to []
+        give doc
+    recover err
+        give {"tasks": [], "seq": 0}
+
+task save_doc(doc)
+    write_file(FILE, json_encode(doc))
+
+-- las tareas son DEL WORKSPACE (meta project = slug de la ruta, como las sesiones): en otro proyecto no se ven ni
+-- corren. Una tarea vieja sin marca se adopta en el proyecto que la lee primero.
+export task all()
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let mine be memo.slug()
+    let doc be load_doc()
+    let out be []
+    let fixed be false
+    let keep be []
+    each t in doc["tasks"]
+        when not contains(t, "project")
+            set t["project"] to mine
+            set fixed to true
+        set keep to append(keep, t)
+        when t["project"] == mine
+            set out to append(out, t)
+    when fixed
+        set doc["tasks"] to keep
+        save_doc(doc)
+    give out
+
+-- ¿el workspace montado sigue siendo el de esta corrida? Solo hay UNA junction ./workspace: si el usuario abre
+-- lampson en otra carpeta mientras el daemon corre, la junction apunta a otro proyecto y las tareas de este
+-- workspace NO deben correr ahí (tick lo chequea y avisa). Se compara el destino real (readlink) con LAMPSON_WORKSPACE.
+export task mount_ok()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    let want be norm_path(env("LAMPSON_WORKSPACE", ""))
+    when want == ""
+        give true
+    try
+        let sc be t_bash.shell_config()
+        -- Git Bash: `readlink -f` devuelve rutas POSIX y mapea %TEMP% a /tmp → `pwd -W` da la forma Windows real
+        let r be run(sc["shell"], [sc["flag"], "cd " + c.ROOT + " && (pwd -W 2>/dev/null || pwd -P)"], 10)
+        let got be norm_path(trim(text(r["stdout"])))
+        when got == ""
+            give true
+        give got == want
+    recover err
+        give true
+
+task norm_path(p)
+    let s be lower(replace_text(trim(p), "\\", "/"))
+    -- Git Bash: /c/Users/x → c:/users/x
+    when matches(s, "/[a-z]/.*")
+        set s to slice(s, 1, 2) + ":" + slice(s, 2, length(s))
+    while length(s) > 0 and slice(s, length(s) - 1, length(s)) == "/"
+        set s to slice(s, 0, length(s) - 1)
+    give s
+
+export task get(id)
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    each t in all()
+        when t["id"] == id
+            give t
+    give nothing
+
+task put(t)
+    let doc be load_doc()
+    let out be []
+    let found be false
+    each x in doc["tasks"]
+        when x["id"] == t["id"]
+            set out to append(out, t)
+            set found to true
+        otherwise
+            set out to append(out, x)
+    when not found
+        set out to append(out, t)
+    set doc["tasks"] to out
+    save_doc(doc)
+    give t
+
+task slug(name)
+    let s be lower(replace_re(text(name), "[^A-Za-z0-9]+", "-"))
+    set s to replace_re(replace_re(s, "^-+", ""), "-+$", "")
+    when s == ""
+        give "task"
+    when length(s) > 24
+        give slice(s, 0, 24)
+    give s
+
+-- valida y normaliza la acción → {ok, action, error}
+task check_action(action)
+    when action == nothing or not contains(action, "type")
+        give {"ok": false, "error": "action needs a type: lamp | bash | prompt"}
+    let kind be lower(text(action["type"]))
+    when kind == "lamp"
+        when not contains(action, "lamp") or not contains(action, "tool")
+            give {"ok": false, "error": "action lamp needs lamp and tool"}
+        let full be lamps.tool_name(text(action["lamp"]), text(action["tool"]))
+        when not contains(lamps.names(false), full)
+            give {"ok": false, "error": "lamp tool " + full + " is not available (the lamp must exist and be ON)"}
+        give {"ok": true, "action": {"type": "lamp", "lamp": text(action["lamp"]), "tool": text(action["tool"]), "args": when contains(action, "args") then action["args"] otherwise {}}}
+    when kind == "bash"
+        when not contains(action, "command") or trim(text(action["command"])) == ""
+            give {"ok": false, "error": "action bash needs a command"}
+        let v be permission.evaluate("bash", {"command": text(action["command"])}, "yolo")
+        when v["decision"] == "deny"
+            give {"ok": false, "error": "command refused: " + v["reason"]}
+        when t_bash.looks_like_server(text(action["command"]))
+            give {"ok": false, "error": "that looks like a server/watcher; a scheduled command must finish on its own"}
+        give {"ok": true, "action": {"type": "bash", "command": text(action["command"]), "timeout": when contains(action, "timeout") then floor(number(action["timeout"])) otherwise 300}}
+    when kind == "prompt"
+        when not contains(action, "prompt") or trim(text(action["prompt"])) == ""
+            give {"ok": false, "error": "action prompt needs the prompt text"}
+        let agent be when contains(action, "agent") then lower(text(action["agent"])) otherwise "build"
+        when not contains(["build", "plan", "review", "explore"], agent)
+            give {"ok": false, "error": "agent must be build | plan | review | explore"}
+        give {"ok": true, "action": {"type": "prompt", "prompt": text(action["prompt"]), "agent": agent}}
+    give {"ok": false, "error": "unknown action type '" + kind + "' (lamp | bash | prompt)"}
+
+-- crear: spec = {name, when, action, permission?, approval_timeout?, notify?} → la tarea (raise si es inválida)
+export task add(spec)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    when spec == nothing or not contains(spec, "when")
+        raise("a schedule needs `when` (every 6h | daily 09:00 | mon,wed 08:30)")
+    let pw be parse_when(spec["when"])
+    when not pw["ok"]
+        raise(pw["error"])
+    let ca be check_action(when contains(spec, "action") then spec["action"] otherwise nothing)
+    when not ca["ok"]
+        raise(ca["error"])
+    let name be when contains(spec, "name") and trim(text(spec["name"])) != "" then trim(text(spec["name"])) otherwise default_name(ca["action"])
+    let perm be when contains(spec, "permission") then lower(text(spec["permission"])) otherwise "ask"
+    when not contains(["strict", "ask", "yolo"], perm)
+        raise("permission must be strict | ask | yolo")
+    let doc be load_doc()
+    let seq be (when contains(doc, "seq") then floor(number(doc["seq"])) otherwise 0) + 1
+    set doc["seq"] to seq
+    save_doc(doc)
+    let id be slug(name) + "-" + text(seq)
+    let first be next_run(pw["plan"], now(), nothing, tz_offset())
+    when pw["plan"]["kind"] == "once" and first < now()
+        raise("that moment has already passed (" + fmt_local(first) + "); one-time tasks need a future time")
+    let t be {
+        "id": id, "name": name, "project": memo.slug(), "when": trim(text(spec["when"])), "plan": pw["plan"], "action": ca["action"],
+        "permission": perm,
+        "approval_timeout": when contains(spec, "approval_timeout") then floor(number(spec["approval_timeout"])) otherwise 7200,
+        "notify": when contains(spec, "notify") then trim(text(spec["notify"])) otherwise "",
+        "enabled": true, "created": now(), "last_run": nothing, "last_status": "", "last_summary": "", "running": false, "run_now": false,
+        "next_run": first, "history": []
+    }
+    put(t)
+    give t
+
+task default_name(action)
+    when action["type"] == "lamp"
+        give action["lamp"] + " " + action["tool"]
+    when action["type"] == "bash"
+        let cmd be action["command"]
+        give when length(cmd) > 40 then slice(cmd, 0, 40) + "…" otherwise cmd
+    let p be replace_text(action["prompt"], "\n", " ")
+    give when length(p) > 40 then slice(p, 0, 40) + "…" otherwise p
+
+export task remove(id)
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    when get(id) == nothing
+        raise("no scheduled task '" + text(id) + "' in this workspace")
+    let doc be load_doc()
+    let before be length(doc["tasks"])
+    set doc["tasks"] to where(doc["tasks"], (t) => t["id"] != id)
+    when length(doc["tasks"]) == before
+        raise("no scheduled task '" + text(id) + "'")
+    save_doc(doc)
+    give "scheduled task " + id + " removed"
+
+export task set_enabled(id, on)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    let t be get(id)
+    when t == nothing
+        raise("no scheduled task '" + text(id) + "'")
+    set t["enabled"] to on == true
+    when on
+        set t["next_run"] to next_run(t["plan"], now(), nothing, tz_offset())
+        when t["plan"]["kind"] == "once" and t["next_run"] < now()
+            raise("'" + id + "' was a one-time task for " + describe_plan(t["plan"]) + " and that moment has passed; create a new one")
+    put(t)
+    give "scheduled task " + id + (when on then " ON · next: " + fmt_local(t["next_run"]) otherwise " OFF")
+
+-- sesión de la corrida en curso (para verla en vivo desde la UI)
+export task set_session(id, sid)
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let t be get(id)
+    when t == nothing
+        give false
+    set t["session"] to sid
+    put(t)
+    give true
+
+-- pedir que corra en el próximo tick del daemon
+export task request_run(id)
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let t be get(id)
+    when t == nothing
+        raise("no scheduled task '" + text(id) + "'")
+    set t["run_now"] to true
+    put(t)
+    give t
+
+-- ¿hay un daemon (web.syn) haciendo tick? → segundos desde el último latido, o nothing
+export task daemon_age()
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    try
+        let ts be number(trim(read_file(HEARTBEAT)))
+        give now() - ts
+    recover err
+        give nothing
+
+export task heartbeat()
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    write_file(HEARTBEAT, text(now()))
+    give true
+
+-- ---------- corridas: lamp y bash (prompt en sched_run.syn) ----------
+export task run_simple(t)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("workspace")
+    require file("workspace/*")
+    let a be t["action"]
+    when a["type"] == "lamp"
+        give lamps.call(lamps.tool_name(a["lamp"], a["tool"]), a["args"])
+    when a["type"] == "bash"
+        let v be permission.evaluate("bash", {"command": a["command"]}, "yolo")
+        when v["decision"] == "deny"
+            give "DENIED by policy (" + v["reason"] + ")"
+        give t_bash.tool(a["command"], a["timeout"])
+    give "ERROR: prompt tasks run through sched_run"
+
+-- marca de inicio (para que la UI muestre «corriendo» y dos ticks no la repitan)
+export task mark_started(t)
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    set t["running"] to true
+    set t["run_now"] to false
+    put(t)
+    append_file(LOG_DIR + "/" + t["id"] + ".log", "\n══ " + format_time(now()) + " · " + t["name"] + " · " + t["action"]["type"] + "\n")
+    bus_publish("schedule.started", {"id": t["id"], "name": t["name"]})
+    give t
+
+-- cierre de una corrida: historial (json + log), próxima corrida, webhook de resultado
+export task record(t, started, status, output, extra)
+    require net
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    let fresh be get(t["id"])
+    when fresh == nothing
+        set fresh to t
+    let fin be now()
+    let out be text(output)
+    let summary be one_line(out, 200)
+    let late be fresh["next_run"] != nothing and started - fresh["next_run"] > TICK_SECONDS * 4
+    let entry be {"started": started, "finished": fin, "status": status, "summary": summary, "late": late}
+    each k in keys(extra)
+        set entry[k] to extra[k]
+    let hist be append(fresh["history"], entry)
+    when length(hist) > KEEP_HISTORY
+        set hist to slice(hist, length(hist) - KEEP_HISTORY, length(hist))
+    set fresh["history"] to hist
+    set fresh["running"] to false
+    set fresh["last_run"] to fin
+    set fresh["last_status"] to status
+    set fresh["last_summary"] to summary
+    set fresh["next_run"] to next_run(fresh["plan"], fin, fin, tz_offset())
+    when fresh["plan"]["kind"] == "once"
+        set fresh["enabled"] to false
+    put(fresh)
+    append_file(LOG_DIR + "/" + t["id"] + ".log", out + "\n── " + status + " · " + text(floor(fin - started)) + " s" + (when late then " · ATRASADA (el daemon no estaba corriendo a la hora prevista)" otherwise "") + "\n")
+    bus_publish("schedule.done", {"id": t["id"], "name": t["name"], "status": status})
+    when fresh["notify"] != ""
+        let payload be {"type": "schedule.done", "id": fresh["id"], "name": fresh["name"], "status": status, "started": started, "finished": fin, "summary": summary, "output": c.truncate(out, 20000)}
+        each k in keys(extra)
+            set payload[k] to extra[k]
+        try
+            let r be http_post(fresh["notify"], json_encode(payload), {"Content-Type": "application/json", "User-Agent": "lampson"})
+            when not r["ok"]
+                append_file(LOG_DIR + "/" + t["id"] + ".log", "── notify " + fresh["notify"] + " → " + text(r["status"]) + "\n")
+        recover err
+            append_file(LOG_DIR + "/" + t["id"] + ".log", "── notify failed: " + text(err) + "\n")
+    give fresh
+
+task one_line(s, max)
+    let t be trim(replace_text(replace_text(text(s), "\r", ""), "\n", " ⏎ "))
+    when length(t) > max
+        give slice(t, 0, max) + "…"
+    give t
+
+-- tareas que deben correr ahora
+export task due(ts)
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    give where(all(), (t) => t["enabled"] and not t["running"] and (t["run_now"] or (t["next_run"] != nothing and t["next_run"] <= ts)))
+
+export task log_tail(id, n)
+    require file(".lampson")
+    require file(".lampson/*")
+    when not matches(text(id), "[a-z0-9-]{1,40}")
+        give ""
+    try
+        let lines be split(replace_text(read_file(LOG_DIR + "/" + id + ".log"), "\r", ""), "\n")
+        when length(lines) > n
+            set lines to slice(lines, length(lines) - n, length(lines))
+        give join(lines, "\n")
+    recover err
+        give ""
+
+-- descripción de la acción (una línea) para previews y listados
+export task describe_action(a)
+    when a["type"] == "lamp"
+        give "lamp " + a["lamp"] + "." + a["tool"] + (when length(keys(a["args"])) > 0 then " " + one_line(json_encode(a["args"]), 80) otherwise "")
+    when a["type"] == "bash"
+        give "$ " + one_line(a["command"], 120)
+    give "agent " + a["agent"] + ": " + one_line(a["prompt"], 140)
+
+-- resumen para UI/terminal/tool
+export task summary()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    let out be []
+    each t in all()
+        set out to append(out, {"id": t["id"], "name": t["name"], "when": t["when"], "plan": describe_plan(t["plan"]), "action": t["action"], "action_text": describe_action(t["action"]), "permission": t["permission"], "approval_timeout": t["approval_timeout"], "notify": t["notify"], "enabled": t["enabled"], "running": t["running"], "run_now": t["run_now"], "session": when contains(t, "session") then t["session"] otherwise nothing, "last_run": t["last_run"], "last_status": t["last_status"], "last_summary": t["last_summary"], "next_run": t["next_run"], "next_local": fmt_local(when t["enabled"] then t["next_run"] otherwise nothing), "last_local": fmt_local(t["last_run"]), "history": t["history"]})
+    give out

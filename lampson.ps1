@@ -5,6 +5,7 @@
 #   lampson --workspace C:\otro\proyecto        # elegir la ubicación explícitamente     (también -Workspace)
 #   lampson --agent plan                        # perfil inicial: build | plan | review | explore
 #   lampson --yolo | --strict | --ask            # permisos para comandos peligrosos (--dangerously-skip-permissions = --yolo)
+#   lampson --daemon start|stop|status|logs|restart   # proceso residente (web + tareas programadas + aprobaciones)
 #   lampson --update                            # actualizar Lampson (git pull) y salir
 #   lampson --help
 #
@@ -17,12 +18,13 @@ $caller = (Get-Location).Path
 $mount = Join-Path $here "workspace"
 
 # --- args: acepta --flag y -Flag, sin distinguir mayúsculas ---
-$Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""
+$Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Daemon = ""
 $i = 0
 while ($i -lt $args.Count) {
     $a = [string]$args[$i]
     switch -Regex ($a.ToLower()) {
         '^--?(web|w)$'          { $Web = $true }
+        '^--?(daemon|d)$'       { $i++; $Daemon = if ($i -lt $args.Count) { ([string]$args[$i]).ToLower() } else { "status" } }
         '^--?(workspace|ws)$'   { $i++; $Workspace = [string]$args[$i] }
         '^--?(agent|a)$'        { $i++; $Agent = [string]$args[$i] }
         '^--?(yolo|y|dangerously-skip-permissions)$' { $Perm = "yolo" }
@@ -30,7 +32,7 @@ while ($i -lt $args.Count) {
         '^--?(ask)$'            { $Perm = "ask" }
         '^--?(permission|p)$'   { $i++; $Perm = ([string]$args[$i]).ToLower() }
         '^--?(update|u)$'       { Write-Host "actualizando Lampson en $here"; git -C $here pull --ff-only origin main; Write-Host ("lampson " + (git -C $here rev-parse --short HEAD)); exit $LASTEXITCODE }
-        '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 9 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
+        '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 10 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
         default                 { if ($Workspace -eq "" -and -not $a.StartsWith("-")) { $Workspace = $a } else { Write-Error "argumento desconocido: $a (probá lampson --help)"; exit 1 } }
     }
     $i++
@@ -49,6 +51,12 @@ if ($Workspace -ne "") {
     if (Test-Path -LiteralPath $mount) {
         $item = Get-Item -LiteralPath $mount -Force
         if ($item.LinkType -ne "Junction") { Write-Error "./workspace existe y no es una junction; movelo antes de montar otro proyecto"; exit 1 }
+        # un daemon/web corriendo sobre OTRO proyecto (latido reciente del scheduler) quedaría apuntando a este: aviso
+        $prev = $item.Target; if ($prev -is [array]) { $prev = $prev[0] }
+        $hb = Join-Path $here ".lampson\schedules.heartbeat"
+        if ($prev -and $prev.TrimEnd('\').ToLower() -ne $target.TrimEnd('\').ToLower() -and (Test-Path -LiteralPath $hb) -and ((Get-Date) - (Get-Item -LiteralPath $hb).LastWriteTime).TotalSeconds -lt 90) {
+            Write-Host "AVISO: hay un lampson (web/daemon) corriendo sobre $prev; al montar $target sus tareas programadas quedan en pausa. Paralo o reinicialo desde su carpeta: lampson --daemon restart" -ForegroundColor Yellow
+        }
         $item.Delete()
     }
     New-Item -ItemType Junction -Path $mount -Target $target | Out-Null
@@ -76,7 +84,13 @@ try {
     $env:LAMPSON_WORKSPACE = $target
     if ($Agent -ne "") { $env:LAMPSON_AGENT = $Agent }
     if ($Perm -ne "") { $env:LAMPSON_PERMISSION = $Perm }
-    if ($Web) {
+    if ($Daemon -ne "") {
+        # proceso residente: web.syn en background (synsema daemon, sin config del sistema; para producción,
+        # systemd/NSSM con `synsema serve web.syn`). Ejecuta las tareas programadas y atiende aprobaciones por link.
+        if ($Daemon -notmatch '^(start|stop|status|logs|restart)$') { Write-Error "uso: lampson --daemon start|stop|status|logs|restart"; exit 1 }
+        if ($Daemon -eq "start" -or $Daemon -eq "restart") { Write-Host "Lampson daemon · workspace: $target · http://127.0.0.1:8080" }
+        synsema daemon $Daemon web.syn
+    } elseif ($Web) {
         Write-Host "Lampson web · workspace: $target"
         Write-Host "abrí http://127.0.0.1:8080   (Ctrl+C para parar)"
         synsema serve web.syn

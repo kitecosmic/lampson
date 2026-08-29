@@ -14,6 +14,7 @@ require net
 require time
 require stdin
 require exec
+require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
@@ -51,6 +52,9 @@ use "./lib/mcp.syn" as mcp
 use "./lib/lamps.syn" as lamps
 use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
+use "./lib/schedule.syn" as schedule
+use "./lib/sched_run.syn" as sched_run
+use "./lib/approvals.syn" as approvals
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -344,6 +348,8 @@ let COMMANDS be [
     ["/mcp", "[add <nombre> <comando…> [--project] | remove <nombre>]", "servers MCP: listar, conectar o quitar (global: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json)"],
     ["/lamps", "[on <nombre> | off <nombre> | run <lámpara> <tool> [json] | remove <nombre>]", "lámparas (plugins de tools): listar, encender o apagar (global: lampson/lamps/ · proyecto: .lampson/lamps/)"],
     ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
+    ["/schedule", "[add <json> | run <id> | on <id> | off <id> | remove <id> | log <id>]", "tareas programadas (cada 6h, todos los días a las 9…): lámpara, comando o corrida del agente; corren mientras lampson esté abierto (o con lampson --daemon start, sin nada abierto)"],
+    ["/approve", "<id> yes|no", "responder una aprobación pendiente de una tarea programada que corre en background"],
     ["/out", "[n]", "resultado completo de la última tool del turno (n = contar hacia atrás: /out 2 es la anteúltima)"],
     ["/verbose", "", "alternar: mostrar SIEMPRE el output completo de cada tool (queda guardado en config.json)"],
     ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
@@ -403,6 +409,16 @@ task complete_args(cmd, head, last)
         when trim(head) == "add"
             give sort_by(keys(lsp.PRESETS), (x) => x)
         give ["--project", "--ext"]
+    when cmd == "/approve"
+        when first
+            give apply((a) => a["id"], approvals.pending())
+        give ["yes", "no"]
+    when cmd == "/schedule"
+        when first
+            give ["add", "run", "on", "off", "remove", "log"]
+        when starts_with(trim(head), "add")
+            give []
+        give apply((s) => s["id"], schedule.summary())
     when cmd == "/agent"
         give ["build", "plan", "review", "explore", "worker"]
     when cmd == "/model"
@@ -672,6 +688,47 @@ task opts_for(p, mode)
 task lampson_subagent(spec_json)
     give agents.run_child_json(spec_json)
 
+-- Tareas programadas TAMBIÉN en la terminal: `cron_every` no corre mientras el hilo principal está en el teclado,
+-- pero un `agent` sí (hilo real, como el Spinner). Cada 30 s llama al tick (heartbeat + corridas vencidas); una
+-- corrida `prompt` transcurre al lado del chat sin tocar su sesión (blackboard lampson:sched:session) y si pide
+-- permiso lo dice por consola: /approve <id> yes|no (o link/webhook si están configurados).
+task lampson_sched_tick()
+    give sched_run.tick()
+
+agent Sched
+    require net
+    require time
+    require exec
+    require random
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("lamps")
+    require file.read("lamps/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let alive be true
+    let waited be 25
+    while alive
+        observe "lampson:spinner:stop" as st
+        when st == true
+            set alive to false
+        otherwise when waited >= 30
+            set waited to 0
+            try
+                lampson_sched_tick()
+            recover err
+                print("[lampson] scheduler: " + text(err))
+        otherwise
+            sleep(1)
+            set waited to waited + 1
+
 -- !comando del usuario en un pseudo-terminal: la salida se ve EN VIVO y, si el proceso se queda esperando
 -- (prompt y/N, contraseña, REPL, `npm init`…), lo que escribas se le manda como teclas + Enter.
 -- Enter vacío = seguir esperando · ^C = cortar. Devuelve la salida (sin ANSI) para el contexto del agente.
@@ -765,6 +822,7 @@ banner(env_info["cwd"], cfg, profile, opts["permission_mode"], sid)
 share nothing as "lampson:busy"
 share false as "lampson:spinner:stop"
 spawn Spinner with esc = ESC, color = COLOR
+spawn Sched
 flush()
 
 let total_usage be {"input": 0, "output": 0}
@@ -1005,6 +1063,71 @@ while running
                 each s in ss
                     print("  " + (when s["status"] == "ready" then green("● ") otherwise (when s["status"] == "error" or s["status"] == "exited" then red("○ ") otherwise dim("○ "))) + pad(s["name"], 12) + dim(pad(s["scope"], 8) + pad(s["status"], 8) + join(s["extensions"], " ") + "  $ " + s["command"]) + (when s["error"] != nothing then red("  " + text(s["error"])) otherwise ""))
                 print("  " + dim("idle = arranca en la primera consulta del agente"))
+        otherwise when input == "/schedule" or starts_with(input, "/schedule ")
+            -- tareas programadas (lib/schedule.syn). Crear: JSON, o pedírselo al agente ("todos los días a las 9 corré…").
+            -- Las corre el daemon (web.syn con `lampson --daemon start`); `/schedule run` las corre acá mismo, con
+            -- el menú de aprobación de la terminal si la tarea es `ask`.
+            let srest be trim(slice(input, 9, length(input)))
+            let stoks be where(split(srest, " "), (x) => x != "")
+            let sact be when length(stoks) > 0 then stoks[0] otherwise ""
+            let sid_arg be when length(stoks) > 1 then stoks[1] otherwise ""
+            when sact == "add"
+                let sjson be trim(slice(srest, 3, length(srest)))
+                when sjson == ""
+                    print("  uso: /schedule add {\"name\": \"…\", \"when\": \"daily 09:00\", \"action\": {\"type\": \"bash\", \"command\": \"npm test\"}, \"permission\": \"ask\"}")
+                    print("  " + dim("when: every 6h · daily 09:00 · mon,wed 08:30 · weekdays 09:00   action.type: lamp {lamp, tool, args} · bash {command} · prompt {prompt, agent}"))
+                    print("  " + dim("o pedíselo al agente en lenguaje natural: «todos los días a las 9 revisá los tests y avisame»"))
+                otherwise
+                    try
+                        let st be schedule.add(json_decode(sjson))
+                        print("  " + green("⏰ programada «" + st["name"] + "» (" + st["id"] + "): " + schedule.describe_plan(st["plan"]) + " · próxima " + schedule.fmt_local(st["next_run"])))
+                    recover err
+                        print("  " + red(text(err)))
+            otherwise when sact == "run" and sid_arg != ""
+                let st be schedule.get(sid_arg)
+                when st == nothing
+                    print("  " + red("no existe la tarea " + sid_arg))
+                otherwise
+                    print("  " + yellow("⏰ corriendo «" + st["name"] + "» · " + schedule.describe_action(st["action"])))
+                    flush()
+                    let sr be sched_run.run(st, ask_user, on_event)
+                    print("  " + (when sr["last_status"] == "ok" then green("✓ ") otherwise red("✗ ")) + sr["last_status"] + " · " + first_line(sr["last_summary"], 160))
+                    print("  " + dim("log: " + schedule.LOG_DIR + "/" + st["id"] + ".log"))
+            otherwise when (sact == "on" or sact == "off") and sid_arg != ""
+                try
+                    print("  " + schedule.set_enabled(sid_arg, sact == "on"))
+                recover err
+                    print("  " + red(text(err)))
+            otherwise when sact == "remove" and sid_arg != ""
+                try
+                    print("  " + schedule.remove(sid_arg))
+                recover err
+                    print("  " + red(text(err)))
+            otherwise when sact == "log" and sid_arg != ""
+                let tl be schedule.log_tail(sid_arg, 60)
+                print(when tl == "" then "  sin corridas todavía" otherwise tl)
+            otherwise
+                let ss be schedule.summary()
+                let age be schedule.daemon_age()
+                when length(ss) == 0
+                    print("  sin tareas programadas. Pedísela al agente («cada 6 horas corré los tests y avisame») o: " + cyan("/schedule add <json>"))
+                each s in ss
+                    print("  " + (when s["running"] then yellow("● ") otherwise (when s["enabled"] then green("● ") otherwise dim("○ "))) + pad(s["id"], 22) + dim(pad(s["plan"], 30)) + s["action_text"])
+                    print("      " + dim("permisos " + s["permission"] + " · próxima " + s["next_local"] + (when s["last_run"] != nothing then " · última " + s["last_status"] + ": " + first_line(s["last_summary"], 80) otherwise "")))
+                let pend be approvals.pending()
+                each ap in pend
+                    print("  " + yellow("⚠ aprobación pendiente " + ap["id"] + ": " + first_line(ap["message"], 100)) + dim("  → /approve " + ap["id"] + " yes|no"))
+                print("  " + dim("corren solas mientras lampson esté abierto (tick cada " + text(schedule.TICK_SECONDS) + " s) · con todo cerrado: lampson --daemon start · run/on/off/remove/log <id>"))
+        otherwise when starts_with(input, "/approve ")
+            let atoks be where(split(trim(slice(input, 9, length(input))), " "), (x) => x != "")
+            when length(atoks) < 2 or not contains(["yes", "no", "si", "sí", "y", "n"], lower(atoks[1]))
+                print("  uso: /approve <id> yes|no   (pendientes: /schedule)")
+            otherwise
+                let yes be contains(["yes", "si", "sí", "y"], lower(atoks[1]))
+                when approvals.answer(atoks[0], yes)
+                    print("  " + (when yes then green("✓ permitido ") otherwise red("✗ denegado ")) + atoks[0])
+                otherwise
+                    print("  " + red("no hay una aprobación pendiente con id " + atoks[0]))
         otherwise when input == "/lamps" or starts_with(input, "/lamps ")
             let lrest be trim(slice(input, 6, length(input)))
             when starts_with(lrest, "run ")

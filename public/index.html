@@ -140,6 +140,37 @@
 
   /* ---- sidebar: secciones colapsables; el activo es una muesca en la regla, no una caja ---- */
   aside { grid-area:side; border-right:1px solid var(--rule); background:var(--paper); display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  /* tareas programadas y aprobaciones (sidebar) */
+  .modal .box.schedbox { width:min(640px, 94vw); max-height:92vh; overflow:auto; }
+  .schedbox textarea { font:400 12.5px/1.45 var(--mono); background:transparent; color:var(--ink); border:1px solid var(--rule); border-radius:var(--r); padding:6px 8px; width:100%; resize:vertical; }
+  .p.sched { flex-wrap:wrap; }
+  .p.sched .st.on { background:var(--accent); }
+  .p.sched .st.busy { background:var(--amber); animation: pulse 1s ease-in-out infinite; }
+  .p.sched .st.bad { background:var(--rubric); }
+  .p.sched .sub { flex-basis:100%; color:var(--ink-3); font-size:10.5px; padding-left:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .p.sched .act { margin-left:auto; display:inline-flex; gap:2px; visibility:hidden; }
+  .p.sched:hover .act, .p.sched .act.ask { visibility:visible; }
+  .p.sched .act span { color:var(--ink-3); font-size:11px; padding:0 4px; cursor:pointer; }
+  .p.sched .act span:hover { color:var(--accent); }
+  .p.sched .act span.rm:hover { color:var(--rubric); }
+  .p.appr { flex-wrap:wrap; cursor:default; }
+  .p.appr .msg { flex-basis:100%; color:var(--ink); font-size:11.5px; white-space:pre-wrap; padding-left:15px; }
+  .p.appr .why { flex-basis:100%; color:var(--rubric); font-size:10.5px; padding-left:15px; }
+  .p.appr .btns { flex-basis:100%; display:flex; gap:6px; padding:4px 0 2px 15px; }
+  .p.appr .btns button { padding:2px 9px; font-size:11px; }
+  .sec .daemon { font:400 10.5px/1.5 var(--mono); color:var(--ink-3); padding:2px 0 4px; }
+  .sec .daemon.off { color:var(--rubric); }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.35 } }
+  /* rueda de configuración: modal con tabs */
+  .modal .box.cfgbox { width:min(680px, 94vw); max-height:92vh; overflow:auto; }
+  .cfgbox .lhead { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+  .cfgbox .lhead h3 { margin:0; }
+  .ctabs { display:flex; gap:2px; border-bottom:1px solid var(--rule); margin:0 0 14px; }
+  .ctab { font:400 11px/1 var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--ink-3); padding:8px 12px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .ctab:hover { color:var(--ink); }
+  .ctab.on { color:var(--accent); border-bottom-color:var(--accent); }
+  .cfgbox label .ds { display:block; color:var(--ink-3); font:400 11.5px/1.4 var(--serif); margin-top:2px; }
+  .cfgbox input[disabled] { opacity:.55; }
   .sec { display:flex; flex-direction:column; min-height:0; flex:none; overflow:hidden; }
   .sec + .sec { border-top:1px solid var(--rule); }
   .sec h2 { font:400 10.5px/1.35 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
@@ -361,6 +392,7 @@
     <button class="hbtn upd" id="update" style="display:none"></button>
     <button class="hbtn" id="term" title="abrir un terminal real (shell en el workspace)">&gt;_ terminal</button>
     <button class="hbtn" id="new" title="empezar una conversación nueva">+ sesión</button>
+    <button class="theme-toggle" id="cfgBtn" type="button" title="configuración: zona horaria, aprobaciones a distancia, proveedor"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
   </div>
   <div class="hrow sub">
@@ -404,6 +436,14 @@
   <section class="sec" data-sec="ports">
     <h2 title="puertos TCP en escucha en esta máquina — de cualquier programa, no solo de lampson (útil para saber quién ocupa un puerto)"><span class="caret">▸</span>Puertos<span class="cnt" id="portCount"></span></h2>
     <div class="body" id="ports"></div>
+  </section>
+  <section class="sec" data-sec="approvals">
+    <h2 title="acciones que esperan tu permiso: del chat o de una tarea programada corriendo sola. También llegan por webhook/link si configuraste LAMPSON_WEBHOOK_URL y LAMPSON_PUBLIC_URL"><span class="caret">▸</span>Aprobaciones<span class="cnt" id="apprCount"></span></h2>
+    <div class="body" id="apprBox"></div>
+  </section>
+  <section class="sec" data-sec="sched">
+    <h2 title="tareas programadas (cada 6 h, todos los días a las 9, lunes 8:30…): una lámpara, un comando o una corrida del agente. Las ejecuta el proceso residente: lampson --daemon start, o esta web abierta"><span class="caret">▸</span>Programadas<span class="cnt" id="schedCount"></span><button class="h2act" id="schedAddBtn" title="programar una tarea">+</button></h2>
+    <div class="body" id="schedBox"></div>
   </section>
   <section class="sec open" data-sec="sessions">
     <h2><span class="caret">▾</span>Sesiones<span class="cnt" id="sessCount"></span></h2>
@@ -471,6 +511,53 @@
       <p class="lead" id="lspInstall"></p>
       <label>alcance <select id="lspScope"><option value="global">global — todos los proyectos</option><option value="project">proyecto — solo este repo</option></select></label>
       <div class="btns"><button class="primary" id="lspGo">Agregar</button><button id="lspCancel">Cancelar</button><span class="err" id="lspErr"></span></div>
+    </div>
+  </div>
+  <div id="schedAdd" class="modal" style="display:none">
+    <div class="box schedbox">
+      <p class="eyebrow">programadas</p>
+      <h3>Programar una tarea</h3>
+      <p class="lead">Corre sola, a la hora que digas, en el proceso residente de Lampson (<code>lampson --daemon start</code> o esta web abierta). También podés pedírsela al agente en el chat: <i>«todos los días a las 9 corré los tests y avisame»</i>.</p>
+      <label>nombre <input id="schName" spellcheck="false" autocomplete="off" placeholder="tests nocturnos"></label>
+      <label>cuándo <input id="schWhen" spellcheck="false" autocomplete="off" placeholder="daily 09:00 · every 6h · mon,wed 08:30 · today 15:14 · once 2026-09-01 10:00 · in 2h"></label>
+      <label>qué corre <select id="schKind"><option value="prompt">el agente, con estas instrucciones</option><option value="bash">un comando de shell</option><option value="lamp">una tool de una lámpara encendida</option></select></label>
+      <div id="schPrompt">
+        <label>instrucciones <textarea id="schPromptText" rows="4" spellcheck="false" placeholder="Corré la suite de tests. Si algo falla, buscá la causa y proponé el fix en el informe (no lo apliques). Terminá con un resumen corto."></textarea></label>
+        <label>perfil <select id="schAgent"><option value="build">build — puede editar y correr comandos</option><option value="review">review — corre tests, no edita</option><option value="plan">plan — solo lee y propone</option><option value="explore">explore — solo busca</option></select></label>
+      </div>
+      <div id="schBash" style="display:none">
+        <label>comando <input id="schCmd" spellcheck="false" autocomplete="off" placeholder="npm test"></label>
+      </div>
+      <div id="schLamp" style="display:none">
+        <label>lámpara · tool <select id="schLampTool"></select></label>
+        <label>args (JSON) <input id="schArgs" spellcheck="false" autocomplete="off" placeholder='{"who": "cron"}'></label>
+      </div>
+      <label id="schPermRow">permisos <select id="schPerm"><option value="ask">preguntar — lo peligroso te manda un link y espera</option><option value="strict">denegar — lo peligroso se rechaza y se informa</option><option value="yolo">permitir todo — sin preguntas</option></select></label>
+      <p class="lead" id="schPermHint" style="margin-top:-4px">Sobre de permisos de una corrida sin nadie mirando. En «preguntar», la aprobación aparece acá y, con <code>LAMPSON_PUBLIC_URL</code> + <code>LAMPSON_WEBHOOK_URL</code>, como link en tu canal; sin respuesta en 2 h se deniega. Lo destructivo del sistema se bloquea siempre.</p>
+      <label>avisar a <input id="schNotify" spellcheck="false" autocomplete="off" placeholder="opcional: URL de webhook que recibe el resultado (JSON)"></label>
+      <p class="lead" id="schDaemon"></p>
+      <div class="btns"><button class="primary" id="schGo">Programar</button><button id="schCancel">Cancelar</button><span class="err" id="schErr"></span></div>
+    </div>
+  </div>
+  <div id="cfgModal" class="modal" style="display:none">
+    <div class="box cfgbox">
+      <div class="lhead"><span class="eyebrow" style="margin:0">configuración</span><h3>Configuración</h3><span class="spacer"></span><button class="lghost" id="cfgClose" title="cerrar (Esc)">✕</button></div>
+      <div class="ctabs" id="cfgTabs"><span class="ctab on" data-tab="general">General</span><span class="ctab" data-tab="approvals">Aprobaciones a distancia</span><span class="ctab" data-tab="provider">Proveedor</span></div>
+      <div class="cpane" data-pane="general">
+        <p class="lead">Se guarda en <code>lampson/.lampson/config.json</code> (local). Un valor fijado en <code>.env</code> gana y se muestra bloqueado.</p>
+        <label>zona horaria <input id="cfgTz" spellcheck="false" autocomplete="off" placeholder="-03:00"><span class="ds" id="cfgTzHint">para «daily 09:00» y los horarios de las tareas programadas · vacío = la del sistema</span></label>
+      </div>
+      <div class="cpane" data-pane="approvals" style="display:none">
+        <p class="lead">Cuando una tarea programada (o el chat) necesita tu permiso, además de aparecer acá puede avisarte a tu canal con <b>links de un solo uso</b> para permitir o denegar desde el teléfono.</p>
+        <label>URL pública <input id="cfgPublic" spellcheck="false" autocomplete="off" placeholder="https://lampson.midominio.com"><span class="ds">por dónde se llega a este lampson desde afuera (túnel, VPS, edge con TLS); con esto cada aprobación trae links <code>/approve/&lt;id&gt;/&lt;token&gt;?d=yes|no</code></span></label>
+        <label>webhook <input id="cfgHook" spellcheck="false" autocomplete="off" placeholder="https://hooks.example.com/lampson"><span class="ds">POST JSON por cada aprobación pendiente (id, mensaje, links); reenvialo a Telegram, Slack o mail con n8n, un bot o un .syn de 6 líneas</span></label>
+        <label>secreto del webhook <input id="cfgSecret" type="password" spellcheck="false" autocomplete="off" placeholder="opcional"><span class="ds" id="cfgSecretHint">firma HMAC-SHA256 del body en <code>X-Lampson-Signature</code>; dejá vacío para no cambiarlo</span></label>
+      </div>
+      <div class="cpane" data-pane="provider" style="display:none">
+        <p class="lead">Proveedor, modelo y API key tienen su propia ventana (también la pill <code>proveedor · modelo</code> de la barra).</p>
+        <p><button class="primary" id="cfgProvider">Abrir proveedor y modelo</button></p>
+      </div>
+      <div class="btns"><button class="primary" id="cfgSave">Guardar</button><button id="cfgCancel">Cerrar</button><span class="err" id="cfgErr"></span></div>
     </div>
   </div>
   <div id="setup" class="modal" style="display:none">
@@ -905,6 +992,12 @@ function connectEvents() {
       if (name && procOpen === name) debounce('procview', () => refreshProcViewer(name), 250);
     } else if (t.startsWith('mcp.')) {
       debounce('mcp', loadMcp, 300);
+    } else if (t.startsWith('schedule.')) {
+      debounce('sched', loadSched, 300);
+      if (t === 'schedule.done' && ev.data) { setTimeout(loadSessions, 800); } if (t === 'schedule.done' && ev.data) add('meta', `⏰ <b>${esc(ev.data.name)}</b> terminó: ${esc(ev.data.status)} — <a href="#" class="schedgo">ver log</a>`).querySelector('.schedgo').onclick = (e2) => { e2.preventDefault(); openSched(ev.data.id); };
+      if (schedOpen && ev.data && ev.data.id === schedOpen) debounce('schedview', () => openSched(schedOpen), 400);
+    } else if (t.startsWith('approval.')) {
+      debounce('appr', loadApprovals, 200);
     } else if (t.startsWith('subagent.')) {
       debounce('agents', loadAgents, 300);
       const id = t.slice('subagent.'.length);
@@ -1024,6 +1117,153 @@ $('#lspGo').onclick = async () => {
     loadLsp();
   } catch (e) { $('#lspErr').textContent = String(e.message || e); }
 };
+
+// ---- tareas programadas (lib/schedule.syn): sección del sidebar + modal para crear + log por tarea ----
+// Las corre el proceso residente (web.syn bajo `lampson --daemon start`, o esta misma web abierta): un tick cada
+// 30 s. La sección muestra si ese tick está vivo; sin él, lo programado no corre y se avisa en rojo.
+let schedData = [], schedLamps = [], schedOpen = null, schedTick = 30, schedLiveTimer = null;
+function schedWhen(ts) { if (!ts) return '—'; const d = new Date(ts * 1000); return d.toLocaleString(undefined, { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+async function loadSched() {
+  let r; try { r = await (await fetch('/api/schedules')).json(); } catch (e) { return; }
+  schedData = r.tasks || []; schedLamps = r.lamps || []; schedTick = r.tick || 30;
+  const box = $('#schedBox'); box.innerHTML = '';
+  const on = schedData.filter(t => t.enabled).length, busy = schedData.filter(t => t.running).length;
+  $('#schedCount').textContent = schedData.length ? (busy ? `${busy} ● · ${schedData.length}` : `${on} · ${schedData.length}`) : ''; autoSec('sched', busy > 0);
+  const dm = document.createElement('div'); dm.className = 'daemon' + (r.alive ? '' : ' off');
+  dm.textContent = r.mount_ok === false ? '⚠ ./workspace apunta a otro proyecto: tareas en pausa · lampson --daemon restart desde esta carpeta' : `corren solas mientras esta web esté abierta · tick cada ${schedTick} s`;
+  dm.title = 'las tareas programadas corren en este proceso (web o terminal). Para que corran con todo cerrado: lampson --daemon start';
+  if (r.mount_ok === false) dm.classList.add('off');
+  dm.title = r.alive ? 'el proceso residente está ejecutando lo programado' : 'las tareas programadas las ejecuta el proceso residente: lampson --daemon start, o dejá abierta esta web';
+  box.appendChild(dm);
+  if (!schedData.length) { const e = document.createElement('div'); e.className = 'p none'; e.style.cursor = 'default'; e.textContent = 'ninguna'; box.appendChild(e); }
+  for (const t of schedData) {
+    const d = document.createElement('div'); d.className = 'p sched' + (schedOpen === t.id ? ' active' : '');
+    const st = t.running ? 'busy' : (t.enabled ? (t.last_status && t.last_status !== 'ok' ? 'bad' : 'on') : '');
+    d.title = `${t.action_text}\npermisos: ${t.permission}` + (t.last_run ? `\núltima: ${t.last_local} · ${t.last_status}: ${t.last_summary}` : '');
+    d.innerHTML = `<span class="st ${st}"></span><span class="nm">${esc(t.name)}</span><span class="cm">${esc(t.plan)}</span><span class="act"><span class="run" title="correr ahora (en el próximo tick)">▶</span><span class="tog" title="${t.enabled ? 'apagar' : 'encender'}">${t.enabled ? '⏻' : '○'}</span><span class="rm" title="quitar">✕</span></span>`
+      + `<span class="sub">${t.running ? 'corriendo…' : (t.enabled ? 'próxima ' + esc(schedWhen(t.next_run)) : 'apagada')}${t.last_run ? ' · última ' + esc(t.last_status) : ''} · ${esc(t.action.type)} · ${esc(t.permission)}</span>`;
+    d.onclick = () => openSched(t.id);
+    d.querySelector('.run').onclick = async (ev) => { ev.stopPropagation(); const rr = await fetch('/api/schedules/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: t.id }) }); const dd = await rr.json(); add('meta', '⏰ ' + esc(dd.result || dd.error || '') + ' — <a href="#" class="schedgo">seguirla en vivo</a>'); setTimeout(() => openSched(t.id), 2500); setTimeout(loadSched, 1500); };
+    d.querySelector('.tog').onclick = async (ev) => { ev.stopPropagation(); const rr = await fetch('/api/schedules/toggle', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: t.id, enabled: !t.enabled }) }); const dd = await rr.json(); if (!rr.ok) add('meta', '⚠ ' + esc(dd.error || '')); loadSched(); };
+    const rm = d.querySelector('.rm'); rm.onclick = (ev) => { ev.stopPropagation(); const act = d.querySelector('.act'); act.classList.add('ask'); inlineConfirm(rm, '¿quitar?', async () => { await fetch('/api/schedules/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: t.id }) }); if (schedOpen === t.id) { schedOpen = null; showPane('log'); } loadSched(); }); setTimeout(() => act.classList.remove('ask'), 6100); };
+    box.appendChild(d);
+  }
+  const addRow = document.createElement('div'); addRow.className = 'p'; addRow.innerHTML = `<span class="nm" style="color:var(--accent)">+ programar una tarea…</span>`;
+  addRow.title = 'una lámpara, un comando o el agente con instrucciones · también se lo podés pedir al agente en el chat';
+  addRow.onclick = openSchedAdd;
+  box.appendChild(addRow);
+  if (schedOpen && !schedData.some(t => t.id === schedOpen)) schedOpen = null;
+}
+async function openSched(id) {
+  schedOpen = id; document.querySelectorAll('.p.active').forEach(x => x.classList.remove('active'));
+  let r; try { r = await (await fetch('/api/schedules/log?id=' + encodeURIComponent(id) + '&tail=400')).json(); } catch (e) { return; }
+  const t = r.task || {};
+  $('#vpath').textContent = '⏰ ' + (t.name || id);
+  $('#vmeta').textContent = t.running ? '● corriendo' : (t.enabled ? '○ programada · próxima ' + schedWhen(t.next_run) : '○ apagada');
+  const pre = $('#vbody'); pre.className = 'log';
+  const hist = (t.history || []).slice().reverse().map(h => `${new Date(h.started * 1000).toLocaleString()}  ${h.status}${h.late ? ' (atrasada)' : ''}${h.session ? '  sesión ' + h.session + ' (en la lista de sesiones, ⏰)' : ''}${h.steps != null ? '  ' + h.steps + ' pasos' : ''}\n    ${h.summary}`).join('\n');
+  let live = '';
+  if (t.running && t.session) { try { const tr = await (await fetch('/api/trace?session=' + encodeURIComponent(t.session) + '&tail=120')).json(); live = '── corriendo ahora (sesión ' + t.session + ') ──\n' + (tr.trace || '(arrancando…)') + '\n\n'; } catch (e) { live = '── corriendo ahora ──\n'; } }
+  else if (t.running) live = '── corriendo ahora (' + (t.action.type === 'prompt' ? 'arrancando el agente…' : t.action.type) + ') ──\n\n';
+  pre.textContent = (t.action_text ? `${t.action_text}\npermisos: ${t.permission}` + (t.notify ? ` · avisa a ${t.notify}` : '') + '\n\n' : '') + live + (hist ? 'corridas:\n' + hist + '\n\n' : '') + (r.log ? '── log ──\n' + r.log : '(sin corridas todavía)');
+  showPane('viewer'); if (t.running) $('#stage').scrollTop = $('#stage').scrollHeight; else $('#stage').scrollTop = 0;
+  clearTimeout(schedLiveTimer); if (t.running) schedLiveTimer = setTimeout(() => { if (schedOpen === id) openSched(id); }, 3000);
+  loadSched();
+}
+function schedKindChanged() {
+  const k = $('#schKind').value;
+  $('#schPrompt').style.display = k === 'prompt' ? '' : 'none'; $('#schBash').style.display = k === 'bash' ? '' : 'none'; $('#schLamp').style.display = k === 'lamp' ? '' : 'none';
+  $('#schPermRow').style.display = k === 'prompt' ? '' : 'none';
+}
+function openSchedAdd() {
+  $('#schErr').textContent = ''; $('#schName').value = ''; $('#schWhen').value = ''; $('#schPromptText').value = ''; $('#schCmd').value = ''; $('#schArgs').value = ''; $('#schNotify').value = '';
+  const sel = $('#schLampTool'); sel.innerHTML = '';
+  for (const l of schedLamps.filter(l => l.enabled)) for (const tl of (l.tools || [])) { const o = document.createElement('option'); o.value = l.name + '/' + tl; o.textContent = `${l.name} · ${tl}`; sel.appendChild(o); }
+  if (!sel.options.length) { const o = document.createElement('option'); o.value = ''; o.textContent = 'ninguna lámpara encendida'; sel.appendChild(o); }
+  const alive = ($('#schedBox .daemon') || {}).classList && !$('#schedBox .daemon').classList.contains('off');
+  $('#schDaemon').innerHTML = 'Corre a su hora mientras lampson esté abierto (esta web o la terminal). Para que corra con todo cerrado: <code>lampson --daemon start</code>.';
+  schedKindChanged(); $('#schedAdd').style.display = 'flex'; $('#schName').focus();
+}
+$('#schKind').onchange = schedKindChanged;
+$('#schCancel').onclick = () => { $('#schedAdd').style.display = 'none'; };
+$('#schedAddBtn').onclick = (ev) => { ev.stopPropagation(); openSchedAdd(); };
+$('#schGo').onclick = async () => {
+  const k = $('#schKind').value; let action = { type: k };
+  if (k === 'prompt') action = { type: 'prompt', prompt: $('#schPromptText').value.trim(), agent: $('#schAgent').value };
+  else if (k === 'bash') action = { type: 'bash', command: $('#schCmd').value.trim() };
+  else { const v = $('#schLampTool').value; if (!v) { $('#schErr').textContent = 'encendé una lámpara primero'; return; } const [lamp, tool] = v.split('/'); let args = {}; if ($('#schArgs').value.trim()) { try { args = JSON.parse($('#schArgs').value); } catch (e) { $('#schErr').textContent = 'args: JSON inválido'; return; } } action = { type: 'lamp', lamp, tool, args }; }
+  const body = { name: $('#schName').value.trim(), when: $('#schWhen').value.trim(), action, permission: $('#schPerm').value, notify: $('#schNotify').value.trim() };
+  if (!body.when) { $('#schErr').textContent = 'falta cuándo'; return; }
+  $('#schErr').textContent = 'programando…';
+  try {
+    const r = await fetch('/api/schedules/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { $('#schErr').textContent = d.error || ('error ' + r.status); return; }
+    $('#schedAdd').style.display = 'none'; add('meta', '⏰ ' + esc(d.result || 'programada')); setSec('sched', true); loadSched();
+  } catch (e) { $('#schErr').textContent = String(e.message || e); }
+};
+
+// ---- aprobaciones (lib/approvals.syn): lo que espera tu permiso, venga del chat o de una tarea programada ----
+// Una corrida desatendida que quiere hacer algo peligroso queda esperando acá (y en el webhook/link si están
+// configurados). Las del chat de esta pestaña ya tienen su tarjeta en la conversación; igual aparecen en la lista.
+let apprSeen = new Set();
+async function loadApprovals() {
+  let r; try { r = await (await fetch('/api/approvals')).json(); } catch (e) { return; }
+  const list = r.approvals || [], pend = list.filter(a => a.status === 'pending');
+  const box = $('#apprBox'); box.innerHTML = '';
+  $('#apprCount').textContent = pend.length ? `${pend.length} ●` : ''; autoSec('approvals', pend.length > 0);
+  if (!list.length) { box.innerHTML = '<div class="p none" style="cursor:default">ninguna pendiente</div>'; }
+  for (const a of list) {
+    const d = document.createElement('div'); d.className = 'p appr'; const src = a.source === 'chat' ? 'chat' : ('⏰ ' + a.source.replace(/^schedule:?/, ''));
+    d.innerHTML = `<span class="st ${a.status === 'pending' ? 'busy' : ''}"></span><span class="nm">${esc(src)}</span><span class="cm">${a.status === 'pending' ? 'vence ' + esc(schedWhen(a.expires_at)) : esc(a.status)}</span><span class="msg">${esc(a.message)}</span><span class="why">${esc(a.why)}</span>`
+      + (a.status === 'pending' ? `<span class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></span>` : '');
+    d.querySelectorAll('button').forEach(b => b.onclick = async () => { d.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id, decision: b.dataset.ok === '1' }) }); setTimeout(loadApprovals, 600); });
+    box.appendChild(d);
+  }
+  if (r.public_url === '' && pend.length) { const n = document.createElement('div'); n.className = 'daemon'; n.textContent = 'para aprobar desde el móvil: LAMPSON_PUBLIC_URL + LAMPSON_WEBHOOK_URL en .env'; box.appendChild(n); }
+  // tarjeta en el chat para las que NO vienen de esta conversación (una tarea programada pidiendo permiso)
+  for (const a of pend) {
+    if (a.source === 'chat' || apprSeen.has(a.id)) continue; apprSeen.add(a.id);
+    const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(a.why)} · ${esc(a.source.replace(/^schedule:?/, 'tarea programada '))}</div><code>${esc(a.message)}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`);
+    el.dataset.id = a.id; el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id, decision: b.dataset.ok === '1' }) }); });
+  }
+  for (const a of list) { if (a.status === 'pending') continue; const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === a.id); if (el && el.querySelector('.btns button')) el.querySelector('.btns').innerHTML = a.status === 'approved' ? '<span style="color:var(--str)">✓ permitido</span>' : (a.status === 'expired' ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
+}
+
+// ---- rueda de configuración (⚙): tabs General / Aprobaciones a distancia / Proveedor → .lampson/config.json ----
+// Cada cosa nueva que se pueda configurar entra como un tab más. Los valores fijados en .env se muestran bloqueados.
+function fmtOff(sec) { const a = Math.abs(sec), h = Math.floor(a / 3600), m = Math.floor((a % 3600) / 60); return (sec < 0 ? '-' : '+') + String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0'); }
+function cfgTab(name) { document.querySelectorAll('#cfgTabs .ctab').forEach(t => t.classList.toggle('on', t.dataset.tab === name)); document.querySelectorAll('#cfgModal .cpane').forEach(p => p.style.display = p.dataset.pane === name ? '' : 'none'); }
+async function openCfg(tab) {
+  $('#cfgErr').textContent = '';
+  let r; try { r = await (await fetch('/api/settings/values')).json(); } catch (e) { $('#cfgErr').textContent = 'no se pudo leer la configuración'; }
+  const v = (r && r.values) || {};
+  const setf = (id, key) => { const el = $(id); el.value = v[key] || ''; el.disabled = !!v[key + '_from_env']; el.title = v[key + '_from_env'] ? 'fijado en .env (LAMPSON_' + key.toUpperCase() + '): editalo ahí' : ''; };
+  setf('#cfgTz', 'tz'); setf('#cfgPublic', 'public_url'); setf('#cfgHook', 'webhook_url');
+  $('#cfgSecret').value = ''; $('#cfgSecret').placeholder = v.has_webhook_secret ? '● guardado — escribí uno nuevo para cambiarlo' : 'opcional';
+  $('#cfgTzHint').textContent = 'para «daily 09:00» y los horarios de las tareas programadas · vacío = la del sistema' + (r && typeof r.tz_detected === 'number' ? ` (ahora: ${fmtOff(r.tz_detected)})` : '');
+  cfgTab(tab || 'general'); $('#cfgModal').style.display = 'flex';
+}
+function closeCfg() { $('#cfgModal').style.display = 'none'; }
+$('#cfgBtn').onclick = () => openCfg('general');
+$('#cfgClose').onclick = closeCfg; $('#cfgCancel').onclick = closeCfg;
+$('#cfgModal').addEventListener('click', (e) => { if (e.target === $('#cfgModal')) closeCfg(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#cfgModal').style.display !== 'none') closeCfg(); });
+document.querySelectorAll('#cfgTabs .ctab').forEach(t => t.onclick = () => cfgTab(t.dataset.tab));
+$('#cfgProvider').onclick = () => { closeCfg(); openSetup(false); };
+$('#cfgSave').onclick = async () => {
+  const body = {};
+  for (const [id, key] of [['#cfgTz', 'tz'], ['#cfgPublic', 'public_url'], ['#cfgHook', 'webhook_url']]) { const el = $(id); if (!el.disabled) body[key] = el.value.trim(); }
+  if ($('#cfgSecret').value.trim()) body.webhook_secret = $('#cfgSecret').value.trim();
+  if (body.tz && !/^[+-]?\d{1,2}(:?\d{2})?$/.test(body.tz)) { $('#cfgErr').textContent = 'zona horaria: usá -03:00 o +0200'; return; }
+  $('#cfgErr').textContent = 'guardando…';
+  try {
+    const r = await fetch('/api/settings/values', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json(); if (!r.ok) { $('#cfgErr').textContent = d.error || ('error ' + r.status); return; }
+    $('#cfgErr').textContent = ''; closeCfg(); add('meta', '⚙ configuración guardada'); loadSched(); loadApprovals();
+  } catch (e) { $('#cfgErr').textContent = String(e.message || e); }
+};
+if (location.hash === '#config') setTimeout(() => openCfg('general'), 400);
 
 // ---- lámparas (plugins de tools): pill en la barra superior + modal lista/detalle ----
 // Pensado para muchas lámparas: buscador (nombre, descripción, tools), lista compacta a la izquierda, la
@@ -1255,6 +1495,7 @@ function handle(chunk, thinking) {
   else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out);
     if (!bad && d.call && /^(write|edit|bash|process|delegate|lamp|skill)$/.test(d.call.name)) treeChanged();
     // lámpara recién creada: avisar en el chat con un acceso directo al switch (el modelo no sabe cómo se enciende en esta UI)
+    if (d.call && d.call.name === 'schedule') { setTimeout(loadSched, 300); if (/^scheduled '/.test(out)) setSec('sched', true); }
     if (d.call && d.call.name === 'lamp' && /^lamp '([^']+)' created/.test(out)) { const nm = out.match(/^lamp '([^']+)' created/)[1]; const m = add('meta', `☼ lámpara <b>${esc(nm)}</b> creada — está apagada: <a href="#" class="lampgo">encenderla en «lámparas»</a>`); m.querySelector('.lampgo').onclick = (ev) => { ev.preventDefault(); $('#lamps').click(); }; $('#lamps').classList.add('new'); setTimeout(() => $('#lamps').classList.remove('new'), 4000); } const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }
   else if (k === 'approval_result') { const el = [...log.querySelectorAll('.approval')].find(x => x.dataset.id === d.id); if (el) el.querySelector('.btns').innerHTML = d.approved ? '<span style="color:var(--str)">✓ permitido</span>' : (d.timeout ? '<span class="denied">✗ sin respuesta, denegado</span>' : '<span class="denied">✗ denegado</span>'); }
@@ -1270,8 +1511,9 @@ function handle(chunk, thinking) {
 $('#f').onsubmit = e => { e.preventDefault(); const t = $('#in').value.trim(); if ((!t && !attachments.length) || busy) return; $('#in').value = ''; send(t || '(imagen adjunta)'); };
 $('#in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) $('#f').requestSubmit(); } });
 $('#in').addEventListener('input', () => { const t = $('#in'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 220) + 'px'; });
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadLsp(); loadLamps(); loadTodo(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadLsp(); loadLamps(); loadTodo(); loadSched(); loadApprovals(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) open(session); });
 setInterval(loadProcs, events ? 60000 : 10000);
+setInterval(() => { loadSched(); if (!events) loadApprovals(); }, events ? 60000 : 15000);
 setInterval(() => { if (!events && ($('#agentCount').textContent.includes('●') || busy)) loadAgents(); }, 5000);
 </script>
 </body>
