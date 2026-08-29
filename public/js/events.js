@@ -17,8 +17,7 @@ function connectEvents() {
       debounce('mcp', loadMcp, 300);
     } else if (t.startsWith('schedule.')) {
       debounce('sched', loadSched, 300);
-      if (t === 'schedule.done' && ev.data) { setTimeout(loadSessions, 800); add('meta', `⏰ <b>${esc(ev.data.name)}</b> terminó: ${esc(ev.data.status)} — <a href="#" class="schedgo">ver log</a>`).querySelector('.schedgo').onclick = (e2) => { e2.preventDefault(); openSched(ev.data.id); }; }
-      if (schedOpen && ev.data && ev.data.id === schedOpen) debounce('schedview', () => openSched(schedOpen), 400);
+      if (t === 'schedule.done' && ev.data) { setTimeout(loadSessions, 800); add('meta', `⏰ <b>${esc(ev.data.name)}</b> terminó: ${esc(ev.data.status)} — <a href="#" class="schedgo">ver</a>`).querySelector('.schedgo').onclick = (e2) => { e2.preventDefault(); openSched(ev.data.id); }; }
     } else if (t.startsWith('approval.')) {
       debounce('appr', loadApprovals, 200);
     } else if (t.startsWith('subagent.')) {

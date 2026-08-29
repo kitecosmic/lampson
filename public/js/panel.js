@@ -3,18 +3,18 @@
 //   Panel.open({ eyebrow, title, sub, size: 'lg'|'md'|'sm', layout: 'browse'|'tabs'|'form',
 //                headActions: [{label, title, onClick}],   // botones chicos en la cabecera (p.ej. «?»)
 //                noClose: bool,                             // sin ✕/Esc (onboarding)
-//                onClose(),
+//                onClose(), select: clave de la fila a dejar elegida al abrir (browse),
 //     browse: { placeholder, listWidth, load(q) → rows, render(row, q) → html de la fila, key(row) → id estable,
 //               nodot: true (filas sin la columna del punto), detail(row, q) → html del panel derecho (puede ser async), wire(row, box) → engancha handlers,
 //               onPick(row) → Enter / doble clic, count(rows, q) → texto del pie, emptyHtml, help: html },
 //     tabs:   { tabs: [{id, label, html}], footer: html, wire(box), initial },
 //     form:   { html, footer: html, wire(box) } })
 //   Panel.close() · Panel.refresh() (browse: recarga la lista conservando la selección) · Panel.detail() (re-render
-//   del detalle) · Panel.box (el elemento) · Panel.err(texto) (línea de error del pie) · Panel.is(id)
+//   del detalle) · Panel.selectKey(k) · Panel.box (el elemento) · Panel.err(texto) (línea de error del pie) · Panel.is(id)
 //
 // Teclado en browse: ↑↓ mueven la selección (el detalle sigue), Enter = onPick, Esc cierra. Un solo panel abierto.
 const Panel = (() => {
-  let cur = null, rows = [], sel = 0, timer = null, seq = 0, overlay = null;
+  let cur = null, rows = [], sel = 0, timer = null, seq = 0, overlay = null, pendingKey = null;
   const ICON_X = '✕';
   function ensure() {
     if (overlay) return overlay;
@@ -31,7 +31,7 @@ const Panel = (() => {
     return `<div class="phead"><span class="eyebrow">${esc(spec.eyebrow || '')}</span><h3>${esc(spec.title || '')}</h3><span class="sub">${esc(spec.sub || '')}</span><span class="spacer"></span>${acts}${spec.noClose ? '' : `<button class="pghost" data-close title="cerrar (Esc)">${ICON_X}</button>`}</div>`;
   }
   function open(spec) {
-    cur = spec; rows = []; sel = 0; seq++;
+    cur = spec; rows = []; sel = 0; seq++; pendingKey = spec.select != null ? spec.select : null;
     const b = box(); b.className = 'panel ' + (spec.size || (spec.layout === 'browse' ? 'lg' : 'md'));
     let body = '';
     if (spec.layout === 'browse') {
@@ -70,7 +70,7 @@ const Panel = (() => {
   async function refresh() {
     if (!cur || cur.layout !== 'browse') return;
     const spec = cur, q = query(), my = ++seq;
-    const keep = rows[sel] && spec.browse.key ? spec.browse.key(rows[sel]) : null;
+    const keep = pendingKey != null ? pendingKey : (rows[sel] && spec.browse.key ? spec.browse.key(rows[sel]) : null); pendingKey = null;
     let list; try { list = await spec.browse.load(q); } catch (e) { list = []; }
     if (cur !== spec || my !== seq) return;
     rows = list || [];
@@ -86,6 +86,8 @@ const Panel = (() => {
     detail();
   }
   function select(i) { sel = i; box().querySelectorAll('.bitems .li').forEach((x, j) => x.classList.toggle('sel', j === i)); detail(); }
+  // seleccionar por clave (spec.browse.key): para abrir el panel ya parado en un elemento («+ nuevo», una tarea)
+  function selectKey(k) { if (!cur || cur.layout !== 'browse' || !cur.browse.key) return false; const i = rows.findIndex(r => cur.browse.key(r) === k); if (i < 0) return false; select(i); return true; }
   async function detail() {
     if (!cur || cur.layout !== 'browse') return;
     const spec = cur, my = ++seq, d = box().querySelector('.bdetail'), r = rows[sel];
@@ -95,5 +97,5 @@ const Panel = (() => {
     d.innerHTML = html; if (spec.browse.wire) spec.browse.wire(r, d);
   }
   function help(show) { const b = box(); const h = b.querySelector('.phelp'), br = b.querySelector('.browse'); if (!h) return; h.style.display = show ? '' : 'none'; br.style.display = show ? 'none' : ''; }
-  return { open, close, refresh, detail, err, is, tab, help, get box() { return box(); }, get current() { return cur; }, get selected() { return rows[sel]; } };
+  return { open, close, refresh, detail, err, is, tab, help, selectKey, get box() { return box(); }, get current() { return cur; }, get selected() { return rows[sel]; } };
 })();

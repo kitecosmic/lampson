@@ -59,6 +59,13 @@
 .panel .li.sel { background:var(--paper-2); box-shadow:inset 2px 0 0 var(--accent); }
 .panel .li .dot { color:var(--ink-3); margin-top:1px; }
 .panel .li.on .dot { color:var(--accent); }
+.panel .li.bad .dot { color:var(--rubric); }
+.panel .li.new .nm { color:var(--accent); font-weight:400; }
+.panel .dform label { margin-top:10px; }
+.panel .dform .lead { margin:8px 0 12px; }
+.panel .dform .pfoot { margin-top:16px; }
+.panel .derr { color:var(--rubric); font:400 12px/1.4 var(--mono); min-height:14px; margin-top:6px; }
+.panel .dlog { margin-top:12px; max-height:38vh; overflow:auto; font:400 11.5px/1.45 var(--mono); border:1px solid var(--rule); border-radius:var(--r); padding:8px; white-space:pre-wrap; color:var(--ink-2); }
 .panel .li.broken .dot { color:var(--rubric); }
 .panel .li .nm { color:var(--ink); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .panel .li .nm.serif { font:400 13px/1.35 var(--serif); }
@@ -106,6 +113,8 @@
 .panel .dmsgs { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
 .panel .dmsg { border-left:2px solid var(--rule-2); padding:2px 0 2px 10px; font:400 12.5px/1.5 var(--serif); color:var(--ink-2); white-space:pre-wrap; word-break:break-word; }
 .panel .dmsg.dm-user { border-left-color:var(--accent); color:var(--ink); }
+.panel .dmsg.dm-bad { border-left-color:var(--rubric); }
+.panel .dmsg .who a { color:var(--accent); text-decoration:none; }
 .panel .dmsg .who { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--ink-3); display:block; margin-bottom:3px; }
 /* ayuda («?»): prosa a lo ancho, reemplaza al cuerpo */
 .panel .phelp { flex:1; min-height:0; overflow:auto; padding:16px 24px 8px 6px; font:400 13.5px/1.6 var(--serif); color:var(--ink-2); }

@@ -239,7 +239,7 @@ public/              web UI (no build step, no dependencies; classic scripts ser
   js/core.js         shared state + helpers ($, esc, md, add, api, showPane/showText, inlineConfirm, debounce, empty)
   js/panel.js        THE modal component: one shell, three layouts (browse = search + list + detail, tabs, form)
   js/<view>.js       one file per thing on screen: sessions, chat, tree, terminal, procs, agents, memory, todo,
-                     mcp, lsp, lamps, schedules, approvals, config, setup, update, events (SSE), app (boot)
+                     mcp, lsp, lamps, schedules, approvals, config (+ provider), update, events (SSE), app (boot)
 lib/
   provider.syn       config from .env · chat(cfg, messages, catalog) · retry with backoff
   loop.syn           run_turn(): LLM → tool calls → permissions → call_tool → results → repeat; doom-loop guard; compaction
