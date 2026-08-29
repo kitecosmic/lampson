@@ -3,7 +3,7 @@ name: synsema
 description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, live processes / pseudo-terminals, and the runtime traps that cost hours. Load before touching any .syn file.
 ---
 
-# Synsema quick reference (v0.6.10)
+# Synsema quick reference (v0.6.11)
 
 > Curated 10 KB summary for the agent (the full reference is ~450 KB and lives in the user's editor
 > skill). Kept in sync by hand with each `synsema update`; if `synsema --version` is newer than the
@@ -22,6 +22,11 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
 - `try` … `recover err` (recover SWALLOWS; `raise(err)` to re-throw) · `raise("msg")`
 - `contains(xs, x)` (on maps checks KEYS) · `append(xs, x)` returns a NEW list → `set xs to append(xs, x)`
 - `apply(f, xs)`, `where(xs, p)`, `sort_by(xs, f)`, `slice(xs, a, b)`, `split/join/trim/lower/upper`
+- Text/regex: `replace_text(t, old, new)` (literal), `replace_re(t, re, rep)` (`\1` backrefs), `capture(t, re)`
+  (first match; with groups → list), `find_all`, `matches` (**full match** only — not a search).
+  There is NO `replace`, `regex_replace`, `chars`, `repeat`. Rust regex: no lookahead/lookbehind.
+  In `"..."` strings backslashes are literal: write `"\d"`, `"\*"` (`"\\d"` is a literal `\d`).
+  Anonymous functions: `(x) => expr` only (no inline `task(x)`).
 - `json_encode / json_decode` · `length` · `text(x)` · `number(s)` (ALWAYS float → `floor()` for ints)
 - Modules: `use "./m.syn" as m` (local only, never `../`), `export task/let`. A module cannot have
   top-level `require` or `serve` — the ENTRY file grants capabilities.
@@ -50,6 +55,12 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   `proc_spawn` in a handler is gone when the handler returns. A process that must outlive requests lives
   inside an `agent` spawned from the handler (own lifecycle; blackboard `share/observe` + `bus_*` are shared
   with handlers). That is how lampson's `process` tool works (`lib/tools/proc.syn`).
+- **Own terminal / raw keys (v0.6.11+)**: `let h be term_open({"ctrl_c": "exit"})` → `nothing` without a
+  TTY / under `test`/`serve` (fall back to `read_line`); `term_recv(h, secs)` → `{type: "key", key, text,
+  ctrl, alt, shift}` (`key` = `"char"|"enter"|"tab"|"backspace"|"up"|…`), `paste`, `resize`, `eof`;
+  draw with `term_write(h, ansi)` (**`print` stays buffered**); `term_size(h)`; `term_close(h)`. Alt+Enter
+  always arrives (Shift+Enter needs kitty protocol). `ask/approve` still work while open. Lampson's line
+  editor is `lib/line.syn`; drive a terminal UI in tests via `proc_spawn(…, {pty: true})` (`tty_test.syn`).
 - **File watch (v0.6.9+)**: `let w be watch("src", {"interval": 0.2, "ignore": ["*.tmp"]})` → events
   `{type: "create"|"modify"|"delete", path, is_dir}` via `watch_recv(w, secs)` or `select`; polling with a
   snapshot (latency = interval), `watch_close(w)`. Gate: `file("src")` + `file("src/*")`.
@@ -67,7 +78,9 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
 - `localhost` resolves to IPv6; use `127.0.0.1`.
 - `run("bash", ...)` hangs on Windows (WSL bash) → `C:\Program Files\Git\bin\bash.exe` or `cmd /c`.
 - A task named `run` shadows the builtin `run` (infinite recursion).
-- Reserved words that break variable/param names: `reason task ask stop decide analyze generate show approve confirm`.
+- Reserved words that break variable/param names: `reason task ask stop type run decide analyze generate show approve confirm`.
+- Reading a MISSING map key is a runtime error (`Map has no key 'x'`), not `nothing` → `contains(m, "x")` first.
+- Maps are passed by reference: `set m["k"] to v` inside a task IS visible to the caller (lists via `append` are not — it returns a new list).
 - `and`/`or` do NOT short-circuit → nest `when` before indexing.
 - No `merge`: add a key with `set m["k"] to v`. No `append_file`: read + write (atomic; parents created).
 - Runtime error messages are Capitalized (`Not a directory: …`) and `contains` is case-sensitive → compare `lower(text(err))`.

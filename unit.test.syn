@@ -29,6 +29,8 @@ use "./lib/skills.syn" as skills
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
 use "./lib/trace.syn" as trace
+use "./lib/md.syn" as md
+use "./lib/diff.syn" as diff
 use "./lib/mcp.syn" as mcp
 use "./lib/lamps.syn" as lamps
 use "./lib/tools/todo.syn" as todo
@@ -72,6 +74,14 @@ test "escribir .env por bash (redirect) pide aprobación; describe_call en una l
     assert_eq(permission.evaluate("bash", {"command": "echo X=1 > .env && npx prisma db push"}, "ask")["decision"], "ask")
     assert_eq(permission.evaluate("bash", {"command": "cat .env.example"}, "ask")["decision"], "allow")
     assert_eq(permission.describe_call("bash", {"command": "echo a" + "\n" + "echo b"}), "$ echo a ⏎ echo b")
+    -- la traza se lee como shell, sin JSON crudo
+    assert_eq(permission.describe_call("memory", {"action": "list"}), "memory list")
+    assert_eq(permission.describe_call("memory", {"action": "read", "name": "gotchas"}), "memory read gotchas")
+    assert_eq(permission.describe_call("grep", {"pattern": "TODO", "path": "src", "regex": true}), "grep -E \"TODO\"  src")
+    assert_eq(permission.describe_call("find", {"pattern": "*.ts"}), "find *.ts")
+    assert_eq(permission.describe_call("read", {"path": "a.md", "offset": 10, "limit": 40}), "read a.md  (desde 10 40 líneas)")
+    assert_eq(permission.describe_call("ls", {}), "ls .")
+    assert_eq(permission.describe_call("todo", {"items": [{"content": "a", "status": "done"}, {"content": "b", "status": "pending"}]}), "todo  1/2 hechas")
 
 test "skill install: human in the loop siempre (ask incluso en yolo, deny en strict); load/list nunca preguntan"
     let ins be {"name": "frontend-design", "action": "install", "source": "anthropics/skills", "scope": "global"}
@@ -494,3 +504,40 @@ test "env_info: la UI (web|terminal) llega al prompt para que el modelo no diga 
     share {"kind": "web"} as "lampson:ui"
     let p be prompt.build(agents.env_info(provider.config()), "")
     assert(contains(p, "from the web UI") and contains(p, "Never tell a web user to type a slash command"))
+
+test "md: markdown → terminal (plano sin escapes; con color solo cambia por SGR)"
+    let doc be "# T\n\nHola **neg** *it* `cod` [l](http://u) 2*3\n- a\n1. b\n> q\n```js\n**raw**\n```\n| a | bb |\n|---|---|\n| **1** | 2 |"
+    let plain be md.render(doc, false)
+    assert(contains(plain, "T\n  ═") and contains(plain, "Hola neg it cod l http://u 2*3"), plain)
+    assert(contains(plain, "• a") and contains(plain, "1. b") and contains(plain, "▎ q"), plain)
+    assert(contains(plain, "│ **raw**") and contains(plain, "┌── js"), plain)
+    assert(contains(plain, "1 │ 2") and contains(plain, "a │ bb"), plain)
+    let esc be decode(bytes("1b", "hex"))
+    assert(not contains(plain, esc))
+    let col be md.render(doc, true)
+    assert(contains(col, esc + "[1mneg" + esc + "[0m") and contains(col, esc + "[33mcod" + esc + "[0m"), col)
+    assert_eq(strip_ansi(col), plain)
+
+test "diff: líneas cambiadas con contexto y números; archivo nuevo = todo +; edit/write publican antes/después"
+    let d be diff.diff("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk", "a\nb\nC\nd\ne\nf\ng\nh\nX\ni\nj\nk", 2, false)
+    assert_eq(d["added"], 2)
+    assert_eq(d["removed"], 1)
+    let s be join(d["lines"], "\n")
+    assert(contains(s, " 3 │ - c\n 3 │ + C") and contains(s, " 9 │ + X") and contains(s, "⋯"), s)
+    assert(not contains(s, "│   f"), s)
+    let n be diff.diff("", "uno\ndos", 2, false)
+    assert_eq(n["removed"], 0)
+    assert_eq(join(n["lines"], "\n"), "1 │ + uno\n2 │ + dos")
+    -- edit → blackboard "lampson:ui:diff" con old/new (la UI lo convierte en diff; el modelo no lo ve)
+    call_tool(REG["write"], {"path": "diff_t.txt", "content": "x\ny\n"})
+    observe "lampson:ui:diff" as w
+    assert_eq(w["old"], "")
+    assert_eq(w["new"], "x\ny\n")
+    call_tool(REG["read"], {"path": "diff_t.txt"})
+    let r be call_tool(REG["edit"], {"path": "diff_t.txt", "old_string": "y", "new_string": "z"})
+    assert(contains(r, "1 replacement"), r)
+    observe "lampson:ui:diff" as e
+    assert_eq(e["path"], "diff_t.txt")
+    assert_eq(e["old"], "x\ny\n")
+    assert_eq(e["new"], "x\nz\n")
+    assert_eq(diff.diff(e["old"], e["new"], 1, false)["removed"], 1)

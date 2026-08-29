@@ -1,0 +1,365 @@
+-- lib/line.syn — editor de línea para la terminal (Synsema v0.6.11+: term_open/term_recv)
+--   read(prompt, color, ctx)  → texto (puede tener "\n"), INTERRUPT si ctx["idle"]() pidió cortar,
+--                               nothing en EOF. Sin TTY (pipe/CI) delega en ctx["fallback"](prompt).
+--   choose(question, options, color) → índice elegido, -1 sin TTY (usar approve), nothing en EOF/Esc.
+-- Teclas: ←→ Home End · ↑↓ historial o menú · Tab completa · Alt+Enter salto de línea · Enter envía
+--         Ctrl+A/E inicio/fin · Ctrl+U borra la línea · Ctrl+W borra palabra · Ctrl+O = /out · Esc cierra el menú
+-- Menú: al escribir "/" aparecen los comandos (primero los recientes); con "/cmd " los argumentos que
+--       devuelva ctx["complete"](cmd, prefijo) (archivos, servers, flags…). Máx MENU_ROWS filas.
+-- MIGA: dibujar SIEMPRE con term_write (print queda buffereado). El runtime restaura la terminal al cerrar.
+
+let ESC be decode(bytes("1b", "hex"))
+let MENU_ROWS be 8
+export let INTERRUPT be ESC + "interrupt"
+
+task sgr(color, code, s)
+    when not color or s == ""
+        give s
+    give ESC + "[" + code + "m" + s + ESC + "[0m"
+
+task vis(s)
+    give length(strip_ansi(s))
+
+task rep(ch, n)
+    let out be ""
+    while length(out) < n
+        set out to out + ch
+    give out
+
+task starts(s, p)
+    give starts_with(s, p)
+
+-- ---------- candidatos ----------
+
+-- buf = texto del editor. give {"kind": "cmd"|"arg"|"", "items": [{"label","fill","desc"}], "token": prefijo}
+task candidates(buf, ctx)
+    when not starts(buf, "/") or contains(buf, "\n")
+        give {"kind": "", "items": [], "token": ""}
+    let sp be capture(buf, "^(/\S*)\s+(.*)$")
+    when sp == nothing
+        -- comando a medias: recientes primero cuando es "/" pelado
+        let items be []
+        let seen be {}
+        when buf == "/"
+            each r in ctx["recent"]
+                each c in ctx["commands"]
+                    when c[0] == r and not contains(seen, r)
+                        set seen[r] to true
+                        set items to append(items, {"label": c[0], "fill": c[0] + (when c[1] != "" then " " otherwise ""), "args": c[1], "desc": c[2], "recent": true})
+        each c in ctx["commands"]
+            when starts(c[0], buf) and not contains(seen, c[0])
+                set seen[c[0]] to true
+                set items to append(items, {"label": c[0], "fill": c[0] + (when c[1] != "" then " " otherwise ""), "args": c[1], "desc": c[2], "recent": false})
+        give {"kind": "cmd", "items": items, "token": buf}
+    let cmd be sp[0]
+    let rest be sp[1]
+    -- último token (lo que se completa); lo anterior queda fijo
+    let toks be split(rest, " ")
+    let last be toks[length(toks) - 1]
+    let head be slice(rest, 0, length(rest) - length(last))
+    let items be []
+    let cands be ctx["complete"](cmd, head, last)
+    each c in cands
+        when starts(c, last)
+            set items to append(items, {"label": c, "fill": cmd + " " + head + c + (when ends_with(c, "/") then "" otherwise " "), "args": "", "desc": "", "recent": false})
+    give {"kind": "arg", "items": items, "token": last}
+
+-- ---------- dibujo ----------
+
+-- filas físicas que ocupa un texto de ancho w en una terminal de cols columnas
+task rows_of(w, cols)
+    when cols <= 0
+        give 1
+    give floor(w / cols) + 1
+
+-- dibuja prompt + buffer (multilínea) + menú; deja el cursor en su lugar. give filas totales dibujadas
+-- (para poder volver al inicio en el próximo redraw)
+task draw(h, st, color, ctx)
+    let size be term_size(h)
+    let cols be size["cols"]
+    let lines be split(st["buf"], "\n")
+    -- posición del cursor: línea y columna dentro del buffer
+    let cl be 0
+    let cc be st["cur"]
+    let i be 0
+    let found be false
+    while i < length(lines) and not found
+        when cc <= length(lines[i])
+            set cl to i
+            set found to true
+        otherwise
+            set cc to cc - length(lines[i]) - 1
+            set i to i + 1
+    let out be ""
+    -- volver al inicio de lo dibujado la vez anterior y limpiar hacia abajo
+    when st["cursor_row"] > 0
+        set out to out + ESC + "[" + text(st["cursor_row"]) + "A"
+    set out to out + "\r" + ESC + "[J"
+    let cont be sgr(color, "2", "  … ")
+    let rows_before_cursor be 0
+    let total be 0
+    let cursor_col be 0
+    set i to 0
+    each l in lines
+        let pre be when i == 0 then st["prompt"] otherwise cont
+        set out to out + (when i > 0 then "\r\n" otherwise "") + pre + l
+        let r be rows_of(vis(pre) + length(l), cols)
+        when i < cl
+            set rows_before_cursor to rows_before_cursor + r
+        otherwise when i == cl
+            set rows_before_cursor to rows_before_cursor + floor((vis(pre) + cc) / cols)
+            set cursor_col to (vis(pre) + cc) % cols
+        set total to total + r
+        set i to i + 1
+    -- menú
+    let menu_rows be 0
+    when st["menu"] and length(st["items"]) > 0
+        let items be st["items"]
+        let from be 0
+        when st["sel"] >= MENU_ROWS
+            set from to st["sel"] - MENU_ROWS + 1
+        let k be from
+        while k < length(items) and k < from + MENU_ROWS
+            let it be items[k]
+            let row be ""
+            when st["kind"] == "cmd"
+                let full be it["label"] + (when it["args"] != "" then " " + it["args"] otherwise "")
+                let name be when length(full) > 34 then slice(full, 0, 33) + "…" otherwise full
+                let padn be name + rep(" ", 34 - length(name))
+                let desc be when length(it["desc"]) > cols - 40 then slice(it["desc"], 0, cols - 43) + "…" otherwise it["desc"]
+                set row to (when k == st["sel"] then sgr(color, "7", " " + padn + " ") otherwise " " + sgr(color, "1", it["label"]) + sgr(color, "2", slice(padn, length(it["label"]), length(padn)) + " ")) + (when it["recent"] then sgr(color, "36", "↺ ") otherwise "  ") + sgr(color, "2", desc)
+            otherwise
+                set row to when k == st["sel"] then sgr(color, "7", " " + it["label"] + " ") otherwise " " + it["label"]
+            set out to out + "\r\n" + "    " + row
+            set menu_rows to menu_rows + 1
+            set k to k + 1
+        when length(items) > MENU_ROWS
+            set out to out + "\r\n" + sgr(color, "2", "    (" + text(length(items)) + " opciones · ↑↓ elegir · Tab completa · Esc cierra)")
+            set menu_rows to menu_rows + 1
+    -- recolocar el cursor: subir (filas debajo de la línea del cursor + menú), ir a la columna
+    let below be total - rows_before_cursor - 1 + menu_rows
+    when below > 0
+        set out to out + ESC + "[" + text(below) + "A"
+    set out to out + "\r"
+    when cursor_col > 0
+        set out to out + ESC + "[" + text(cursor_col) + "C"
+    term_write(h, out)
+    set st["cursor_row"] to rows_before_cursor
+    give st
+
+-- ---------- edición ----------
+
+task insert(st, s)
+    set st["buf"] to slice(st["buf"], 0, st["cur"]) + s + slice(st["buf"], st["cur"], length(st["buf"]))
+    set st["cur"] to st["cur"] + length(s)
+    give st
+
+task refresh_menu(st, ctx)
+    let c be candidates(st["buf"], ctx)
+    set st["kind"] to c["kind"]
+    set st["items"] to c["items"]
+    set st["sel"] to 0
+    set st["nav"] to false
+    set st["menu"] to c["kind"] != "" and length(c["items"]) > 0 and not st["menu_off"]
+    give st
+
+task word_start(buf, cur)
+    let i be cur
+    while i > 0 and slice(buf, i - 1, i) == " "
+        set i to i - 1
+    while i > 0 and slice(buf, i - 1, i) != " " and slice(buf, i - 1, i) != "\n"
+        set i to i - 1
+    give i
+
+task accept(st)
+    let it be st["items"][st["sel"]]
+    set st["buf"] to it["fill"]
+    set st["cur"] to length(it["fill"])
+    set st["menu"] to false
+    give st
+
+export task read(prompt, color, ctx)
+    let h be term_open({"ctrl_c": "exit"})
+    when h == nothing
+        give ctx["fallback"](prompt)
+    let st be {"buf": "", "cur": 0, "prompt": prompt, "cursor_row": 0, "menu": false, "menu_off": false, "kind": "", "items": [], "sel": 0, "nav": false}
+    let hist be ctx["history"]
+    let hi be length(hist)
+    let draft be ""
+    let result be nothing
+    let done be false
+    term_write(h, "\r\n")
+    set st to draw(h, st, color, ctx)
+    while not done
+        let ev be term_recv(h, 1)
+        let dirty be true
+        when ev == nothing
+            set dirty to false
+            when ctx["idle"]()
+                set result to INTERRUPT
+                set done to true
+        otherwise when ev["type"] == "focus"
+            set dirty to false
+        otherwise when ev["type"] == "eof"
+            set result to nothing
+            set done to true
+        otherwise when ev["type"] == "paste"
+            set st to insert(st, replace_text(ev["text"], "\r", ""))
+            set st to refresh_menu(st, ctx)
+        otherwise when ev["type"] == "resize"
+            set st to st
+        otherwise when ev["type"] == "key"
+            let k be ev["key"]
+            let changed be true
+            when k == "enter" and ev["alt"]
+                set st to insert(st, "\n")
+            otherwise when k == "enter"
+                when st["menu"] and st["kind"] == "cmd" and st["buf"] != st["items"][st["sel"]]["label"] and st["buf"] != st["items"][st["sel"]]["fill"]
+                    set st to accept(st)
+                    when st["items"][st["sel"]]["args"] == ""
+                        set result to trim(st["buf"])
+                        set done to true
+                otherwise when st["menu"] and st["kind"] == "arg" and st["nav"]
+                    -- Enter solo completa el argumento si el humano navegó el menú; si no, envía tal cual
+                    set st to accept(st)
+                otherwise
+                    set result to st["buf"]
+                    set done to true
+            otherwise when k == "tab" and st["menu"]
+                set st to accept(st)
+            otherwise when k == "escape"
+                when st["menu"]
+                    set st["menu"] to false
+                    set st["menu_off"] to true
+                set changed to false
+            otherwise when k == "up" and st["menu"]
+                set st["sel"] to (when st["sel"] > 0 then st["sel"] - 1 otherwise length(st["items"]) - 1)
+                set st["nav"] to true
+                set changed to false
+            otherwise when k == "down" and st["menu"]
+                set st["sel"] to (when st["sel"] < length(st["items"]) - 1 then st["sel"] + 1 otherwise 0)
+                set st["nav"] to true
+                set changed to false
+            otherwise when k == "up"
+                when hi > 0
+                    when hi == length(hist)
+                        set draft to st["buf"]
+                    set hi to hi - 1
+                    set st["buf"] to hist[hi]
+                    set st["cur"] to length(st["buf"])
+                set changed to false
+            otherwise when k == "down"
+                when hi < length(hist)
+                    set hi to hi + 1
+                    set st["buf"] to (when hi == length(hist) then draft otherwise hist[hi])
+                    set st["cur"] to length(st["buf"])
+                set changed to false
+            otherwise when k == "left"
+                when st["cur"] > 0
+                    set st["cur"] to st["cur"] - 1
+                set changed to false
+            otherwise when k == "right"
+                when st["cur"] < length(st["buf"])
+                    set st["cur"] to st["cur"] + 1
+                set changed to false
+            otherwise when k == "home" or (k == "char" and ev["ctrl"] and ev["text"] == "a")
+                set st["cur"] to 0
+                set changed to false
+            otherwise when k == "end" or (k == "char" and ev["ctrl"] and ev["text"] == "e")
+                set st["cur"] to length(st["buf"])
+                set changed to false
+            otherwise when k == "backspace"
+                when st["cur"] > 0
+                    set st["buf"] to slice(st["buf"], 0, st["cur"] - 1) + slice(st["buf"], st["cur"], length(st["buf"]))
+                    set st["cur"] to st["cur"] - 1
+            otherwise when k == "delete"
+                when st["cur"] < length(st["buf"])
+                    set st["buf"] to slice(st["buf"], 0, st["cur"]) + slice(st["buf"], st["cur"] + 1, length(st["buf"]))
+            otherwise when k == "char" and ev["ctrl"] and ev["text"] == "u"
+                set st["buf"] to ""
+                set st["cur"] to 0
+            otherwise when k == "char" and ev["ctrl"] and ev["text"] == "w"
+                let ws be word_start(st["buf"], st["cur"])
+                set st["buf"] to slice(st["buf"], 0, ws) + slice(st["buf"], st["cur"], length(st["buf"]))
+                set st["cur"] to ws
+            otherwise when k == "char" and ev["ctrl"] and ev["text"] == "o"
+                set result to "/out"
+                set done to true
+            otherwise when k == "char" and ev["ctrl"] and ev["text"] == "l"
+                term_write(h, ESC + "[2J" + ESC + "[H")
+                set st["cursor_row"] to 0
+                set changed to false
+            otherwise when k == "char" and not ev["ctrl"]
+                set st to insert(st, ev["text"])
+            otherwise
+                set changed to false
+            when changed
+                set st["menu_off"] to false
+                set st to refresh_menu(st, ctx)
+        when not done and dirty
+            set st to draw(h, st, color, ctx)
+    -- dejar el prompt limpio (sin menú) en el scrollback y bajar a una línea nueva
+    set st["menu"] to false
+    set st to draw(h, st, color, ctx)
+    let lines be split(st["buf"], "\n")
+    let size be term_size(h)
+    let tail be 0
+    let i be 0
+    each l in lines
+        let pre be when i == 0 then vis(st["prompt"]) otherwise 4
+        when i > 0 or true
+            set tail to tail + rows_of(pre + length(l), size["cols"])
+        set i to i + 1
+    let down be tail - st["cursor_row"] - 1
+    term_write(h, (when down > 0 then ESC + "[" + text(down) + "B" otherwise "") + "\r\n")
+    term_close(h)
+    give result
+
+-- menú vertical de opciones (aprobaciones): ↑↓ + Enter, o la letra inicial / número; Esc = nothing
+export task choose(question, options, color)
+    let h be term_open({"ctrl_c": "exit"})
+    when h == nothing
+        give -1
+    let sel be 0
+    let done be false
+    let result be nothing
+    let drawn be 0
+    while not done
+        let out be ""
+        when drawn > 0
+            set out to out + ESC + "[" + text(drawn) + "A"
+        set out to out + "\r" + ESC + "[J" + question
+        let i be 0
+        each o in options
+            set out to out + "\r\n" + "    " + (when i == sel then sgr(color, "7", " " + o + " ") otherwise " " + sgr(color, "2", o))
+            set i to i + 1
+        term_write(h, out)
+        set drawn to length(options)
+        let ev be term_recv(h, 600)
+        when ev == nothing
+            set result to nothing
+            set done to true
+        otherwise when ev["type"] == "eof"
+            set done to true
+        otherwise when ev["type"] == "key"
+            let k be ev["key"]
+            when k == "up"
+                set sel to (when sel > 0 then sel - 1 otherwise length(options) - 1)
+            otherwise when k == "down" or k == "tab"
+                set sel to (when sel < length(options) - 1 then sel + 1 otherwise 0)
+            otherwise when k == "enter"
+                set result to sel
+                set done to true
+            otherwise when k == "escape"
+                set done to true
+            otherwise when k == "char" and not ev["ctrl"]
+                let t be lower(ev["text"])
+                let j be 0
+                each o in options
+                    when t == text(j + 1) or t == lower(slice(o, 0, 1))
+                        set result to j
+                        set done to true
+                    set j to j + 1
+    term_write(h, "\r\n")
+    term_close(h)
+    give result

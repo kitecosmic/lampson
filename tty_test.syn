@@ -1,0 +1,52 @@
+-- tty_test.syn — maneja chat.syn por un PTY real (teclas → editor de línea lib/line.syn) y verifica lo que
+-- vería el humano: menú de /, filtrado, Tab, argumentos, envío. synsema run tty_test.syn (desde tests/run.ps1).
+require exec("synsema")
+require time
+let p be proc_spawn("synsema", ["run", "chat.syn"], {"pty": true, "cols": 110, "rows": 32, "env": {"LAMPSON_NO_CONFIG": "1"}})
+let log be ""
+task pump(secs)
+    let deadline be now() + secs
+    while now() < deadline
+        let ev be proc_recv(p, 0.3)
+        when ev != nothing and ev["type"] != "exit"
+            set log to log + ev["data"]
+task keys(s, secs)
+    proc_send(p, s)
+    pump(secs)
+pump(6)
+keys("/", 1.5)
+let seen1 be strip_ansi(log)
+assert(contains(seen1, "/agent") and contains(seen1, "opciones"), seen1)
+print("  ✓ / abre el menú de comandos")
+set log to ""
+keys("la", 1)
+let seen2 be strip_ansi(log)
+assert(contains(seen2, "/lamps") and not contains(seen2, "/agent"), seen2)
+print("  ✓ /la filtra a /lamps")
+set log to ""
+keys("\t", 1)
+let seen3 be strip_ansi(log)
+assert(contains(seen3, "❯ /lamps") and contains(seen3, "remove"), seen3)
+print("  ✓ Tab completa y ofrece los argumentos")
+set log to ""
+keys("\r", 2)
+let seen4 be strip_ansi(log)
+assert(contains(seen4, "endpoints") or contains(seen4, "example-hello"), seen4)
+print("  ✓ Enter envía /lamps (lista lámparas)")
+set log to ""
+-- Alt+Enter (ESC + CR) = salto de línea dentro del mensaje; Ctrl+U borra todo
+keys("uno" + decode(bytes("1b", "hex")) + "\rdos", 1.5)
+let seen5 be strip_ansi(log)
+assert(contains(seen5, "… dos"), seen5)
+print("  ✓ Alt+Enter abre una segunda línea")
+set log to ""
+keys(bytes([21]), 1.5)
+let seen6 be strip_ansi(log)
+assert(contains(seen6, "❯ ") and not contains(seen6, "dos"), seen6)
+print("  ✓ Ctrl+U vacía el buffer")
+set log to ""
+keys("/exit\r", 4)
+assert(contains(strip_ansi(log), "bye"), strip_ansi(log))
+print("  ✓ /exit sale limpio")
+print("tty_test: todo OK")
+proc_close(p)

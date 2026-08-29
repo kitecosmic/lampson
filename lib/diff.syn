@@ -1,0 +1,142 @@
+-- lib/diff.syn — diff de líneas para mostrar en la terminal qué cambió edit/write
+--   diff(old, new, ctx, color) → {"added": n, "removed": m, "lines": [texto ya formateado…]}
+-- Algoritmo: se recorta el prefijo y sufijo comunes (una edición es local) y se hace LCS solo sobre el
+-- medio. Si el medio es enorme (> LIMIT² celdas) se muestra como bloque quitado + bloque agregado.
+
+let ESC be decode(bytes("1b", "hex"))
+let LIMIT be 600
+
+task sgr(color, code, s)
+    when not color
+        give s
+    give ESC + "[" + code + "m" + s + ESC + "[0m"
+
+task lpad(s, n)
+    let out be s
+    while length(out) < n
+        set out to " " + out
+    give out
+
+-- LCS clásico: devuelve la lista de ops {"op": " "|"-"|"+", "a": idx_old, "b": idx_new}
+task lcs_ops(a, b)
+    let n be length(a)
+    let m be length(b)
+    -- tabla (n+1)×(m+1) aplanada, fila por fila
+    let table be []
+    let size be (n + 1) * (m + 1)
+    while length(table) < size
+        set table to append(table, 0)
+    let i be n - 1
+    while i >= 0
+        let j be m - 1
+        while j >= 0
+            when a[i] == b[j]
+                set table[i * (m + 1) + j] to table[(i + 1) * (m + 1) + j + 1] + 1
+            otherwise
+                let down be table[(i + 1) * (m + 1) + j]
+                let right be table[i * (m + 1) + j + 1]
+                set table[i * (m + 1) + j] to (when down >= right then down otherwise right)
+            set j to j - 1
+        set i to i - 1
+    let ops be []
+    set i to 0
+    let j be 0
+    while i < n and j < m
+        when a[i] == b[j]
+            set ops to append(ops, {"op": " ", "a": i, "b": j})
+            set i to i + 1
+            set j to j + 1
+        otherwise when table[(i + 1) * (m + 1) + j] >= table[i * (m + 1) + j + 1]
+            set ops to append(ops, {"op": "-", "a": i, "b": j})
+            set i to i + 1
+        otherwise
+            set ops to append(ops, {"op": "+", "a": i, "b": j})
+            set j to j + 1
+    while i < n
+        set ops to append(ops, {"op": "-", "a": i, "b": j})
+        set i to i + 1
+    while j < m
+        set ops to append(ops, {"op": "+", "a": i, "b": j})
+        set j to j + 1
+    give ops
+
+export task diff(old, new, ctx, color)
+    let a be when old == "" then [] otherwise split(old, "\n")
+    let b be when new == "" then [] otherwise split(new, "\n")
+    -- prefijo común
+    let pre be 0
+    while pre < length(a) and pre < length(b) and a[pre] == b[pre]
+        set pre to pre + 1
+    -- sufijo común (sin pisar el prefijo)
+    let suf be 0
+    while suf < length(a) - pre and suf < length(b) - pre and a[length(a) - 1 - suf] == b[length(b) - 1 - suf]
+        set suf to suf + 1
+    let mid_a be slice(a, pre, length(a) - suf)
+    let mid_b be slice(b, pre, length(b) - suf)
+    let ops be []
+    when length(mid_a) * length(mid_b) > LIMIT * LIMIT
+        each e in enumerate(mid_a)
+            set ops to append(ops, {"op": "-", "a": e["index"], "b": 0})
+        each e in enumerate(mid_b)
+            set ops to append(ops, {"op": "+", "a": length(mid_a), "b": e["index"]})
+    otherwise
+        set ops to lcs_ops(mid_a, mid_b)
+    let added be 0
+    let removed be 0
+    each o in ops
+        when o["op"] == "+"
+            set added to added + 1
+        otherwise when o["op"] == "-"
+            set removed to removed + 1
+    -- render: ctx líneas de contexto antes y después del bloque cambiado (números de línea del archivo NUEVO
+    -- para "+"/" ", del viejo para "-"), con "⋯" entre hunks
+    let width be length(text(length(b)))
+    let lines be []
+    -- contexto previo (del prefijo común)
+    let start be when pre - ctx > 0 then pre - ctx otherwise 0
+    when start > 0
+        set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))
+    let k be start
+    while k < pre
+        set lines to append(lines, sgr(color, "2", lpad(text(k + 1), width) + " │   " + a[k]))
+        set k to k + 1
+    -- medio: contexto interno acotado (ctx a cada lado de un cambio)
+    let last_change be -1
+    let idx be 0
+    each o in ops
+        when o["op"] != " "
+            set last_change to idx
+        set idx to idx + 1
+    set idx to 0
+    let skipping be false
+    each o in ops
+        let near be false
+        let w be idx - ctx
+        while w <= idx + ctx and not near
+            when w >= 0 and w < length(ops) and ops[w]["op"] != " "
+                set near to true
+            set w to w + 1
+        when o["op"] == " "
+            when near
+                set lines to append(lines, sgr(color, "2", lpad(text(pre + o["b"] + 1), width) + " │   " + mid_b[o["b"]]))
+                set skipping to false
+            otherwise when not skipping
+                set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))
+                set skipping to true
+        otherwise when o["op"] == "-"
+            set lines to append(lines, sgr(color, "2", lpad(text(pre + o["a"] + 1), width) + " │ ") + sgr(color, "31", "- " + mid_a[o["a"]]))
+            set skipping to false
+        otherwise
+            set lines to append(lines, sgr(color, "2", lpad(text(pre + o["b"] + 1), width) + " │ ") + sgr(color, "32", "+ " + mid_b[o["b"]]))
+            set skipping to false
+        set idx to idx + 1
+    -- contexto posterior (del sufijo común)
+    let after_start be length(b) - suf
+    let upto be when after_start + ctx < length(b) then after_start + ctx otherwise length(b)
+    set k to after_start
+    while k < upto
+        set lines to append(lines, sgr(color, "2", lpad(text(k + 1), width) + " │   " + b[k]))
+        set k to k + 1
+    when upto < length(b)
+        set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))
+    give {"added": added, "removed": removed, "lines": lines}

@@ -1,0 +1,171 @@
+-- lib/md.syn — markdown → ANSI para la terminal (sin dependencias)
+--   render(md, color) → texto listo para print. color=false → texto plano legible (sin escapes).
+--   inline(s, color)  → solo formato inline (negrita, cursiva, `código`, links, ~~tachado~~).
+-- MIGA: `matches` es full-match; para buscar/reemplazar son `capture`/`find_all`/`replace_re`
+-- (backrefs \1). En strings "..." la barra va simple ("\*", "\d"): "\\d" NO es \d.
+-- Los bloques ``` se copian tal cual (sin parseo inline). La web ya renderiza markdown por su cuenta.
+
+let ESC be decode(bytes("1b", "hex"))
+let WIDTH be 72
+
+task sgr(color, code, s)
+    when not color or s == ""
+        give s
+    give ESC + "[" + code + "m" + s + ESC + "[0m"
+
+task rep(ch, n)
+    let out be ""
+    while length(out) < n
+        set out to out + ch
+    give out
+
+-- ---------- inline ----------
+
+task emphasis(s, color)
+    let out be s
+    -- links [texto](url) → texto url  (antes que la cursiva: la url puede traer _ o *)
+    set out to replace_re(out, "\[([^\]]+)\]\(([^)]+)\)", sgr(color, "4", "\1") + sgr(color, "2", " \2"))
+    set out to replace_re(out, "\*\*([^*]+)\*\*", sgr(color, "1", "\1"))
+    set out to replace_re(out, "__([^_]+)__", sgr(color, "1", "\1"))
+    set out to replace_re(out, "~~([^~]+)~~", sgr(color, "9", "\1"))
+    -- cursiva: *x* solo si no está pegada a texto/número (2*3 no es cursiva). Dos pasadas:
+    -- el grupo \3 consume el separador, así que "*a* *b*" necesita la segunda.
+    let pass be 0
+    while pass < 2
+        set out to replace_re(out, "(^|[^\w*])\*([^*\s][^*]*?)\*($|[^\w*])", "\1" + sgr(color, "3", "\2") + "\3")
+        set out to replace_re(out, "(^|[^\w_])_([^_\s][^_]*?)_($|[^\w_])", "\1" + sgr(color, "3", "\2") + "\3")
+        set pass to pass + 1
+    give out
+
+export task inline(s, color)
+    -- `código` primero: lo de adentro no se toca
+    let parts be split(s, "`")
+    when length(parts) < 3
+        give emphasis(s, color)
+    let out be ""
+    let idx be 0
+    each p in parts
+        when idx == length(parts) - 1 and idx % 2 == 1
+            set out to out + "`" + emphasis(p, color)
+        otherwise when idx % 2 == 1
+            set out to out + sgr(color, "33", p)
+        otherwise
+            set out to out + emphasis(p, color)
+        set idx to idx + 1
+    give out
+
+-- ---------- bloques ----------
+
+task indent_of(line)
+    let n be 0
+    while n < length(line) and slice(line, n, n + 1) == " "
+        set n to n + 1
+    give n
+
+task table_cells(line)
+    let t be trim(line)
+    when starts_with(t, "|")
+        set t to slice(t, 1, length(t))
+    when ends_with(t, "|")
+        set t to slice(t, 0, length(t) - 1)
+    give apply(trim, split(t, "|"))
+
+-- rows: lista de listas de celdas (crudas); la primera es el header. Columnas alineadas al ancho
+-- máximo de cada una (ancho visible = length de inline(c, false), sin escapes ni marcas).
+task table_lines(rows, pre, color)
+    let widths be []
+    each r in rows
+        let i be 0
+        each c in r
+            when i >= length(widths)
+                set widths to append(widths, 0)
+            when length(inline(c, false)) > widths[i]
+                set widths[i] to length(inline(c, false))
+            set i to i + 1
+    let out be []
+    let ri be 0
+    each r in rows
+        let cells be []
+        let i be 0
+        each c in r
+            let fill be rep(" ", widths[i] - length(inline(c, false)))
+            set cells to append(cells, (when ri == 0 then sgr(color, "1", inline(c, color)) otherwise inline(c, color)) + fill)
+            set i to i + 1
+        set out to append(out, pre + join(cells, sgr(color, "2", " │ ")))
+        when ri == 0
+            let segs be []
+            each w in widths
+                set segs to append(segs, rep("─", w))
+            set out to append(out, pre + sgr(color, "2", join(segs, "─┼─")))
+        set ri to ri + 1
+    give out
+
+task fence_top(lang, color)
+    let label be when lang != "" then " " + lang + " " otherwise ""
+    give sgr(color, "2", "┌──" + label + rep("─", WIDTH - 3 - length(label)))
+
+export task render(md, color)
+    let pre be "  "
+    let out be []
+    let in_code be false
+    let fence be ""
+    let table be []
+    each line in split(md, "\n")
+        let t be trim(line)
+        let heading be capture(t, "^(#{1,6}) (.+)$")
+        let item be capture(t, "^(\d{1,3})[.)] (.*)$")
+        let is_row be starts_with(t, "|") and ends_with(t, "|") and not in_code
+        when length(table) > 0 and not is_row
+            each l in table_lines(table, pre, color)
+                set out to append(out, l)
+            set table to []
+        when in_code
+            when starts_with(t, fence)
+                set in_code to false
+                set out to append(out, pre + sgr(color, "2", "└" + rep("─", WIDTH - 1)))
+            otherwise
+                set out to append(out, pre + sgr(color, "2", "│ ") + sgr(color, "36", line))
+        otherwise when starts_with(t, "```") or starts_with(t, "~~~")
+            set in_code to true
+            set fence to slice(t, 0, 3)
+            set out to append(out, pre + fence_top(trim(slice(t, 3, length(t))), color))
+        otherwise when heading != nothing
+            let lvl be length(heading[0])
+            let raw be trim(heading[1])
+            let title be inline(raw, color)
+            set out to append(out, "")
+            when lvl == 1
+                set out to append(out, pre + sgr(color, "1;36", upper(title)))
+                set out to append(out, pre + sgr(color, "36", rep("═", length(raw))))
+            otherwise when lvl == 2
+                set out to append(out, pre + sgr(color, "1;36", title))
+                set out to append(out, pre + sgr(color, "2;36", rep("─", length(raw))))
+            otherwise
+                set out to append(out, pre + sgr(color, "1", title))
+        otherwise when matches(t, "(-{3,}|\*{3,}|_{3,})")
+            set out to append(out, pre + sgr(color, "2", rep("─", WIDTH)))
+        otherwise when starts_with(t, ">")
+            set out to append(out, pre + sgr(color, "2", "▎ ") + sgr(color, "3", inline(trim(slice(t, 1, length(t))), color)))
+        otherwise when matches(t, "\|[\s:|-]+\|")
+            set table to table
+        otherwise when is_row
+            set table to append(table, table_cells(t))
+        otherwise when starts_with(t, "- ") or starts_with(t, "* ") or starts_with(t, "+ ") or item != nothing
+            let ind be rep(" ", indent_of(line))
+            let mark be when item != nothing then sgr(color, "36", item[0] + ".") otherwise sgr(color, "36", "•")
+            let rest be when item != nothing then item[1] otherwise slice(t, 2, length(t))
+            when starts_with(rest, "[ ] ")
+                set mark to sgr(color, "2", "☐")
+                set rest to slice(rest, 4, length(rest))
+            otherwise when starts_with(rest, "[x] ") or starts_with(rest, "[X] ")
+                set mark to sgr(color, "32", "☑")
+                set rest to slice(rest, 4, length(rest))
+            set out to append(out, pre + ind + mark + " " + inline(rest, color))
+        otherwise
+            set out to append(out, when t == "" then "" otherwise pre + inline(line, color))
+    when length(table) > 0
+        each l in table_lines(table, pre, color)
+            set out to append(out, l)
+    when in_code
+        set out to append(out, pre + sgr(color, "2", "└" + rep("─", WIDTH - 1)))
+    give join(out, "\n")

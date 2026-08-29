@@ -23,6 +23,7 @@ LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema test unit.test.syn
 code=$?
 # procesos gestionados: supervisor-agente + proc_spawn — corre con `run` (el swarm no existe bajo `test`)
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema run proc_test.syn || code=1
+LAMPSON_NO_CONFIG=1 synsema run tty_test.syn || code=1
 # cliente MCP contra tests/mock_mcp.js (node)
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_MCP_CONFIG=.lampson/tmp/mcp_test.json synsema run mcp_test.syn || code=1
 # cliente LSP contra tests/mock_lsp.js (node, framing Content-Length)

@@ -43,6 +43,9 @@ use "./lib/tools/memo.syn" as memo
 use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
+use "./lib/md.syn" as md
+use "./lib/diff.syn" as diff
+use "./lib/line.syn" as ed
 use "./lib/mcp.syn" as mcp
 use "./lib/lamps.syn" as lamps
 use "./lib/lsp.syn" as lsp
@@ -53,6 +56,12 @@ use "./lib/tools/todo.syn" as todo
 
 let ESC be decode(bytes("1b", "hex"))
 let COLOR be env("LAMPSON_NO_COLOR", "") == ""
+-- /verbose: mostrar el output completo de cada tool (persistido en .lampson/config.json); si no, se
+-- colapsa a OUT_LINES líneas y /out [n] muestra el resultado n-ésimo (desde el último) del turno completo
+let saved_cfg be settings.load()
+let VERBOSE be contains(saved_cfg, "verbose") and saved_cfg["verbose"] == true
+let OUT_LINES be 15
+let turn_outputs be []
 
 task c(code, s)
     when not COLOR
@@ -86,37 +95,83 @@ task summarize(name, out)
     let lines be split(out, "\n")
     when starts_with(out, "ERROR") or starts_with(out, "DENIED")
         give first_line(out, 140)
-    when name == "read"
+    when name == "read" and not VERBOSE
         give text(length(lines)) + " líneas"
-    when name == "ls" or name == "find" or name == "grep"
-        give text(length(lines)) + " resultados · " + first_line(out, 90)
-    when name == "bash"
-        -- hasta 5 líneas del output, el resto colapsado
+    when (name == "ls" or name == "find") and not VERBOSE
+        -- las primeras entradas en una línea (hasta ~100 chars), y cuántas más hay
+        let shown be []
+        let used be 0
+        each l in lines
+            when used < 100 and trim(l) != ""
+                set shown to append(shown, trim(l))
+                set used to used + length(l) + 2
+        let rest be length(lines) - length(shown)
+        give text(length(lines)) + (when name == "ls" then " entradas: " otherwise " archivos: ") + join(shown, "  ") + (when rest > 0 then dim("  +" + text(rest)) otherwise "")
+    when name == "grep" and not VERBOSE
+        let files be {}
+        each l in lines
+            let f be split(l, ":")[0]
+            when trim(l) != ""
+                set files[f] to true
+        give text(length(lines)) + " coincidencias en " + text(length(keys(files))) + " archivo" + (when length(keys(files)) == 1 then "" otherwise "s") + " · " + first_line(out, 90)
+    when name == "bash" or name == "process" or VERBOSE
+        -- hasta OUT_LINES líneas del output (todas con /verbose), el resto colapsado → /out
         let shown be []
         each e in enumerate(lines)
-            when e["index"] < 5
-                when trim(e["item"]) != ""
-                    set shown to append(shown, slice(e["item"], 0, 140))
-        let extra be when length(lines) > 5 then dim("  (+" + text(length(lines) - 5) + " líneas)") otherwise ""
+            when VERBOSE or e["index"] < OUT_LINES
+                set shown to append(shown, when VERBOSE then e["item"] otherwise slice(e["item"], 0, 160))
+        let extra be when not VERBOSE and length(lines) > OUT_LINES then "\n      " + dim("(+" + text(length(lines) - OUT_LINES) + " líneas · /out para ver todo)") otherwise ""
         give join(shown, "\n      ") + extra
     give first_line(out, 120)
+
+-- diff de un edit/write (antes/después publicado por la tool en el blackboard) — nothing si no hay
+task diff_of(name, out)
+    when name != "edit" and name != "write"
+        give nothing
+    when starts_with(out, "ERROR") or starts_with(out, "DENIED")
+        give nothing
+    observe "lampson:ui:diff" as d
+    when d == nothing
+        give nothing
+    give diff.diff(d["old"], d["new"], 2, COLOR)
+
+task print_diff(path, d)
+    let head be path + " · " + green("+" + text(d["added"])) + " " + red("−" + text(d["removed"]))
+    print("    " + green("✓") + " " + head)
+    each l in d["lines"]
+        print("      " + l)
+
+-- /out: resultado completo de una tool del turno
+task print_full(o)
+    when o["diff"] != nothing
+        print_diff(o["path"], o["diff"])
+    otherwise
+        each l in split(o["output"], "\n")
+            print("      " + l)
 
 -- tag = "" para el agente principal; los subagentes en background NO pasan por acá (escriben su log)
 task on_event(kind, data, tag)
     trace.event(sid, kind, data, tag)
     when kind == "assistant"
         print("")
-        print(data)
+        print(md.render(data, COLOR))
         print("")
     otherwise when kind == "inbox"
         print("  " + cyan("✉ " + first_line(data, 140)))
     otherwise when kind == "tool_call"
-        print("  " + yellow("⚙ " + permission.describe_call(data["name"], data["args"])))
+        print("  " + yellow("▸ " + permission.describe_call(data["name"], data["args"])))
     otherwise when kind == "tool_result"
         let out be data["output"]
+        let name be data["call"]["name"]
         let bad be starts_with(out, "ERROR") or starts_with(out, "DENIED")
-        let mark be when bad then red("✗") otherwise green("✓")
-        print("    " + mark + " " + (when bad then red(summarize(data["call"]["name"], out)) otherwise dim(summarize(data["call"]["name"], out))))
+        let d be diff_of(name, out)
+        let path be when d != nothing then text(data["call"]["args"]["path"]) otherwise ""
+        set turn_outputs to append(turn_outputs, {"name": name, "args": data["call"]["args"], "output": out, "diff": d, "path": path})
+        when d != nothing
+            print_diff(path, d)
+        otherwise
+            let mark be when bad then red("✗") otherwise green("✓")
+            print("    " + mark + " " + (when bad then red(summarize(name, out)) otherwise dim(summarize(name, out))))
     otherwise when kind == "tool_denied"
         set data to data
     otherwise when kind == "error"
@@ -134,8 +189,12 @@ task ask_user(name, args, why)
     print("  " + yellow("⚠ requiere tu aprobación · " + why))
     print("    " + permission.describe_call(name, args))
     flush()
-    let ok be approve "  ¿permitir?" within 10m
-    give ok
+    -- menú ↑↓/Enter (o p/d, 1/2, Esc = no) cuando hay TTY; sin TTY, el approve nativo (fail-closed)
+    let pick be ed.choose("  ¿permitir?", ["permitir", "denegar"], COLOR)
+    when pick == -1
+        let ok be approve "  ¿permitir?" within 10m
+        give ok
+    give pick == 0
 
 let LINE be "  ────────────────────────────────────────────────────────────────────────"
 
@@ -164,6 +223,8 @@ let COMMANDS be [
     ["/mcp", "[add <nombre> <comando…> [--project] | remove <nombre>]", "servers MCP: listar, conectar o quitar (global: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json)"],
     ["/lamps", "[on <nombre> | off <nombre> | run <lámpara> <tool> [json] | remove <nombre>]", "lámparas (plugins de tools): listar, encender o apagar (global: lampson/lamps/ · proyecto: .lampson/lamps/)"],
     ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
+    ["/out", "[n]", "resultado completo de la última tool del turno (n = contar hacia atrás: /out 2 es la anteúltima)"],
+    ["/verbose", "", "alternar: mostrar SIEMPRE el output completo de cada tool (queda guardado en config.json)"],
     ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
     ["/tokens", "", "tamaño del contexto y tokens gastados en esta sesión"],
     ["/new", "", "empezar una sesión nueva (historial vacío)"],
@@ -182,10 +243,138 @@ task pad(s, n)
         set out to out + " "
     give out
 
+-- entrada multilínea sin modo raw (read_key llegará a Synsema): una línea que termina en "\" continúa
+-- en la siguiente; una línea que EMPIEZA con """ abre un bloque que cierra con una línea """ sola
+-- (ideal para pegar código o logs). EOF corta el bloque con lo acumulado.
+-- candidatos para completar el argumento de un comando (Tab / menú del editor de línea).
+-- head = argumentos ya escritos antes del último token; last = lo que se está escribiendo
+task complete_args(cmd, head, last)
+    let first be trim(head) == ""
+    when cmd == "/image"
+        give workspace_paths(last)
+    when cmd == "/resume" or cmd == "/delete"
+        give apply((s) => s["id"], session.list())
+    when cmd == "/provider"
+        when first
+            give apply((p) => p["name"], provider.providers())
+        give []
+    when cmd == "/logs" or cmd == "/stop"
+        when first
+            give apply((p) => p["name"], proc.list())
+        give []
+    when cmd == "/memory"
+        give apply((m) => m["name"], memo.list())
+    when cmd == "/lamps"
+        when first
+            give ["on", "off", "run", "remove"]
+        give apply((l) => l["name"], lamps.summary())
+    when cmd == "/mcp"
+        when first
+            give ["add", "remove"]
+        when starts_with(trim(head), "remove")
+            give apply((m) => m["name"], mcp.summary())
+        give ["--project"]
+    when cmd == "/lsp"
+        when first
+            give ["add", "remove"]
+        when starts_with(trim(head), "remove")
+            give apply((s) => s["name"], lsp.summary())
+        when trim(head) == "add"
+            give sort_by(keys(lsp.PRESETS), (x) => x)
+        give ["--project", "--ext"]
+    when cmd == "/agent"
+        give ["build", "plan", "review", "explore", "worker"]
+    when cmd == "/model"
+        give []
+    give []
+
+-- rutas del workspace que empiezan con el prefijo escrito (directorios con "/" final para seguir completando)
+task workspace_paths(prefix)
+    let dir be ""
+    let base be prefix
+    let cut be -1
+    let i be length(prefix) - 1
+    while i >= 0 and cut == -1
+        when slice(prefix, i, i + 1) == "/" or slice(prefix, i, i + 1) == "\\"
+            set cut to i
+        set i to i - 1
+    when cut >= 0
+        set dir to slice(prefix, 0, cut + 1)
+        set base to slice(prefix, cut + 1, length(prefix))
+    let out be []
+    try
+        each e in list_dir(when dir == "" then "workspace" otherwise "workspace/" + dir)
+            when starts_with(e["name"], base) and e["name"] != ".git"
+                set out to append(out, dir + e["name"] + (when e["is_dir"] then "/" otherwise ""))
+    recover err
+        set out to []
+    give sort_by(out, (x) => x)
+
+-- mientras el humano no escribe: ¿hay avisos de subagentes en background? → cortar la lectura y
+-- dejar que el bucle principal los inyecte (turno automático)
+task idle()
+    let pending be false
+    try
+        each c in agents.list_children()
+            when c["status"] != "running" and not c["delivered"]
+                set pending to true
+    recover err
+        set pending to false
+    give pending
+
+let input_history be []
+
+task read_input(prompt)
+    let first be read_line(prompt)
+    when first == nothing
+        give nothing
+    let more be []
+    when trim(first) == "\"\"\"" or starts_with(first, "\"\"\"")
+        let body be slice(first, 3, length(first))
+        when trim(body) != ""
+            set more to append(more, body)
+        let open be true
+        while open
+            let l be read_line(dim("  … "))
+            when l == nothing or trim(l) == "\"\"\""
+                set open to false
+            otherwise
+                set more to append(more, l)
+        give join(more, "\n")
+    let cur be first
+    while ends_with(cur, "\\")
+        set more to append(more, slice(cur, 0, length(cur) - 1))
+        let l be read_line(dim("  … "))
+        set cur to when l == nothing then "" otherwise l
+    set more to append(more, cur)
+    give join(more, "\n")
+
+-- últimos comandos usados (config.json "recent"): "/" solo los muestra primero
+task remember_command(input)
+    let name be split(trim(input), " ")[0]
+    when name == "/" or name == "/help"
+        give nothing
+    let doc be settings.load()
+    let old be when contains(doc, "recent") then doc["recent"] otherwise []
+    let recent be [name]
+    each r in old
+        when r != name and length(recent) < 3
+            set recent to append(recent, r)
+    set doc["recent"] to recent
+    settings.save(doc)
+    give nothing
+
 task help()
+    let doc be settings.load()
+    let recent be when contains(doc, "recent") then doc["recent"] otherwise []
     print("")
+    when length(recent) > 0
+        print("  recientes   " + join(apply((r) => cyan(r), recent), "   "))
+        print("")
     print("  Escribí lo que querés hacer en el proyecto. El agente lee, busca, edita y corre comandos con tools")
     print("  acotadas al workspace; cada paso queda a la vista. Los comandos empiezan con /:")
+    print("  Teclas: Tab completa · ↑↓ historial/menú · Alt+Enter salto de línea · Ctrl+O último resultado completo · Esc cierra el menú")
+    print("  Sin TTY (pipe): terminá la línea con \\ para continuar, o un bloque entre líneas \"\"\".")
     print("")
     each c in COMMANDS
         print("  " + pad(c[0] + " " + c[1], 38) + c[2])
@@ -238,6 +427,21 @@ task banner(ws, cfg, profile, mode, sid)
     print("  workspace   " + ws)
     print("  agente      " + profile + "        permisos  " + mode + "        modelo  " + cfg["model"])
     print("  sesión      " + sid + "        " + git.summary())
+    -- extensiones en una línea (detalle con /lamps, /mcp, /lsp): encendidas/total
+    let ls be lamps.summary()
+    let lamps_on be length(where(ls, (l) => l["enabled"]))
+    let ms be mcp.summary()
+    let mcp_on be length(where(ms, (m) => m["status"] == "ready"))
+    let ss be lsp.summary()
+    let ext be []
+    when length(ls) > 0
+        set ext to append(ext, (when lamps_on > 0 then green("lamps " + text(lamps_on) + "/" + text(length(ls))) otherwise dim("lamps 0/" + text(length(ls)))))
+    when length(ms) > 0
+        set ext to append(ext, (when mcp_on == length(ms) then green("mcp " + text(mcp_on) + "/" + text(length(ms))) otherwise red("mcp " + text(mcp_on) + "/" + text(length(ms)))))
+    when length(ss) > 0
+        set ext to append(ext, dim("lsp " + text(length(ss))))
+    when length(ext) > 0
+        print("  extras      " + join(ext, dim("  ·  ")) + dim("   (/lamps /mcp /lsp)"))
     let upd be update.line()
     when upd != ""
         print("  " + yellow("⬆ " + upd) + dim("  (o /update acá)"))
@@ -402,14 +606,13 @@ let system_msg be system_for(profile)
 -- servers MCP (globales en .lampson/mcp.json, del proyecto en workspace/.lampson/mcp.json): arrancan antes
 -- de armar el catálogo de tools; hasta 8 s de espera a que estén listos
 let mcp_servers be mcp.start_all(8)
+-- mcp / lsp / lámparas van resumidos en el banner ("extras"); acá solo se avisa lo que está ROTO
 each ms in mcp.summary()
-    print("  " + (when ms["status"] == "ready" then green("● mcp " + ms["name"]) otherwise red("○ mcp " + ms["name"] + " " + ms["status"])) + dim(" (" + ms["scope"] + ") " + text(length(ms["tools"])) + " tools" + (when ms["error"] != nothing then " · " + text(ms["error"]) otherwise "")))
--- language servers (lib/lsp.syn): solo se anuncian; arrancan lazy en la primera consulta
-each s in lsp.summary()
-    print("  " + dim("○ lsp " + s["name"] + " (" + s["scope"] + ") " + join(s["extensions"], " ") + " · arranca en la primera consulta"))
--- lámparas (plugins de tools, lib/lamps.syn): solo se anuncian; apagadas no entran al catálogo
+    when ms["status"] != "ready"
+        print("  " + red("○ mcp " + ms["name"] + " " + ms["status"]) + dim(when ms["error"] != nothing then " · " + text(ms["error"]) otherwise ""))
 each l in lamps.summary()
-    print("  " + (when l["enabled"] then green("● lamp " + l["name"]) otherwise dim("○ lamp " + l["name"] + " off")) + dim(" (" + l["scope"] + ", " + l["kind"] + ") " + text(length(l["tools"])) + " tools" + (when l["error"] != nothing then " · " + text(l["error"]) otherwise "")))
+    when l["error"] != nothing
+        print("  " + red("○ lamp " + l["name"] + " rota") + dim(" · " + text(l["error"])))
 let opts be opts_for(profile, lower(env("LAMPSON_PERMISSION", "ask")))
 
 -- marca de corrida (blackboard): session.save la estampa en meta.run; reanudar una sesión guardada por
@@ -465,14 +668,24 @@ while running
         session.save(sid, messages, {"title": session.title_of(messages)})
         flush()
     otherwise
-        set line to read_line("\n" + (when length(pending_images) > 0 then dim("📎" + text(length(pending_images)) + " ") otherwise "") + cyan("❯ "))
+        let saved be settings.load()
+        let ctx be {"commands": COMMANDS, "recent": (when contains(saved, "recent") then saved["recent"] otherwise []), "history": input_history, "complete": complete_args, "idle": idle, "fallback": read_input}
+        set line to ed.read((when length(pending_images) > 0 then dim("📎" + text(length(pending_images)) + " ") otherwise "") + cyan("❯ "), COLOR, ctx)
+        when line != nothing and line != ed.INTERRUPT and trim(line) != ""
+            set input_history to append(input_history, line)
     when inbox != nothing
+        set running to running
+    otherwise when line == ed.INTERRUPT
         set running to running
     otherwise when line == nothing
         set running to false
     otherwise
         set followups to 0
+        when not starts_with(trim(line), "/")
+            set turn_outputs to []
         let input be trim(line)
+        when starts_with(input, "/") and length(input) > 1
+            remember_command(input)
         when input == ""
             set running to running
         otherwise when input == "/exit" or input == "/quit"
@@ -491,6 +704,23 @@ while running
                 print("  " + update.apply())
         otherwise when input == "/config"
             show_config(cfg, env_info["cwd"], profile, mode, opts)
+        otherwise when input == "/verbose"
+            set VERBOSE to not VERBOSE
+            let doc be settings.load()
+            set doc["verbose"] to VERBOSE
+            settings.save(doc)
+            print("  " + (when VERBOSE then green("verbose ON") + dim(" · cada tool muestra su output completo") otherwise dim("verbose OFF · outputs colapsados a " + text(OUT_LINES) + " líneas; /out para ver uno completo")))
+        otherwise when starts_with(input, "/out")
+            let n be trim(slice(input, 4, length(input)))
+            let back be when n == "" then 1 otherwise floor(number(n))
+            when length(turn_outputs) == 0
+                print(dim("  ninguna tool corrió en este turno"))
+            otherwise when back < 1 or back > length(turn_outputs)
+                print(dim("  hay " + text(length(turn_outputs)) + " resultados en este turno: /out 1 … /out " + text(length(turn_outputs))))
+            otherwise
+                let o be turn_outputs[length(turn_outputs) - back]
+                print("  " + yellow("▸ " + permission.describe_call(o["name"], o["args"])))
+                print_full(o)
         otherwise when starts_with(input, "/trace")
             let n be trim(slice(input, 6, length(input)))
             let lines be when n == "" then 40 otherwise floor(number(n))

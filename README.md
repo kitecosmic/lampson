@@ -132,6 +132,18 @@ In the REPL, `/` lists every command (`/agent`, `/ask` `/yolo` `/strict`, `/mode
 `/files`, `/procs`, `/logs <name>`, `/stop <name>`, `/kill <pid>`, `/skills`, `/sessions`,
 `/resume <id>`, `/tokens`, `/flags`). `!cmd` runs a command yourself.
 
+The prompt is a real line editor (Synsema ≥ 0.6.11, falls back to plain `read_line` without a TTY):
+typing `/` opens the command menu (recent ones first, filtered as you type), `Tab` completes the
+command and then its arguments (files for `/image`, sessions, providers, processes, lamps, MCP/LSP
+servers, flags), `↑↓` browse history or the menu, `Alt+Enter` inserts a newline, `Ctrl+O` shows the
+last tool result in full, `Ctrl+U`/`Ctrl+W` clear the line/word, `Esc` closes the menu. Approvals are
+an arrow-key menu (`permitir`/`denegar`, or `p`/`d`).
+
+The terminal renders the model's markdown (headings, lists, tables, code fences) and shows every tool
+result: `edit`/`write` print a line diff (`- red / + green`, line numbers, 2 lines of context); other
+tools are collapsed to 15 lines. `/out [n]` prints the n-th last result of the turn in full and
+`/verbose` toggles full output for every tool (saved in `.lampson/config.json`).
+
 The project is mounted as `lampson/workspace` (an NTFS junction on Windows, a symlink elsewhere)
 and every tool declares `file("workspace/*")` — that literal, named scope is what makes the
 confinement real. Config, sessions and process logs live in the `lampson` folder, never in your project.

@@ -6,10 +6,14 @@ export task tool(path, content)
     require file("workspace/*")
     let real be c.ws(path)
     -- sobrescribir un archivo existente exige haberlo leído (y que no haya cambiado): igual que edit
+    let before be ""
     when file_exists(real)
         c.check_observed(real, "write")
+        set before to read_file(real)
     write_file(real, content)
     c.mark_observed(real)
+    -- antes/después para que la UI muestre el diff (archivo nuevo: before = "")
+    share {"path": c.unws(real), "old": before, "new": content} as "lampson:ui:diff"
     give `wrote {text(length(content))} chars to {c.unws(real)}`
 
 export let SPEC be {

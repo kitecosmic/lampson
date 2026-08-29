@@ -16,8 +16,11 @@ export task tool(path, old_string, new_string, replace_all)
     when n > 1
         when not all
             raise(`old_string appears {text(n)} times in {shown}; include more surrounding context to make it unique, or pass replace_all=true`)
-    write_file(real, join(parts, new_string))
+    let after be join(parts, new_string)
+    write_file(real, after)
     c.mark_observed(real)
+    -- antes/después para que la UI muestre el diff (chat.syn / web); el modelo solo recibe la línea de abajo
+    share {"path": shown, "old": content, "new": after} as "lampson:ui:diff"
     give `edited {shown}: {text(n)} replacement(s)`
 
 export let SPEC be {

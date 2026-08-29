@@ -149,6 +149,41 @@ export task describe_call(name, args)
         give "skill install " + text(args["source"]) + " --skill " + text(args["name"]) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "bash"
         give "$ " + one_line(when contains(args, "command") then text(args["command"]) otherwise "", 160)
+    -- lectura/búsqueda: como lo escribiría un humano en la shell
+    when name == "read"
+        let rng be when contains(args, "offset") or contains(args, "limit") then "  (" + (when contains(args, "offset") then "desde " + text(floor(number(text(args["offset"])))) otherwise "") + (when contains(args, "limit") then " " + text(floor(number(text(args["limit"])))) + " líneas" otherwise "") + ")" otherwise ""
+        give "read " + arg(args, "path", ".") + rng
+    when name == "ls"
+        give "ls " + arg(args, "path", ".")
+    when name == "find"
+        give "find " + arg(args, "pattern", "*") + (when contains(args, "path") then "  en " + text(args["path"]) otherwise "")
+    when name == "grep"
+        let flags be (when contains(args, "regex") and args["regex"] == true then " -E" otherwise "") + (when contains(args, "glob") then " --glob " + text(args["glob"]) otherwise "")
+        give "grep" + flags + " \"" + one_line(arg(args, "pattern", ""), 80) + "\"" + (when contains(args, "path") then "  " + text(args["path"]) otherwise "")
+    when name == "edit"
+        give "edit " + arg(args, "path", "?")
+    when name == "write"
+        give "write " + arg(args, "path", "?") + (when contains(args, "content") then dim_len(text(args["content"])) otherwise "")
+    when name == "memory"
+        let mact be arg(args, "action", "list")
+        give "memory " + mact + (when contains(args, "name") then " " + text(args["name"]) otherwise "") + (when (mact == "write" or mact == "append") and contains(args, "content") then "  — " + one_line(text(args["content"]), 70) otherwise "")
+    when name == "process"
+        let pact be arg(args, "action", "list")
+        give "process " + pact + (when contains(args, "name") then " " + text(args["name"]) otherwise "") + (when contains(args, "command") then "  $ " + one_line(text(args["command"]), 100) otherwise "")
+    when name == "skill"
+        give "skill " + arg(args, "action", "load") + " " + arg(args, "name", "?")
+    when name == "todo"
+        let n be when contains(args, "items") then length(args["items"]) otherwise 0
+        let done be when contains(args, "items") then length(where(args["items"], (i) => contains(i, "status") and text(i["status"]) == "done")) otherwise 0
+        give "todo  " + text(done) + "/" + text(n) + " hechas"
     when contains(args, "path")
         give name + " " + text(args["path"])
-    give name + " " + json_encode(args)
+    give name + " " + one_line(json_encode(args), 160)
+
+task arg(args, key, default)
+    when contains(args, key)
+        give text(args[key])
+    give default
+
+task dim_len(s)
+    give "  (" + text(length(split(s, "\n"))) + " líneas)"
