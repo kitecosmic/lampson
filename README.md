@@ -233,7 +233,13 @@ run Lampson in a container.
 lampson.ps1 / .sh    launcher: mounts ./workspace, starts terminal or web
 chat.syn             terminal REPL (colors, approvals via Synsema's native `approve`)
 web.syn              HTTP server: POST /api/chat → SSE events; sessions, tree, file viewer, processes, ports
-public/index.html    web UI (no build step, no dependencies)
+public/              web UI (no build step, no dependencies; classic scripts served by `static`)
+  index.html         markup only: header, the two side panels, the chat; loads css/ and js/ in order
+  css/               tokens (fonts, palette, base) · layout (grid, header, panels, chat, composer) · sidebar · chat · panel
+  js/core.js         shared state + helpers ($, esc, md, add, api, showPane/showText, inlineConfirm, debounce, empty)
+  js/panel.js        THE modal component: one shell, three layouts (browse = search + list + detail, tabs, form)
+  js/<view>.js       one file per thing on screen: sessions, chat, tree, terminal, procs, agents, memory, todo,
+                     mcp, lsp, lamps, schedules, approvals, config, setup, update, events (SSE), app (boot)
 lib/
   provider.syn       config from .env · chat(cfg, messages, catalog) · retry with backoff
   loop.syn           run_turn(): LLM → tool calls → permissions → call_tool → results → repeat; doom-loop guard; compaction

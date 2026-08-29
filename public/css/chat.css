@@ -1,0 +1,56 @@
+/* chat: mensajes, pasos del agente, tarjeta de permiso, portada (hero) */
+/* mensajes: el del usuario es una nota al margen (como el blockquote de la doc), el del agente es prosa */
+.msg { margin:0 0 16px; }
+.user { margin:26px 0 16px; padding:.85em 1.1em; background:var(--paper-2); border-left:2px solid var(--accent); white-space:pre-wrap; font-size:15px; }
+.user::before { content:"vos"; display:block; font:400 10px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; }
+.assistant { font-size:15px; line-height:1.62; }
+.assistant p { margin:0 0 .9em; }
+.assistant code { font:400 .86em/1.5 var(--mono); background:var(--paper-2); border-radius:2px; padding:.08em .3em; color:var(--ink); }
+.assistant pre { background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:14px 16px; overflow-x:auto; margin:1em 0; }
+.assistant pre code { background:none; padding:0; font-size:13px; line-height:1.62; }
+.assistant ul, .assistant ol { margin:0 0 .9em; padding-left:1.25em; }
+.assistant li { margin:.3em 0; }
+.assistant li::marker { color:var(--ink-3); }
+.assistant h1, .assistant h2, .assistant h3 { font:600 1.06rem/1.4 var(--serif); margin:1.4em 0 .5em; }
+.assistant b, .assistant strong { font-weight:600; }
+
+/* pasos del agente: maquinaria, en mono */
+.step { display:grid; grid-template-columns:16px 1fr; column-gap:8px; margin:0 0 7px 2px; font:400 12.5px/1.5 var(--mono); color:var(--ink-2); }
+.step .ic { text-align:center; color:var(--ink-3); }
+.step .ok { color:var(--str); }
+.step .bad { color:var(--rubric); }
+.step .name { color:var(--ink); }
+.step .cmd { white-space:pre-wrap; word-break:break-word; max-height:4.6em; overflow:hidden; }
+.step .cmd.open { max-height:none; }
+.step .more { color:var(--accent); cursor:pointer; font-size:11px; }
+.step details { grid-column:2; min-width:0; }
+.step summary { cursor:pointer; list-style:none; color:var(--ink-3); white-space:pre-wrap; word-break:break-word; max-height:3.2em; overflow:hidden; }
+.step summary::before { content:"→ "; }
+.step summary.bad { color:var(--rubric); }
+.step pre { margin:6px 0 4px; padding:10px 12px; background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); white-space:pre-wrap; max-height:340px; overflow:auto; font-size:12px; color:var(--ink-2); }
+.denied { color:var(--rubric); font:400 12.5px/1.5 var(--mono); }
+.meta { color:var(--ink-3); font:400 11px/1 var(--mono); letter-spacing:.03em; margin:4px 0 20px 2px; }
+.working { display:flex; align-items:center; gap:8px; color:var(--ink-3); font:400 11.5px/1 var(--mono); margin:4px 0 14px 2px; }
+.working .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); animation:pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity:.25 } 50% { opacity:1 } }
+
+/* permisos: lo único en rubric */
+.approval .card { border:1px solid var(--rubric); border-radius:var(--r); padding:12px 14px; max-width:720px; }
+.approval .why { color:var(--rubric); font:600 12px/1.5 var(--mono); margin-bottom:6px; }
+.approval code { font:400 12.5px/1.5 var(--mono); display:block; background:var(--paper-2); padding:8px 10px; border-radius:2px; margin-bottom:10px; white-space:pre-wrap; }
+.approval .btns { display:flex; gap:8px; }
+
+/* ---- hero: el primer golpe de vista ---- */
+.empty { width:100%; max-width:1180px; margin:0 auto; color:var(--ink-2); }
+.empty .eyebrow { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--rubric); margin:0 0 12px; }
+.empty h1 { font:600 2.1rem/1.15 var(--serif); letter-spacing:-.022em; color:var(--ink); margin:0 0 .4em; }
+.empty .lead { font-size:1.06rem; margin:0 0 26px; max-width:720px; }
+.empty .grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; }
+.empty .card { border:1px solid var(--rule); border-radius:var(--r); padding:14px 16px 12px; min-width:0; }
+.empty .card h3 { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0 0 12px; }
+.empty .card p { margin:0 0 8px; font-size:13.5px; line-height:1.5; }
+.empty code { font:400 .88em/1.5 var(--mono); background:var(--paper-2); padding:.08em .3em; border-radius:2px; color:var(--ink); white-space:nowrap; }
+.empty .k { font:600 12px/1 var(--mono); color:var(--ink); margin-right:.3em; }
+.empty .try { cursor:pointer; color:var(--accent); }
+.empty .try:hover { text-decoration:underline; text-underline-offset:.18em; }
+@media (max-width:1400px) { .empty .grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
