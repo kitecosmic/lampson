@@ -8,6 +8,8 @@
 --       devuelva ctx["complete"](cmd, prefijo) (archivos, servers, flags…). Máx MENU_ROWS filas.
 -- MIGA: dibujar SIEMPRE con term_write (print queda buffereado). El runtime restaura la terminal al cerrar.
 
+use "./ui.syn" as ui
+
 let ESC be decode(bytes("1b", "hex"))
 let MENU_ROWS be 8
 export let INTERRUPT be ESC + "interrupt"
@@ -18,7 +20,7 @@ task sgr(color, code, s)
     give ESC + "[" + code + "m" + s + ESC + "[0m"
 
 task vis(s)
-    give length(strip_ansi(s))
+    give ui.width(s)
 
 task rep(ch, n)
     let out be ""
@@ -102,13 +104,14 @@ task draw(h, st, color, ctx)
     set i to 0
     each l in lines
         let pre be when i == 0 then st["prompt"] otherwise cont
-        set out to out + (when i > 0 then "\r\n" otherwise "") + pre + l
-        let r be rows_of(vis(pre) + length(l), cols)
+        set out to out + (when i > 0 then "\r\n" otherwise "") + pre + (when st["final"] and l != "" then sgr(color, "7", " " + l + " ") otherwise l)
+        let r be rows_of(vis(pre) + ui.width(l), cols)
         when i < cl
             set rows_before_cursor to rows_before_cursor + r
         otherwise when i == cl
-            set rows_before_cursor to rows_before_cursor + floor((vis(pre) + cc) / cols)
-            set cursor_col to (vis(pre) + cc) % cols
+            let ccw be ui.width(slice(l, 0, cc))
+            set rows_before_cursor to rows_before_cursor + floor((vis(pre) + ccw) / cols)
+            set cursor_col to (vis(pre) + ccw) % cols
         set total to total + r
         set i to i + 1
     -- menú
@@ -182,7 +185,8 @@ export task read(prompt, color, ctx)
     let h be term_open({"ctrl_c": "exit"})
     when h == nothing
         give ctx["fallback"](prompt)
-    let st be {"buf": "", "cur": 0, "prompt": prompt, "cursor_row": 0, "menu": false, "menu_off": false, "kind": "", "items": [], "sel": 0, "nav": false}
+    ui.set_cols(term_size(h)["cols"])
+    let st be {"buf": "", "cur": 0, "prompt": prompt, "cursor_row": 0, "menu": false, "menu_off": false, "kind": "", "items": [], "sel": 0, "nav": false, "final": false}
     let hist be ctx["history"]
     let hi be length(hist)
     let draft be ""
@@ -207,7 +211,7 @@ export task read(prompt, color, ctx)
             set st to insert(st, replace_text(ev["text"], "\r", ""))
             set st to refresh_menu(st, ctx)
         otherwise when ev["type"] == "resize"
-            set st to st
+            ui.set_cols(ev["cols"])
         otherwise when ev["type"] == "key"
             let k be ev["key"]
             let changed be true
@@ -300,13 +304,14 @@ export task read(prompt, color, ctx)
             set st to draw(h, st, color, ctx)
     -- dejar el prompt limpio (sin menú) en el scrollback y bajar a una línea nueva
     set st["menu"] to false
+    set st["final"] to result != nothing and result != INTERRUPT and trim(st["buf"]) != ""
     set st to draw(h, st, color, ctx)
     let lines be split(st["buf"], "\n")
     let size be term_size(h)
     let tail be 0
     let i be 0
     each l in lines
-        let pre be when i == 0 then vis(st["prompt"]) otherwise 4
+        let pre be (when i == 0 then vis(st["prompt"]) otherwise 4) + (when st["final"] then 2 otherwise 0)
         when i > 0 or true
             set tail to tail + rows_of(pre + length(l), size["cols"])
         set i to i + 1

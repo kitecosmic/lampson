@@ -1,0 +1,161 @@
+-- lib/ui.syn — una sola paleta y medidas de texto para la terminal (md.syn, diff.syn, line.syn, chat.syn)
+--   Colores: dim/blue/green/red/yellow/cyan/bold/inv (+ fondos bg_add/bg_del para diffs). color=false → texto plano.
+--   width(s)      ancho visible (sin escapes; emoji/CJK cuentan 2)
+--   cut(s, max)   corta a `max` columnas respetando escapes (y cierra el color)
+--   wrap(s, max, indent)  envuelve texto PLANO por palabras; las líneas siguientes llevan `indent`
+--   cols()        columnas de la terminal (el editor las publica en el blackboard "lampson:ui:cols"; 100 si no hay)
+--   fmt_duration(secs) → "12s" · "2m 27s" · "1h 03m"
+
+let ESC be decode(bytes("1b", "hex"))
+
+export task sgr(color, code, s)
+    when not color or s == ""
+        give s
+    give ESC + "[" + code + "m" + s + ESC + "[0m"
+
+export task dim(color, s)
+    give sgr(color, "2", s)
+export task bold(color, s)
+    give sgr(color, "1", s)
+export task inv(color, s)
+    give sgr(color, "7", s)
+export task blue(color, s)
+    give sgr(color, "34", s)
+export task cyan(color, s)
+    give sgr(color, "36", s)
+export task green(color, s)
+    give sgr(color, "32", s)
+export task red(color, s)
+    give sgr(color, "31", s)
+export task yellow(color, s)
+    give sgr(color, "33", s)
+-- fondos para diffs (256 colores: verde y rojo oscuros, legibles en tema claro y oscuro)
+export task bg_add(color, s)
+    give sgr(color, "48;5;22", s)
+export task bg_del(color, s)
+    give sgr(color, "48;5;52", s)
+
+-- ---------- medidas ----------
+
+-- punto de código de UN carácter a partir de sus bytes UTF-8
+task codepoint(ch)
+    let b be bytes(ch)
+    let n be length(b)
+    when n == 1
+        give b[0]
+    when n == 2
+        give (b[0] - 192) * 64 + (b[1] - 128)
+    when n == 3
+        give (b[0] - 224) * 4096 + (b[1] - 128) * 64 + (b[2] - 128)
+    give (b[0] - 240) * 262144 + (b[1] - 128) * 4096 + (b[2] - 128) * 64 + (b[3] - 128)
+
+-- ancho de un carácter en celdas: emoji, CJK y símbolos "wide" ocupan 2
+task char_width(ch)
+    let cp be codepoint(ch)
+    when cp < 4352
+        give 1
+    when cp >= 127744 and cp <= 129791
+        give 2
+    when cp >= 4352 and cp <= 4447
+        give 2
+    when cp >= 11904 and cp <= 42191
+        give 2
+    when cp >= 44032 and cp <= 55203
+        give 2
+    when cp >= 63744 and cp <= 64255
+        give 2
+    when cp >= 65040 and cp <= 65135
+        give 2
+    when cp >= 65280 and cp <= 65376
+        give 2
+    when cp >= 9800 and cp <= 9811
+        give 2
+    when cp == 9888 or cp == 9889 or cp == 9989 or cp == 10060 or cp == 11093
+        give 2
+    give 1
+
+export task width(s)
+    let t be strip_ansi(s)
+    let w be 0
+    let i be 0
+    let n be length(t)
+    while i < n
+        set w to w + char_width(slice(t, i, i + 1))
+        set i to i + 1
+    give w
+
+-- corta a `max` celdas visibles, saltando secuencias ANSI enteras; añade "…" si cortó y cierra el color
+export task cut(s, max)
+    when width(s) <= max
+        give s
+    let out be ""
+    let w be 0
+    let i be 0
+    let n be length(s)
+    let limit be max - 1
+    while i < n and w < limit
+        let ch be slice(s, i, i + 1)
+        when ch == ESC
+            -- copiar la secuencia CSI completa: ESC [ … letra
+            let j be i + 1
+            while j < n and not matches(slice(s, j, j + 1), "[A-Za-z]")
+                set j to j + 1
+            set out to out + slice(s, i, j + 1)
+            set i to j + 1
+        otherwise
+            let cw be char_width(ch)
+            when w + cw <= limit
+                set out to out + ch
+                set w to w + cw
+                set i to i + 1
+            otherwise
+                set i to n
+    give out + ESC + "[0m" + "…"
+
+-- envuelve texto plano (sin escapes) por palabras; give lista de líneas (sin indent en la primera)
+export task wrap(s, max, indent)
+    when max <= 10 or length(s) <= max
+        give [s]
+    let words be split(s, " ")
+    let lines be []
+    let cur be ""
+    let curw be 0
+    each w in words
+        let ww be width(w)
+        let room be when length(lines) == 0 then max otherwise max - length(indent)
+        when curw == 0
+            set cur to w
+            set curw to ww
+        otherwise when curw + 1 + ww <= room
+            set cur to cur + " " + w
+            set curw to curw + 1 + ww
+        otherwise
+            set lines to append(lines, (when length(lines) == 0 then "" otherwise indent) + cur)
+            set cur to w
+            set curw to ww
+    set lines to append(lines, (when length(lines) == 0 then "" otherwise indent) + cur)
+    give lines
+
+-- ---------- terminal ----------
+
+export task cols()
+    observe "lampson:ui:cols" as c
+    when c == nothing
+        give 100
+    give c
+
+export task set_cols(n)
+    share n as "lampson:ui:cols"
+    give n
+
+export task fmt_duration(secs)
+    let s be floor(secs)
+    when s < 60
+        give text(s) + "s"
+    when s < 3600
+        let m be floor(s / 60)
+        let r be s - m * 60
+        give text(m) + "m " + (when r < 10 then "0" otherwise "") + text(r) + "s"
+    let h be floor(s / 3600)
+    let m2 be floor((s - h * 3600) / 60)
+    give text(h) + "h " + (when m2 < 10 then "0" otherwise "") + text(m2) + "m"

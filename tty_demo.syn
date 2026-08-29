@@ -1,0 +1,33 @@
+-- tty_demo.syn — sesión de demostración contra el mock LLM por PTY; guarda la salida ANSI cruda en
+-- .lampson/tmp/tty_demo.ans para verla renderizada. synsema run tty_demo.syn
+-- OJO: corre contra el workspace MONTADO (escribe scratch_mock.txt ahí): montá un proyecto de prueba antes.
+require exec("synsema")
+require time
+require file(".lampson")
+require file(".lampson/*")
+let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
+let t0 be now()
+while now() - t0 < 4
+    let ev be proc_recv(mock, 0.5)
+    when ev != nothing
+        set t0 to t0
+let p be proc_spawn("synsema", ["run", "chat.syn"], {"pty": true, "cols": 110, "rows": 40, "env": {"LAMPSON_NO_CONFIG": "1", "LAMPSON_PROVIDER": "openai", "LAMPSON_WIRE": "openai", "LAMPSON_BASE_URL": "http://127.0.0.1:8765/v1", "LAMPSON_API_KEY": "x", "LAMPSON_PERMISSION": "yolo"}})
+let log be ""
+task pump(secs)
+    let deadline be now() + secs
+    while now() < deadline
+        let ev be proc_recv(p, 0.3)
+        when ev != nothing and ev["type"] != "exit"
+            set log to log + ev["data"]
+task keys(s, secs)
+    proc_send(p, s)
+    pump(secs)
+pump(6)
+keys("ls\r", 6)
+keys("escribe hola mundo desde el mock\r", 8)
+keys("lento\r", 14)
+keys("/exit\r", 4)
+write_file(".lampson/tmp/tty_demo.ans", log)
+proc_close(p)
+proc_close(mock)
+print("guardado .lampson/tmp/tty_demo.ans (" + text(length(log)) + " chars)")

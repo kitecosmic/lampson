@@ -31,6 +31,7 @@ use "./lib/tools/memo.syn" as memo
 use "./lib/trace.syn" as trace
 use "./lib/md.syn" as md
 use "./lib/diff.syn" as diff
+use "./lib/ui.syn" as ui
 use "./lib/mcp.syn" as mcp
 use "./lib/lamps.syn" as lamps
 use "./lib/tools/todo.syn" as todo
@@ -121,6 +122,14 @@ test "mcp.parse_command: tokens simples y comillas (rutas de Windows con espacio
     assert_eq(join(p2["args"], "|"), "server.js|--port|3001")
     assert_eq(mcp.parse_command("   ")["command"], "")
 
+test "spill: bash largo va a disco; el informe de delegate NO (es el entregable)"
+    let long be ""
+    while length(long) < 20000
+        set long to long + "linea de informe bastante larga para pasar el tope\n"
+    assert(contains(loop.spill("bash", "spill_t1", long), "chars omitted"))
+    assert_eq(loop.spill("delegate", "spill_t2", long), long)
+    assert_eq(loop.spill("read", "spill_t3", long), long)
+
 test "describe_call"
     assert_eq(permission.describe_call("bash", {"command": "ls"}), "$ ls")
     assert_eq(permission.describe_call("read", {"path": "a.txt"}), "read a.txt")
@@ -144,7 +153,7 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
 test "prompt: método en 5 pasos, límites duros y entorno interpolado"
     let p be prompt.build({"ui": "terminal", "cwd": "C:/x", "os": "Windows_NT", "shell": "bash", "date": "2026-08-28", "model": "m", "provider": "p"}, agents.addendum_for("build"))
     assert(contains(p, "# Method") and contains(p, "1. PLAN.") and contains(p, "5. VERIFY AND REPORT."), "método")
-    assert(contains(p, "after 16 read/ls/find/grep are refused") and contains(p, "[exit code: N]") and contains(p, "mcp_<server>_<tool>"), "límites y tools")
+    assert(contains(p, "after 24 read/ls/find/grep are refused") and contains(p, "[exit code: N]") and contains(p, "mcp_<server>_<tool>"), "límites y tools")
     assert(contains(p, "Workspace root") and contains(p, "C:/x") and contains(p, "m via p") and contains(p, "# Mode"), "entorno")
     -- el núcleo pesa ~7k chars (≈1.7k tokens); el resto es el índice de skills (22 globales en esta máquina) + memoria
     assert(length(p) < 40000, "tamaño: " + text(length(p)))
@@ -292,7 +301,7 @@ test "tope de exploración: aviso a la mitad, rechazo al tope, reset con una acc
     let other be loop.explore_verdict(5, "todo", cap)
     assert(other["streak"] == 5 and not other["refuse"])
     assert(loop.explore_verdict(20, "mcp_github_search", cap)["streak"] == 0)
-    assert_eq(loop.explore_cap(), 16)
+    assert_eq(loop.explore_cap(), 24)
 
 task repeat_text(s, n)
     let out be ""
@@ -515,19 +524,27 @@ test "md: markdown → terminal (plano sin escapes; con color solo cambia por SG
     let esc be decode(bytes("1b", "hex"))
     assert(not contains(plain, esc))
     let col be md.render(doc, true)
-    assert(contains(col, esc + "[1mneg" + esc + "[0m") and contains(col, esc + "[33mcod" + esc + "[0m"), col)
+    assert(contains(col, esc + "[1mneg" + esc + "[0m") and contains(col, esc + "[36mcod" + esc + "[0m"), col)
     assert_eq(strip_ansi(col), plain)
+    -- tabla más ancha que la terminal: se achican columnas y se envuelven celdas; ninguna línea se pasa
+    ui.set_cols(60)
+    let wide be md.render("| Ruta | Qué hace |\n|---|---|\n| `/api/reservar` | Recibe FormData, llama crearReserva(), redirige 303 a /?reservado=1&token=… o /?error=… |", false)
+    each l in split(wide, "\n")
+        assert(ui.width(l) <= 60, l)
+    assert(length(split(wide, "\n")) >= 4, wide)
+    ui.set_cols(100)
 
 test "diff: líneas cambiadas con contexto y números; archivo nuevo = todo +; edit/write publican antes/después"
     let d be diff.diff("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk", "a\nb\nC\nd\ne\nf\ng\nh\nX\ni\nj\nk", 2, false)
     assert_eq(d["added"], 2)
     assert_eq(d["removed"], 1)
-    let s be join(d["lines"], "\n")
+    -- las filas +/- van rellenadas hasta el ancho (fondo de color): comparar sin espacios finales
+    let s be join(apply((l) => replace_re(l, "\s+$", ""), d["lines"]), "\n")
     assert(contains(s, " 3 │ - c\n 3 │ + C") and contains(s, " 9 │ + X") and contains(s, "⋯"), s)
     assert(not contains(s, "│   f"), s)
     let n be diff.diff("", "uno\ndos", 2, false)
     assert_eq(n["removed"], 0)
-    assert_eq(join(n["lines"], "\n"), "1 │ + uno\n2 │ + dos")
+    assert_eq(join(apply((l) => replace_re(l, "\s+$", ""), n["lines"]), "\n"), "1 │ + uno\n2 │ + dos")
     -- edit → blackboard "lampson:ui:diff" con old/new (la UI lo convierte en diff; el modelo no lo ve)
     call_tool(REG["write"], {"path": "diff_t.txt", "content": "x\ny\n"})
     observe "lampson:ui:diff" as w

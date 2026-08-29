@@ -1,10 +1,33 @@
 -- lib/diff.syn — diff de líneas para mostrar en la terminal qué cambió edit/write
 --   diff(old, new, ctx, color) → {"added": n, "removed": m, "lines": [texto ya formateado…]}
 -- Algoritmo: se recorta el prefijo y sufijo comunes (una edición es local) y se hace LCS solo sobre el
--- medio. Si el medio es enorme (> LIMIT² celdas) se muestra como bloque quitado + bloque agregado.
+-- medio. Si el medio supera LIMIT² celdas (80×80 líneas cambiadas ≈ un rewrite) se muestra como bloque
+-- quitado + bloque agregado: exacto y en milisegundos (el LCS interpretado a 300×300 tardaba 2 minutos).
+
+use "./ui.syn" as ui
 
 let ESC be decode(bytes("1b", "hex"))
-let LIMIT be 600
+let LIMIT be 80
+
+-- línea de diff con fondo (verde/rojo) rellenada hasta el ancho útil, cortada si se pasa
+task row(color, kind, num, body, width)
+    let n be sgr(color, "2", lpad(num, width) + " │ ")
+    let w be ui.cols() - 8 - width - 3
+    when w < 30
+        set w to 30
+    let txt be ui.cut(kind + " " + body, w)
+    let pad be rep(" ", w - ui.width(txt))
+    when kind == "+"
+        give n + ui.bg_add(color, sgr(color, "32", txt + pad))
+    when kind == "-"
+        give n + ui.bg_del(color, sgr(color, "31", txt + pad))
+    give n + sgr(color, "2", ui.cut("  " + body, w))
+
+task rep(ch, n)
+    let out be ""
+    while length(out) < n
+        set out to out + ch
+    give out
 
 task sgr(color, code, s)
     when not color
@@ -22,10 +45,13 @@ task lcs_ops(a, b)
     let n be length(a)
     let m be length(b)
     -- tabla (n+1)×(m+1) aplanada, fila por fila
-    let table be []
-    let size be (n + 1) * (m + 1)
-    while length(table) < size
-        set table to append(table, 0)
+    -- MIGA: append copia la lista entera (O(n) cada vez) → construirla con append era O(n²·m²).
+    -- range() la crea de una y set por índice es O(1).
+    let table be range(0, (n + 1) * (m + 1))
+    let z be 0
+    while z < (n + 1) * (m + 1)
+        set table[z] to 0
+        set z to z + 1
     let i be n - 1
     while i >= 0
         let j be m - 1
@@ -98,7 +124,7 @@ export task diff(old, new, ctx, color)
         set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))
     let k be start
     while k < pre
-        set lines to append(lines, sgr(color, "2", lpad(text(k + 1), width) + " │   " + a[k]))
+        set lines to append(lines, row(color, " ", text(k + 1), a[k], width))
         set k to k + 1
     -- medio: contexto interno acotado (ctx a cada lado de un cambio)
     let last_change be -1
@@ -118,16 +144,16 @@ export task diff(old, new, ctx, color)
             set w to w + 1
         when o["op"] == " "
             when near
-                set lines to append(lines, sgr(color, "2", lpad(text(pre + o["b"] + 1), width) + " │   " + mid_b[o["b"]]))
+                set lines to append(lines, row(color, " ", text(pre + o["b"] + 1), mid_b[o["b"]], width))
                 set skipping to false
             otherwise when not skipping
                 set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))
                 set skipping to true
         otherwise when o["op"] == "-"
-            set lines to append(lines, sgr(color, "2", lpad(text(pre + o["a"] + 1), width) + " │ ") + sgr(color, "31", "- " + mid_a[o["a"]]))
+            set lines to append(lines, row(color, "-", text(pre + o["a"] + 1), mid_a[o["a"]], width))
             set skipping to false
         otherwise
-            set lines to append(lines, sgr(color, "2", lpad(text(pre + o["b"] + 1), width) + " │ ") + sgr(color, "32", "+ " + mid_b[o["b"]]))
+            set lines to append(lines, row(color, "+", text(pre + o["b"] + 1), mid_b[o["b"]], width))
             set skipping to false
         set idx to idx + 1
     -- contexto posterior (del sufijo común)
@@ -135,7 +161,7 @@ export task diff(old, new, ctx, color)
     let upto be when after_start + ctx < length(b) then after_start + ctx otherwise length(b)
     set k to after_start
     while k < upto
-        set lines to append(lines, sgr(color, "2", lpad(text(k + 1), width) + " │   " + b[k]))
+        set lines to append(lines, row(color, " ", text(k + 1), b[k], width))
         set k to k + 1
     when upto < length(b)
         set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))

@@ -145,6 +145,10 @@
   .sec h2 { font:400 10.5px/1.35 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
   .sec h2:hover { color:var(--ink); }
   .sec .caret { width:9px; font-size:9px; color:var(--ink-3); }
+  .sec h2 .h2act { margin-left:auto; border:0; background:none; color:var(--ink-3); font:inherit; font-size:12px; cursor:pointer; padding:0 2px; line-height:1; opacity:.6; }
+  .sec h2 .h2act:hover { opacity:1; color:var(--accent); }
+  .sec h2 .h2act.spin { animation: h2spin .6s linear; }
+  @keyframes h2spin { to { transform: rotate(360deg); } }
   .sec .cnt { margin-left:auto; letter-spacing:0; text-transform:none; }
   .sec .body { display:none; overflow:auto; min-height:0; padding:0 10px 10px 16px; }
   .sec.open .body { display:block; }
@@ -370,7 +374,7 @@
 </header>
 <aside>
   <section class="sec grow open" data-sec="tree">
-    <h2><span class="caret">▾</span>Archivos</h2>
+    <h2><span class="caret">▾</span>Archivos<button class="h2act" id="tree-reload" title="recargar el árbol">↻</button></h2>
     <div class="body" id="tree"></div>
   </section>
   <section class="sec" data-sec="procs">
@@ -700,6 +704,11 @@ function autoSec(name, hasContent) {
   const pref = localStorage.getItem('lampson.sec.' + name);
   setSec(name, pref === null ? hasContent : pref === '1');
 }
+// el árbol se refresca solo cuando una tool pudo crear/borrar archivos (write/edit/bash/process/delegate/lamp),
+// con un pequeño debounce para no repintar 20 veces en un turno con 20 writes; ↻ lo fuerza a mano
+let treeTimer = null;
+function treeChanged() { clearTimeout(treeTimer); treeTimer = setTimeout(loadTree, 400); }
+$('#tree-reload').onclick = e => { e.stopPropagation(); const b = e.currentTarget; b.classList.remove('spin'); void b.offsetWidth; b.classList.add('spin'); loadTree(); };
 document.querySelectorAll('.sec h2').forEach(h => h.onclick = () => {
   const s = h.closest('.sec'); const open = !s.classList.contains('open');
   localStorage.setItem('lampson.sec.' + s.dataset.sec, open ? '1' : '0');
@@ -1244,6 +1253,7 @@ function handle(chunk, thinking) {
   else if (k === 'tool_call') { thinking.querySelector('span:last-child').textContent = 'ejecutando ' + esc(d.name) + '…'; pending = add('step', `<span class="ic">⚙</span>${cmdHtml(describe(d))}`); wireMore(pending); if (d.name === 'process') setTimeout(loadProcs, 2500); if (d.name === 'delegate') { setTimeout(loadAgents, 800); setTimeout(loadAgents, 4000); } if (d.name === 'todo') setTimeout(loadTodo, 300); if (d.name === 'lamp') setTimeout(loadLamps, 300); if (d.name === 'lsp') setTimeout(loadLsp, 1500); }
   else if (k === 'inbox') { add('meta', '✉ ' + esc(String(d).split('\n')[0].slice(0, 160))); loadAgents(); }
   else if (k === 'tool_result') { const out = String(d.output); const bad = /^(ERROR|DENIED)/.test(out);
+    if (!bad && d.call && /^(write|edit|bash|process|delegate|lamp|skill)$/.test(d.call.name)) treeChanged();
     // lámpara recién creada: avisar en el chat con un acceso directo al switch (el modelo no sabe cómo se enciende en esta UI)
     if (d.call && d.call.name === 'lamp' && /^lamp '([^']+)' created/.test(out)) { const nm = out.match(/^lamp '([^']+)' created/)[1]; const m = add('meta', `☼ lámpara <b>${esc(nm)}</b> creada — está apagada: <a href="#" class="lampgo">encenderla en «lámparas»</a>`); m.querySelector('.lampgo').onclick = (ev) => { ev.preventDefault(); $('#lamps').click(); }; $('#lamps').classList.add('new'); setTimeout(() => $('#lamps').classList.remove('new'), 4000); } const el = pending || add('step', '<span class="ic">→</span>'); pending = null; thinking.querySelector('span:last-child').textContent = 'pensando…'; const ic = el.querySelector('.ic'); if (ic) { ic.textContent = bad ? '✗' : '✓'; ic.className = 'ic ' + (bad ? 'bad' : 'ok'); } el.insertAdjacentHTML('beforeend', `<details><summary class="${bad ? 'bad' : ''}">${esc(out.split('\n')[0].slice(0, 140))} <span style="color:var(--ink-3)">(${out.length} chars)</span></summary><pre>${esc(out)}</pre></details>`); }
   else if (k === 'approval_request') { const el = add('approval', `<div class="card"><div class="why">⚠ ${esc(d.why)}</div><code>${esc(describe({name: d.name, args: d.args}))}</code><div class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></div></div>`); el.querySelectorAll('button').forEach(b => b.onclick = async () => { el.querySelectorAll('button').forEach(x => x.disabled = true); await fetch('/api/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: d.id, decision: b.dataset.ok === '1' }) }); }); el.dataset.id = d.id; }

@@ -12,6 +12,7 @@
 -- Cada respuesta también refleja cuántos mensajes recibió (útil para asertar el historial).
 
 require serve(8765)
+require time
 
 task last_user(msgs)
     let out be ""
@@ -81,6 +82,12 @@ serve on 8765
             when starts_with(q, "loop")
                 give reply_text("Hice N listados.\n]<]minimax[>[<tool_call><invoke name=\"ls\"></invoke></tool_call>")
             give reply_text("final (no tools offered) · msgs=" + text(length(msgs)))
+        -- "lento": el modelo tarda 3 s y pide un bash que tarda 2 s (indicador de espera de la terminal)
+        when starts_with(q, "lento")
+            sleep(3)
+            when tools_seen == 0
+                give reply_tools([tool_call("bash", {"command": "sleep 2 && echo listo"})])
+            give reply_text("final lento · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 40))
         when starts_with(q, "ls")
             when tools_seen == 0
                 give reply_tools([tool_call("ls", {"path": "."})])

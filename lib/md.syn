@@ -5,8 +5,26 @@
 -- (backrefs \1). En strings "..." la barra va simple ("\*", "\d"): "\\d" NO es \d.
 -- Los bloques ``` se copian tal cual (sin parseo inline). La web ya renderiza markdown por su cuenta.
 
+use "./ui.syn" as ui
+
 let ESC be decode(bytes("1b", "hex"))
-let WIDTH be 72
+-- ancho útil: columnas de la terminal menos la sangría (mín. 40, máx. 100 para que la prosa se lea)
+task width_now()
+    let c be ui.cols() - 4
+    when c < 40
+        give 40
+    when c > 100
+        give 100
+    give c
+
+-- rutas y símbolos de código dentro de la prosa → azul (lib/x.syn, src/a/b.ts, describe_call(), foo.bar)
+task paths(s, color)
+    when not color
+        give s
+    let out be replace_re(s, "(^|[\s(])([\w.-]*/[\w./-]{2,})", "\1" + ESC + "[34m\2" + ESC + "[0m")
+    set out to replace_re(out, "(^|[\s(])(\w+\.(syn|js|ts|tsx|jsx|json|md|py|rs|go|ps1|sh|html|css|toml|yml|yaml|env))(\b)", "\1" + ESC + "[34m\2" + ESC + "[0m")
+    set out to replace_re(out, "(^|[\s(])(\w+\(\))", "\1" + ESC + "[34m\2" + ESC + "[0m")
+    give out
 
 task sgr(color, code, s)
     when not color or s == ""
@@ -41,16 +59,16 @@ export task inline(s, color)
     -- `código` primero: lo de adentro no se toca
     let parts be split(s, "`")
     when length(parts) < 3
-        give emphasis(s, color)
+        give paths(emphasis(s, color), color)
     let out be ""
     let idx be 0
     each p in parts
         when idx == length(parts) - 1 and idx % 2 == 1
-            set out to out + "`" + emphasis(p, color)
+            set out to out + "`" + paths(emphasis(p, color), color)
         otherwise when idx % 2 == 1
-            set out to out + sgr(color, "33", p)
+            set out to out + sgr(color, "36", p)
         otherwise
-            set out to out + emphasis(p, color)
+            set out to out + paths(emphasis(p, color), color)
         set idx to idx + 1
     give out
 
@@ -79,19 +97,51 @@ task table_lines(rows, pre, color)
         each c in r
             when i >= length(widths)
                 set widths to append(widths, 0)
-            when length(inline(c, false)) > widths[i]
-                set widths[i] to length(inline(c, false))
+            when ui.width(inline(c, false)) > widths[i]
+                set widths[i] to ui.width(inline(c, false))
             set i to i + 1
+    -- si no entra en la terminal, achicar la columna más ancha hasta que entre (mínimo 10) y envolver
+    let avail be width_now() - 3 * (length(widths) - 1)
+    let total be 0
+    each w in widths
+        set total to total + w
+    while total > avail
+        let widest be 0
+        let wi be 0
+        each w in widths
+            when w > widths[widest]
+                set widest to wi
+            set wi to wi + 1
+        when widths[widest] <= 10
+            set total to avail
+        otherwise
+            set widths[widest] to widths[widest] - 1
+            set total to total - 1
     let out be []
     let ri be 0
     each r in rows
-        let cells be []
+        -- cada celda → lista de líneas envueltas a su ancho
+        let wrapped be []
+        let height be 1
         let i be 0
         each c in r
-            let fill be rep(" ", widths[i] - length(inline(c, false)))
-            set cells to append(cells, (when ri == 0 then sgr(color, "1", inline(c, color)) otherwise inline(c, color)) + fill)
+            let ls be ui.wrap(c, widths[i], "")
+            set wrapped to append(wrapped, ls)
+            when length(ls) > height
+                set height to length(ls)
             set i to i + 1
-        set out to append(out, pre + join(cells, sgr(color, "2", " │ ")))
+        let li be 0
+        while li < height
+            let cells be []
+            set i to 0
+            each ls in wrapped
+                let piece be when li < length(ls) then ls[li] otherwise ""
+                let vis be ui.width(inline(piece, false))
+                let fill be rep(" ", (when widths[i] > vis then widths[i] - vis otherwise 0))
+                set cells to append(cells, (when ri == 0 then sgr(color, "1", inline(piece, color)) otherwise inline(piece, color)) + fill)
+                set i to i + 1
+            set out to append(out, pre + join(cells, sgr(color, "2", " │ ")))
+            set li to li + 1
         when ri == 0
             let segs be []
             each w in widths
@@ -102,7 +152,7 @@ task table_lines(rows, pre, color)
 
 task fence_top(lang, color)
     let label be when lang != "" then " " + lang + " " otherwise ""
-    give sgr(color, "2", "┌──" + label + rep("─", WIDTH - 3 - length(label)))
+    give sgr(color, "2", "┌──" + label + rep("─", width_now() - 3 - length(label)))
 
 export task render(md, color)
     let pre be "  "
@@ -122,9 +172,9 @@ export task render(md, color)
         when in_code
             when starts_with(t, fence)
                 set in_code to false
-                set out to append(out, pre + sgr(color, "2", "└" + rep("─", WIDTH - 1)))
+                set out to append(out, pre + sgr(color, "2", "└" + rep("─", width_now() - 1)))
             otherwise
-                set out to append(out, pre + sgr(color, "2", "│ ") + sgr(color, "36", line))
+                set out to append(out, pre + sgr(color, "2", "│ ") + ui.cut(sgr(color, "36", line), width_now() - 2))
         otherwise when starts_with(t, "```") or starts_with(t, "~~~")
             set in_code to true
             set fence to slice(t, 0, 3)
@@ -143,7 +193,7 @@ export task render(md, color)
             otherwise
                 set out to append(out, pre + sgr(color, "1", title))
         otherwise when matches(t, "(-{3,}|\*{3,}|_{3,})")
-            set out to append(out, pre + sgr(color, "2", rep("─", WIDTH)))
+            set out to append(out, pre + sgr(color, "2", rep("─", width_now())))
         otherwise when starts_with(t, ">")
             set out to append(out, pre + sgr(color, "2", "▎ ") + sgr(color, "3", inline(trim(slice(t, 1, length(t))), color)))
         otherwise when matches(t, "\|[\s:|-]+\|")
@@ -160,12 +210,20 @@ export task render(md, color)
             otherwise when starts_with(rest, "[x] ") or starts_with(rest, "[X] ")
                 set mark to sgr(color, "32", "☑")
                 set rest to slice(rest, 4, length(rest))
-            set out to append(out, pre + ind + mark + " " + inline(rest, color))
+            let wrapped be ui.wrap(rest, width_now() - length(ind) - 2, "")
+            let wi be 0
+            each wl in wrapped
+                set out to append(out, pre + ind + (when wi == 0 then mark + " " otherwise "  ") + inline(wl, color))
+                set wi to wi + 1
         otherwise
-            set out to append(out, when t == "" then "" otherwise pre + inline(line, color))
+            when t == ""
+                set out to append(out, "")
+            otherwise
+                each wl in ui.wrap(trim(line), width_now(), "")
+                    set out to append(out, pre + inline(wl, color))
     when length(table) > 0
         each l in table_lines(table, pre, color)
             set out to append(out, l)
     when in_code
-        set out to append(out, pre + sgr(color, "2", "└" + rep("─", WIDTH - 1)))
+        set out to append(out, pre + sgr(color, "2", "└" + rep("─", width_now() - 1)))
     give join(out, "\n")

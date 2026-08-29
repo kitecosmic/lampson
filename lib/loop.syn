@@ -55,7 +55,7 @@ export task explore_cap()
     let e be env("LAMPSON_EXPLORE_CAP", "")
     when e != ""
         give floor(number(e))
-    give 16
+    give 24
 
 -- {streak, note, refuse}: nuevo streak tras esta llamada y qué hacer con ella
 export task explore_verdict(streak, name, cap)
@@ -99,6 +99,9 @@ export task spill(name, id, out)
     require file(".lampson")
     require file(".lampson/*")
     when name == "read" or length(out) <= SPILL_CAP
+        give out
+    -- el informe de los subagentes es el entregable: no se manda a disco (hasta 60k)
+    when name == "delegate" and length(out) <= SPILL_CAP * 6
         give out
     let path be SPILL_DIR + "/" + id + ".txt"
     write_file(path, out)
@@ -276,17 +279,21 @@ task execute(tc, opts, on_event)
         when not approved
             emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
+    emit(on_event, "busy", {"label": permission.describe_call(name, args), "kind": "tool", "name": name}, tag)
+    let out be ""
     try
         -- tools MCP: no son tasks Synsema (args libres); el registry las marca con "mcp"
         when registry[name] == "mcp"
-            give text(mcp.call(name, args))
+            set out to text(mcp.call(name, args))
         -- tools de lámparas: un proceso hijo por llamada (lib/lamps.syn)
-        when registry[name] == "lamp"
-            give text(lamps.call(name, args))
-        let result be call_tool(registry[name], args)
-        give text(result)
+        otherwise when registry[name] == "lamp"
+            set out to text(lamps.call(name, args))
+        otherwise
+            set out to text(call_tool(registry[name], args))
     recover err
-        give "ERROR: " + err
+        set out to "ERROR: " + err
+    emit(on_event, "idle", nothing, tag)
+    give out
 
 export task run_turn(cfg, messages, opts, on_event)
     require net
@@ -353,7 +360,9 @@ export task run_turn(cfg, messages, opts, on_event)
         when last_step
             let why be when over_budget then "Token budget for this turn is exhausted (" + text(spent) + " of " + text(floor(budget)) + " tokens)" otherwise "Step limit reached for this turn (" + text(max_steps) + " tool calls)"
             set msgs to append(msgs, {"role": "user", "content": "[harness] " + why + ". Do NOT call tools now. Reply with a short status: what you completed, what is verified, and exactly what remains to do next. The user can say 'continue' to resume."})
+        emit(on_event, "busy", {"label": "pensando", "kind": "llm"}, tag)
         let r be provider.chat_retry(cfg, msgs, cat, 3)
+        emit(on_event, "idle", nothing, tag)
         when r["error"] != nothing
             emit(on_event, "error", r["error"], tag)
             set stopped to "error: " + r["error"]
@@ -406,16 +415,21 @@ export task run_turn(cfg, messages, opts, on_event)
                 when ex["note"] != ""
                     set out to out + ex["note"]
                     emit(on_event, "inbox", "tope de exploración a la mitad (" + text(explore_streak) + "/" + text(cap) + " lecturas seguidas sin actuar): aviso al modelo", tag)
-            when starts_with(out, "ERROR") or starts_with(out, "DENIED")
+            -- solo cuentan los errores REALES de la tool; los rechazos del harness (tope de lecturas,
+            -- repeticiones) ya castigan con el rechazo y no deben además cortar el turno
+            when (starts_with(out, "ERROR") or starts_with(out, "DENIED")) and not starts_with(out, "ERROR: exploration cap") and not starts_with(out, "ERROR: this turn already made") and not starts_with(out, "ERROR: you already called")
                 set errors to errors + 1
             emit(on_event, "tool_result", {"call": tc, "output": out}, tag)
             set msgs to append(msgs, tool_result_msg(tc, out))
         when errors >= MAX_ERRORS_PER_TURN
             set msgs to append(msgs, {"role": "user", "content": "[harness] Too many tool errors this turn. Stop calling tools and report what happened."})
+            emit(on_event, "busy", {"label": "pensando", "kind": "llm"}, tag)
             let fin be provider.chat_retry(cfg, msgs, [], 2)
-            set msgs to append(msgs, {"role": "assistant", "content": fin["text"], "tool_calls": []})
-            emit(on_event, "assistant", fin["text"], tag)
-            give {"messages": msgs, "text": fin["text"], "steps": steps, "usage": usage, "stopped": "too_many_errors"}
+            emit(on_event, "idle", nothing, tag)
+            let fin_text be strip_raw_tool_calls(fin["text"])
+            set msgs to append(msgs, {"role": "assistant", "content": fin_text, "tool_calls": []})
+            emit(on_event, "assistant", fin_text, tag)
+            give {"messages": msgs, "text": fin_text, "steps": steps, "usage": usage, "stopped": "too_many_errors"}
     set stopped to when spent > budget then "budget" otherwise "max_steps"
     give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": stopped}
 

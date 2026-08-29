@@ -139,6 +139,10 @@ servers, flags), `↑↓` browse history or the menu, `Alt+Enter` inserts a newl
 last tool result in full, `Ctrl+U`/`Ctrl+W` clear the line/word, `Esc` closes the menu. Approvals are
 an arrow-key menu (`permitir`/`denegar`, or `p`/`d`).
 
+While the model thinks or a slow tool runs (a long `bash`, a sub-agent), a status line shows what is
+running, the elapsed time and a bar that fills as you wait (`⠋ pensando  ▰▰▱▱▱▱▱▱▱▱ 12s`); it appears
+after 0.4 s so instant tools do not flicker, and anything you type meanwhile lands in the prompt.
+
 The terminal renders the model's markdown (headings, lists, tables, code fences) and shows every tool
 result: `edit`/`write` print a line diff (`- red / + green`, line numbers, 2 lines of context); other
 tools are collapsed to 15 lines. `/out [n]` prints the n-th last result of the turn in full and
@@ -299,7 +303,7 @@ Borrowed from the harness that does each part best (see `notes/*.md`):
 | Budget runs out silently | 80 %: a notice appended to the latest tool result (no new user message, cache stays warm); 95 %: last step without tools, summary required | hermes / opencode |
 | Edits a file it never read, or one that changed | **Observation gate in code**: `read` records the file hash; `edit`/`write` on an existing file are rejected without it, or if the file changed since | deepseek |
 | Loses the plan | `todo` tool (whole-list replacement, one `in_progress` at a time, scoped to the session like the three references); re-injected only after context compaction, active items only | hermes, opencode |
-| Reads the whole project before touching anything | **Exploration cap** (ours): after 8 read-only calls in a row (read/ls/find/grep) without an edit/write/command the result carries a warning; after 16 they are refused until it acts (`LAMPSON_EXPLORE_CAP`) | — |
+| Reads the whole project before touching anything | **Exploration cap** (ours): after 12 read-only calls in a row (read/ls/find/grep) without an edit/write/command the result carries a warning; after 24 they are refused until it acts (`LAMPSON_EXPLORE_CAP`) | — |
 
 ### Sub-agents
 
