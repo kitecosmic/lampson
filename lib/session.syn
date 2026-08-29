@@ -82,6 +82,42 @@ export task list()
         give []
     give sort_by(out, (s) => 0 - number(replace_text(replace_text(s["id"], "-", ""), "test", "")))
 
+-- Búsqueda de texto en las sesiones de ESTE proyecto (título y contenido de los mensajes user/assistant):
+-- [{id, updated, title, snippet}] — snippet = el primer trozo donde aparece `q`. Vacío = todas (sin snippet).
+-- Lineal sobre los archivos (local, decenas o cientos de sesiones): suficiente; migrar a db si crece.
+export task search(q, limit)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let needle be lower(trim(text(q)))
+    let out be []
+    each s in list()
+        when length(out) >= limit
+            give out
+        when needle == ""
+            set out to append(out, {"id": s["id"], "updated": s["updated"], "title": s["title"], "snippet": ""})
+        otherwise
+            let hit be nothing
+            when contains(lower(s["title"]), needle)
+                set hit to ""
+            otherwise
+                try
+                    let d be load(s["id"])
+                    each m in d["messages"]
+                        when hit == nothing and (m["role"] == "user" or m["role"] == "assistant") and text(m["content"]) == m["content"]
+                            let c be text(m["content"])
+                            let lc be lower(c)
+                            when contains(lc, needle)
+                                let pos be length(split(lc, needle)[0])
+                                let a be when pos > 60 then pos - 60 otherwise 0
+                                let b be when pos + length(needle) + 90 < length(c) then pos + length(needle) + 90 otherwise length(c)
+                                set hit to (when a > 0 then "…" otherwise "") + replace_text(replace_text(slice(c, a, b), "\r", ""), "\n", " ") + (when b < length(c) then "…" otherwise "")
+                recover err
+                    set hit to nothing
+            when hit != nothing
+                set out to append(out, {"id": s["id"], "updated": s["updated"], "title": s["title"], "snippet": hit})
+    give out
+
 -- Borrar una sesión (no hay delete_file en el runtime: se usa el shell del sistema sobre la ruta fija).
 export task delete(id)
     require exec

@@ -47,7 +47,7 @@
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body { margin:0; background:var(--paper); color:var(--ink); font:400 14.5px/1.6 var(--serif); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-    display:grid; grid-template-rows:auto 1fr; grid-template-columns:var(--side) 1fr; grid-template-areas:"top top" "side main"; }
+    display:grid; grid-template-rows:auto 1fr; grid-template-columns:var(--side) 1fr var(--side); grid-template-areas:"top top top" "side main tree"; }
   ::selection { background:var(--sel); }
   :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:1px; }
   button, select, textarea { font-family:inherit; }
@@ -171,6 +171,32 @@
   .ctab.on { color:var(--accent); border-bottom-color:var(--accent); }
   .cfgbox label .ds { display:block; color:var(--ink-3); font:400 11.5px/1.4 var(--serif); margin-top:2px; }
   .cfgbox input[disabled] { opacity:.55; }
+  /* modal buscador reutilizable (sesiones hoy; tareas, procesos, mcp… mañana) */
+  .modal .box.pickbox { width:min(760px, 94vw); height:min(640px, 88vh); display:flex; flex-direction:column; padding:14px 18px 12px; }
+  .pickbox .lhead { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+  .pickbox .lhead h3 { margin:0; }
+  .pickbox .lhead .ds { color:var(--ink-3); font:400 11.5px/1 var(--mono); }
+  .modal .box.pickbox #pickSearch { flex:none; height:auto; font:400 13px/1.4 var(--mono); background:transparent; color:var(--ink); border:1px solid var(--rule-2); border-radius:var(--r); padding:8px 10px; width:100%; margin:0 0 8px; box-sizing:border-box; }
+  .pickbox #pickItems { flex:1; min-height:0; overflow:auto; }
+  .pickbox .pi { display:grid; grid-template-columns:auto 1fr auto; gap:2px 10px; align-items:baseline; padding:7px 8px; border-radius:var(--r); cursor:pointer; border-left:2px solid transparent; }
+  .pickbox .pi:hover { background:var(--paper-2, rgba(127,127,127,.1)); }
+  .pickbox .pi.sel { background:var(--paper-2, rgba(127,127,127,.12)); border-left-color:var(--accent); }
+  .pickbox .pi .id { color:var(--ink-3); font:400 11px/1.4 var(--mono); }
+  .pickbox .pi .ttl { color:var(--ink); font:400 13.5px/1.4 var(--serif); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pickbox .pi .when { color:var(--ink-3); font:400 11px/1.4 var(--mono); white-space:nowrap; }
+  .pickbox .pi .snip { grid-column:2 / span 2; color:var(--ink-2); font:400 12px/1.4 var(--serif); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pickbox .pi mark { background:transparent; color:var(--accent); font-weight:600; }
+  .pickbox .pi .acts { grid-column:3; display:inline-flex; gap:6px; visibility:hidden; }
+  .pickbox .pi:hover .acts { visibility:visible; }
+  .pickbox .pi .acts span { color:var(--ink-3); font-size:11px; cursor:pointer; }
+  .pickbox .pi .acts span:hover { color:var(--rubric); }
+  .pickbox .lcount { color:var(--ink-3); font:400 11px/1.4 var(--mono); padding-top:6px; border-top:1px solid var(--rule); }
+  .pickbox .none { color:var(--ink-3); font:400 12.5px/1.5 var(--serif); padding:10px 8px; }
+  /* sesiones arriba: últimas 4 + «ver todas» */
+  .s.more { color:var(--accent); }
+  /* árbol a la derecha */
+  aside.right { grid-area:tree; border-right:0; border-left:1px solid var(--rule); }
+  @media (max-width:1250px) { aside.right { display:none; } }
   .sec { display:flex; flex-direction:column; min-height:0; flex:none; overflow:hidden; }
   .sec + .sec { border-top:1px solid var(--rule); }
   .sec h2 { font:400 10.5px/1.35 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
@@ -380,6 +406,7 @@
   .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
   .del.ask .no { color:var(--ink-2); cursor:pointer; }
   .del.ask .yes:hover, .del.ask .no:hover { text-decoration:underline; text-underline-offset:.18em; }
+  @media (max-width:1250px) { body { grid-template-columns:var(--side) 1fr; grid-template-areas:"top top" "side main"; } }
   @media (max-width:900px) { body { grid-template-columns:1fr; grid-template-areas:"top" "main"; } aside { display:none; } #log, form { padding-left:20px; padding-right:20px; } }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { transition:none !important; animation:none !important; } }
 </style>
@@ -405,9 +432,9 @@
   </div>
 </header>
 <aside>
-  <section class="sec grow open" data-sec="tree">
-    <h2><span class="caret">▾</span>Archivos<button class="h2act" id="tree-reload" title="recargar el árbol">↻</button></h2>
-    <div class="body" id="tree"></div>
+  <section class="sec open" data-sec="sessions">
+    <h2 title="las últimas conversaciones de este workspace; «ver todas» abre el buscador"><span class="caret">▾</span>Sesiones<span class="cnt" id="sessCount"></span><button class="h2act" id="sessAll" title="ver todas y buscar">⌕</button></h2>
+    <div class="body" id="sessions"></div>
   </section>
   <section class="sec" data-sec="procs">
     <h2 title="procesos que el agente arranca con la tool process"><span class="caret">▸</span>Procesos<span class="cnt" id="procCount"></span></h2>
@@ -445,9 +472,11 @@
     <h2 title="tareas programadas (cada 6 h, todos los días a las 9, lunes 8:30…): una lámpara, un comando o una corrida del agente. Las ejecuta el proceso residente: lampson --daemon start, o esta web abierta"><span class="caret">▸</span>Programadas<span class="cnt" id="schedCount"></span><button class="h2act" id="schedAddBtn" title="programar una tarea">+</button></h2>
     <div class="body" id="schedBox"></div>
   </section>
-  <section class="sec open" data-sec="sessions">
-    <h2><span class="caret">▾</span>Sesiones<span class="cnt" id="sessCount"></span></h2>
-    <div class="body" id="sessions"></div>
+</aside>
+<aside class="right">
+  <section class="sec grow open" data-sec="tree">
+    <h2><span class="caret">▾</span>Archivos<button class="h2act" id="tree-reload" title="recargar el árbol">↻</button></h2>
+    <div class="body" id="tree"></div>
   </section>
 </aside>
 <main>
@@ -558,6 +587,14 @@
         <p><button class="primary" id="cfgProvider">Abrir proveedor y modelo</button></p>
       </div>
       <div class="btns"><button class="primary" id="cfgSave">Guardar</button><button id="cfgCancel">Cerrar</button><span class="err" id="cfgErr"></span></div>
+    </div>
+  </div>
+  <div id="pickModal" class="modal" style="display:none">
+    <div class="box pickbox">
+      <div class="lhead"><span class="eyebrow" style="margin:0" id="pickEyebrow">buscar</span><h3 id="pickTitle">Buscar</h3><span class="ds" id="pickSub"></span><span class="spacer"></span><button class="lghost" id="pickClose" title="cerrar (Esc)">✕</button></div>
+      <input id="pickSearch" spellcheck="false" autocomplete="off" placeholder="buscar…">
+      <div id="pickItems"></div>
+      <div class="lcount" id="pickCount"></div>
     </div>
   </div>
   <div id="setup" class="modal" style="display:none">
@@ -1265,6 +1302,58 @@ $('#cfgSave').onclick = async () => {
 };
 if (location.hash === '#config') setTimeout(() => openCfg('general'), 400);
 
+// ---- buscador modal reutilizable ----
+// pickOpen({eyebrow, title, placeholder, load(q) → [rows], render(row, q) → html, onPick(row), actions: [{label, title, run(row)}]})
+// Hoy lo usan las sesiones («ver todas»); mañana tareas, procesos, MCPs… con el mismo componente. Búsqueda con
+// debounce, ↑↓/Enter, Esc/✕/clic afuera cierran, el texto buscado se resalta en el snippet.
+let pick = null, pickRows = [], pickSel = 0, pickTimer = null;
+function pickHl(s, q) { const t = esc(s); if (!q) return t; const i = t.toLowerCase().indexOf(q.toLowerCase()); return i < 0 ? t : t.slice(0, i) + '<mark>' + t.slice(i, i + q.length) + '</mark>' + t.slice(i + q.length); }
+async function pickRefresh() {
+  if (!pick) return;
+  const q = $('#pickSearch').value.trim();
+  let rows; try { rows = await pick.load(q); } catch (e) { rows = []; }
+  if (!pick) return; pickRows = rows; pickSel = 0;
+  const box = $('#pickItems'); box.innerHTML = '';
+  if (!rows.length) box.innerHTML = `<div class="none">${q ? 'nada coincide con «' + esc(q) + '»' : 'nada todavía'}</div>`;
+  rows.forEach((r, i) => {
+    const d = document.createElement('div'); d.className = 'pi' + (i === pickSel ? ' sel' : ''); d.innerHTML = pick.render(r, q);
+    if (pick.actions && pick.actions.length) { const a = document.createElement('span'); a.className = 'acts'; for (const act of pick.actions) { const s = document.createElement('span'); s.textContent = act.label; s.title = act.title || ''; s.onclick = (ev) => { ev.stopPropagation(); act.run(r, d); }; a.appendChild(s); } d.appendChild(a); }
+    d.onclick = () => { pickClose(); pick && pick.onPick(r); }; d.onmouseenter = () => { pickSel = i; box.querySelectorAll('.pi').forEach((x, j) => x.classList.toggle('sel', j === i)); };
+    box.appendChild(d);
+  });
+  $('#pickCount').textContent = (pick.count ? pick.count(rows, q) : `${rows.length}`) + (q ? '' : '') ;
+}
+function pickOpen(spec) {
+  pick = spec; $('#pickEyebrow').textContent = spec.eyebrow || 'buscar'; $('#pickTitle').textContent = spec.title || 'Buscar'; $('#pickSub').textContent = spec.sub || '';
+  $('#pickSearch').value = ''; $('#pickSearch').placeholder = spec.placeholder || 'buscar…'; $('#pickItems').innerHTML = ''; $('#pickCount').textContent = '';
+  $('#pickModal').style.display = 'flex'; $('#pickSearch').focus(); pickRefresh();
+}
+function pickClose() { const p = pick; pick = null; $('#pickModal').style.display = 'none'; if (p && p.onClose) p.onClose(); }
+$('#pickClose').onclick = pickClose;
+$('#pickModal').addEventListener('click', (e) => { if (e.target === $('#pickModal')) pickClose(); });
+$('#pickSearch').addEventListener('input', () => { clearTimeout(pickTimer); pickTimer = setTimeout(pickRefresh, 220); });
+$('#pickSearch').addEventListener('keydown', (e) => {
+  if (!pickRows.length) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); pickSel = (pickSel + (e.key === 'ArrowDown' ? 1 : pickRows.length - 1)) % pickRows.length; const items = $('#pickItems').querySelectorAll('.pi'); items.forEach((x, j) => x.classList.toggle('sel', j === pickSel)); items[pickSel] && items[pickSel].scrollIntoView({ block: 'nearest' }); }
+  else if (e.key === 'Enter') { e.preventDefault(); const r = pickRows[pickSel]; if (r) { const p = pick; pickClose(); p.onPick(r); } }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pick) pickClose(); });
+
+// sesiones: el buscador lee títulos Y contenido (GET /api/sessions/search?q=)
+function openSessionsPicker() {
+  pickOpen({
+    eyebrow: 'sesiones', title: 'Todas las sesiones', sub: 'de este workspace', placeholder: 'buscar en títulos y en lo que se habló… (↑↓ Enter)',
+    load: async (q) => (await (await fetch('/api/sessions/search?q=' + encodeURIComponent(q) + '&limit=300')).json()).sessions || [],
+    render: (s, q) => `<span class="id">${esc(s.id.slice(-6))}</span><span class="ttl">${pickHl(s.title || '(sin título)', q)}</span><span class="when">${esc((s.updated || '').replace('T', ' ').replace('Z', ''))}</span>` + (s.snippet ? `<span class="snip">${pickHl(s.snippet, q)}</span>` : ''),
+    onPick: (s) => open(s.id),
+    count: (rows, q) => q ? `${rows.length} coincidencia${rows.length === 1 ? '' : 's'}` : `${rows.length} sesión${rows.length === 1 ? '' : 'es'}`,
+    actions: [
+      { label: '≡', title: 'traza', run: (s) => { pickClose(); openTrace(s.id); } },
+      { label: '✕', title: 'borrar', run: async (s, d) => { if (!d.dataset.ask) { d.dataset.ask = '1'; const a = d.querySelector('.acts'); a.innerHTML = '<span style="color:var(--rubric)">¿borrar? sí</span><span>no</span>'; a.style.visibility = 'visible'; a.children[0].onclick = async (ev) => { ev.stopPropagation(); await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); pickRefresh(); }; a.children[1].onclick = (ev) => { ev.stopPropagation(); pickRefresh(); }; } } }
+    ]
+  });
+}
+
 // ---- lámparas (plugins de tools): pill en la barra superior + modal lista/detalle ----
 // Pensado para muchas lámparas: buscador (nombre, descripción, tools), lista compacta a la izquierda, la
 // elegida a la derecha con su switch, sus tools (formulario generado del schema) y acciones. La explicación
@@ -1398,13 +1487,16 @@ async function loadSessions() {
   const box = $('#sessions'); box.innerHTML = '';
   $('#sessCount').textContent = r.sessions.length || '';
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
-  for (const s of r.sessions) {
+  const shown = r.sessions.slice(0, 4);
+  for (const s of shown) {
     const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
     d.querySelector('.tr').onclick = (ev) => { ev.stopPropagation(); openTrace(s.id); };
     d.querySelector('.del:not(.tr)').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del:not(.tr)'), '¿borrar?', async () => { await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); }); };
     box.appendChild(d);
   }
+  if (r.sessions.length > shown.length) { const m = document.createElement('div'); m.className = 's more'; m.innerHTML = `<span class="title">ver todas (${r.sessions.length}) y buscar…</span>`; m.title = 'buscar en títulos y en el contenido de las conversaciones'; m.onclick = openSessionsPicker; box.appendChild(m); }
 }
+$('#sessAll').onclick = (e) => { e.stopPropagation(); openSessionsPicker(); };
 async function open(id) {
   session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log'); loadTodo();
   const r = await fetch('/api/sessions/' + id); if (!r.ok) { session = ''; empty(); return loadSessions(); }

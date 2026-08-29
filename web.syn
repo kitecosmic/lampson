@@ -136,6 +136,12 @@ serve on 8080
     route "GET /api/sessions" requires auth
         give {"sessions": session.list()}
 
+    -- buscador de sesiones (modal «ver todas»): ?q=texto busca en títulos y mensajes de este proyecto
+    route "GET /api/sessions/search" requires auth
+        let q be when contains(query, "q") then text(query.q) otherwise ""
+        let n be when contains(query, "limit") then floor(number(query.limit)) otherwise 200
+        give {"q": q, "sessions": session.search(q, n)}
+
     route "GET /api/sessions/:id" requires auth
         when not session.exists(params.id)
             give not_found("session not found")
