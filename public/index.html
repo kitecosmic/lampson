@@ -47,7 +47,7 @@
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body { margin:0; background:var(--paper); color:var(--ink); font:400 14.5px/1.6 var(--serif); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-    display:grid; grid-template-rows:auto 1fr; grid-template-columns:var(--side) 1fr var(--side); grid-template-areas:"top top top" "side main tree"; }
+    display:grid; grid-template-rows:auto 1fr; grid-template-columns:var(--side-l) 1fr var(--side-r); grid-template-areas:"top top top" "side main tree"; }
   ::selection { background:var(--sel); }
   :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:1px; }
   button, select, textarea { font-family:inherit; }
@@ -171,32 +171,41 @@
   .ctab.on { color:var(--accent); border-bottom-color:var(--accent); }
   .cfgbox label .ds { display:block; color:var(--ink-3); font:400 11.5px/1.4 var(--serif); margin-top:2px; }
   .cfgbox input[disabled] { opacity:.55; }
-  /* modal buscador reutilizable (sesiones hoy; tareas, procesos, mcp… mañana) */
-  .modal .box.pickbox { width:min(760px, 94vw); height:min(640px, 88vh); display:flex; flex-direction:column; padding:14px 18px 12px; }
-  .pickbox .lhead { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
-  .pickbox .lhead h3 { margin:0; }
-  .pickbox .lhead .ds { color:var(--ink-3); font:400 11.5px/1 var(--mono); }
-  .modal .box.pickbox #pickSearch { flex:none; height:auto; font:400 13px/1.4 var(--mono); background:transparent; color:var(--ink); border:1px solid var(--rule-2); border-radius:var(--r); padding:8px 10px; width:100%; margin:0 0 8px; box-sizing:border-box; }
-  .pickbox #pickItems { flex:1; min-height:0; overflow:auto; }
-  .pickbox .pi { display:grid; grid-template-columns:auto 1fr auto; gap:2px 10px; align-items:baseline; padding:7px 8px; border-radius:var(--r); cursor:pointer; border-left:2px solid transparent; }
-  .pickbox .pi:hover { background:var(--paper-2, rgba(127,127,127,.1)); }
-  .pickbox .pi.sel { background:var(--paper-2, rgba(127,127,127,.12)); border-left-color:var(--accent); }
-  .pickbox .pi .id { color:var(--ink-3); font:400 11px/1.4 var(--mono); }
-  .pickbox .pi .ttl { color:var(--ink); font:400 13.5px/1.4 var(--serif); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .pickbox .pi .when { color:var(--ink-3); font:400 11px/1.4 var(--mono); white-space:nowrap; }
-  .pickbox .pi .snip { grid-column:2 / span 2; color:var(--ink-2); font:400 12px/1.4 var(--serif); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .pickbox .pi mark { background:transparent; color:var(--accent); font-weight:600; }
-  .pickbox .pi .acts { grid-column:3; display:inline-flex; gap:6px; visibility:hidden; }
-  .pickbox .pi:hover .acts { visibility:visible; }
-  .pickbox .pi .acts span { color:var(--ink-3); font-size:11px; cursor:pointer; }
-  .pickbox .pi .acts span:hover { color:var(--rubric); }
-  .pickbox .lcount { color:var(--ink-3); font:400 11px/1.4 var(--mono); padding-top:6px; border-top:1px solid var(--rule); }
-  .pickbox .none { color:var(--ink-3); font:400 12.5px/1.5 var(--serif); padding:10px 8px; }
+  /* buscador modal reutilizable: mismo tamaño y forma que el de lámparas (lista izquierda, detalle derecha) */
+  .lampsbox.pickbox .lbody { grid-template-columns:380px minmax(0,1fr); }
+  .lampsbox.pickbox #pickItems { flex:1; overflow:auto; min-height:0; }
+  .lampsbox.pickbox .li { grid-template-columns:1fr; }
+  .lampsbox.pickbox .li .nm { font:400 13px/1.35 var(--serif); font-weight:400; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lampsbox.pickbox .li .meta { display:flex; gap:8px; }
+  .lampsbox.pickbox .li .snip { color:var(--ink-2); font:400 12px/1.4 var(--serif); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lampsbox.pickbox mark { background:transparent; color:var(--accent); font-weight:600; }
+  .lampsbox.pickbox .dmsgs { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
+  .lampsbox.pickbox .dmsg { border-left:2px solid var(--rule-2); padding:2px 0 2px 10px; font:400 12.5px/1.5 var(--serif); color:var(--ink-2); white-space:pre-wrap; word-break:break-word; }
+  .lampsbox.pickbox .dmsg.dm-user { border-left-color:var(--accent); color:var(--ink); }
+  .lampsbox.pickbox .dmsg .who { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--ink-3); display:block; margin-bottom:3px; }
+  .lampsbox.pickbox .dacts { display:flex; gap:8px; margin-top:12px; }
+  .lampsbox.pickbox .dacts button { font:400 12px/1 var(--mono); padding:6px 12px; }
+  .lampsbox.pickbox .dfoot .del { margin-left:auto; }
   /* sesiones arriba: últimas 4 + «ver todas» */
   .s.more { color:var(--accent); }
-  /* árbol a la derecha */
+  /* dos sidebars iguales, plegables: cerrado = una barra angosta con un icono */
+  body { --side-l:var(--side); --side-r:var(--side); }
+  body.l-closed { --side-l:40px; }
+  body.r-closed { --side-r:40px; }
+  aside { position:relative; }
   aside.right { grid-area:tree; border-right:0; border-left:1px solid var(--rule); }
-  @media (max-width:1250px) { aside.right { display:none; } }
+  aside .rail { display:none; flex-direction:column; align-items:center; padding-top:10px; gap:8px; }
+  aside .rail button, aside .fold { background:none; border:0; color:var(--ink-3); cursor:pointer; padding:5px; border-radius:var(--r); line-height:0; }
+  aside .rail button:hover, aside .fold:hover { color:var(--ink); background:var(--paper-2, rgba(127,127,127,.12)); }
+  aside .fold { position:absolute; top:7px; z-index:2; }
+  aside:not(.right) .fold { right:6px; }
+  aside.right .fold { right:6px; }
+  aside.right h2 { padding-right:56px; }
+  aside:not(.right) > .sec:first-of-type h2 { padding-right:60px; }
+  aside.closed .sec { display:none; }
+  aside.closed .fold { display:none; }
+  aside.closed .rail { display:flex; }
+  @media (max-width:1250px) { body { grid-template-columns:var(--side-l) 1fr var(--side-r); } }
   .sec { display:flex; flex-direction:column; min-height:0; flex:none; overflow:hidden; }
   .sec + .sec { border-top:1px solid var(--rule); }
   .sec h2 { font:400 10.5px/1.35 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
@@ -328,13 +337,16 @@
   @media (max-width:1400px) { .empty .grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
 
   /* ---- composer ---- */
-  form { padding:12px 40px 12px; border-top:1px solid var(--rule); background:var(--paper); }
+  form { padding:12px 40px 12px; border-top:1px solid var(--rule); background:var(--paper); box-sizing:border-box; width:100%; max-width:100%; min-width:0; }
+  main > div { min-width:0; }
   .composer { background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:10px 10px 8px 14px; transition:border-color .12s, box-shadow .12s; }
   .composer:focus-within { border-color:var(--rule-2); box-shadow:0 0 0 3px var(--accent-bg); }
   textarea { display:block; width:100%; resize:none; min-height:40px; max-height:220px; background:transparent; color:var(--ink); border:0; padding:2px 0; font:400 15px/1.55 var(--serif); }
   textarea::placeholder { color:var(--ink-3); }
   textarea:focus { outline:none; }
-  .crow { display:flex; align-items:center; gap:10px; margin-top:6px; }
+  .crow { display:flex; align-items:center; gap:10px; margin-top:6px; min-width:0; }
+  .crow .tools { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .crow .keys, .crow button { flex:none; }
   /* imágenes pegadas: miniaturas en el composer y en el mensaje */
   .attach { display:flex; gap:8px; flex-wrap:wrap; }
   .attach:not(:empty) { margin:2px 0 8px; }
@@ -406,7 +418,6 @@
   .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
   .del.ask .no { color:var(--ink-2); cursor:pointer; }
   .del.ask .yes:hover, .del.ask .no:hover { text-decoration:underline; text-underline-offset:.18em; }
-  @media (max-width:1250px) { body { grid-template-columns:var(--side) 1fr; grid-template-areas:"top top" "side main"; } }
   @media (max-width:900px) { body { grid-template-columns:1fr; grid-template-areas:"top" "main"; } aside { display:none; } #log, form { padding-left:20px; padding-right:20px; } }
   @media (prefers-reduced-motion:reduce) { *, *::before, *::after { transition:none !important; animation:none !important; } }
 </style>
@@ -432,6 +443,8 @@
   </div>
 </header>
 <aside>
+  <button class="fold" title="plegar este panel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+  <div class="rail"><button title="desplegar el panel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button></div>
   <section class="sec open" data-sec="sessions">
     <h2 title="las últimas conversaciones de este workspace; «ver todas» abre el buscador"><span class="caret">▾</span>Sesiones<span class="cnt" id="sessCount"></span><button class="h2act" id="sessAll" title="ver todas y buscar">⌕</button></h2>
     <div class="body" id="sessions"></div>
@@ -474,6 +487,8 @@
   </section>
 </aside>
 <aside class="right">
+  <button class="fold" title="plegar el árbol de archivos"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+  <div class="rail"><button title="mostrar el árbol de archivos"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button></div>
   <section class="sec grow open" data-sec="tree">
     <h2><span class="caret">▾</span>Archivos<button class="h2act" id="tree-reload" title="recargar el árbol">↻</button></h2>
     <div class="body" id="tree"></div>
@@ -590,11 +605,16 @@
     </div>
   </div>
   <div id="pickModal" class="modal" style="display:none">
-    <div class="box pickbox">
+    <div class="box lampsbox pickbox">
       <div class="lhead"><span class="eyebrow" style="margin:0" id="pickEyebrow">buscar</span><h3 id="pickTitle">Buscar</h3><span class="ds" id="pickSub"></span><span class="spacer"></span><button class="lghost" id="pickClose" title="cerrar (Esc)">✕</button></div>
-      <input id="pickSearch" spellcheck="false" autocomplete="off" placeholder="buscar…">
-      <div id="pickItems"></div>
-      <div class="lcount" id="pickCount"></div>
+      <div class="lbody">
+        <div class="llist">
+          <input id="pickSearch" spellcheck="false" autocomplete="off" placeholder="buscar…">
+          <div id="pickItems"></div>
+          <div class="lcount" id="pickCount"></div>
+        </div>
+        <div class="ldetail" id="pickDetail"></div>
+      </div>
     </div>
   </div>
   <div id="setup" class="modal" style="display:none">
@@ -1302,30 +1322,41 @@ $('#cfgSave').onclick = async () => {
 };
 if (location.hash === '#config') setTimeout(() => openCfg('general'), 400);
 
-// ---- buscador modal reutilizable ----
-// pickOpen({eyebrow, title, placeholder, load(q) → [rows], render(row, q) → html, onPick(row), actions: [{label, title, run(row)}]})
+// ---- buscador modal reutilizable (misma forma que el de lámparas: lista + detalle) ----
+// pickOpen({eyebrow, title, sub, placeholder, load(q) → [rows], render(row, q) → html de la fila,
+//           detail(row, q) → html del panel derecho (async), onPick(row) → abrir, count(rows, q) → texto del pie})
 // Hoy lo usan las sesiones («ver todas»); mañana tareas, procesos, MCPs… con el mismo componente. Búsqueda con
-// debounce, ↑↓/Enter, Esc/✕/clic afuera cierran, el texto buscado se resalta en el snippet.
-let pick = null, pickRows = [], pickSel = 0, pickTimer = null;
+// debounce, ↑↓ mueven la selección (el detalle sigue), Enter abre, Esc/✕/clic afuera cierran.
+let pick = null, pickRows = [], pickSel = 0, pickTimer = null, pickDetailSeq = 0;
 function pickHl(s, q) { const t = esc(s); if (!q) return t; const i = t.toLowerCase().indexOf(q.toLowerCase()); return i < 0 ? t : t.slice(0, i) + '<mark>' + t.slice(i, i + q.length) + '</mark>' + t.slice(i + q.length); }
+async function pickShowDetail() {
+  if (!pick) return; const box = $('#pickDetail'); const r = pickRows[pickSel];
+  if (!r) { box.innerHTML = `<div class="none">${pickRows.length ? '' : 'nada que mostrar'}</div>`; return; }
+  const seq = ++pickDetailSeq;
+  if (!pick.detail) { box.innerHTML = ''; return; }
+  let html; try { html = await pick.detail(r, $('#pickSearch').value.trim()); } catch (e) { html = `<div class="none">${esc(String(e.message || e))}</div>`; }
+  if (seq !== pickDetailSeq || !pick) return;
+  box.innerHTML = html; if (pick.wire) pick.wire(r, box);
+}
+function pickSelect(i) { pickSel = i; $('#pickItems').querySelectorAll('.li').forEach((x, j) => x.classList.toggle('sel', j === i)); pickShowDetail(); }
 async function pickRefresh() {
   if (!pick) return;
   const q = $('#pickSearch').value.trim();
   let rows; try { rows = await pick.load(q); } catch (e) { rows = []; }
   if (!pick) return; pickRows = rows; pickSel = 0;
   const box = $('#pickItems'); box.innerHTML = '';
-  if (!rows.length) box.innerHTML = `<div class="none">${q ? 'nada coincide con «' + esc(q) + '»' : 'nada todavía'}</div>`;
+  if (!rows.length) box.innerHTML = `<div class="none" style="padding:8px;color:var(--ink-3);font:400 12px/1.5 var(--serif)">${q ? 'nada coincide con «' + esc(q) + '»' : 'nada todavía'}</div>`;
   rows.forEach((r, i) => {
-    const d = document.createElement('div'); d.className = 'pi' + (i === pickSel ? ' sel' : ''); d.innerHTML = pick.render(r, q);
-    if (pick.actions && pick.actions.length) { const a = document.createElement('span'); a.className = 'acts'; for (const act of pick.actions) { const s = document.createElement('span'); s.textContent = act.label; s.title = act.title || ''; s.onclick = (ev) => { ev.stopPropagation(); act.run(r, d); }; a.appendChild(s); } d.appendChild(a); }
-    d.onclick = () => { pickClose(); pick && pick.onPick(r); }; d.onmouseenter = () => { pickSel = i; box.querySelectorAll('.pi').forEach((x, j) => x.classList.toggle('sel', j === i)); };
+    const d = document.createElement('div'); d.className = 'li' + (i === pickSel ? ' sel' : ''); d.innerHTML = pick.render(r, q);
+    d.onclick = () => pickSelect(i); d.ondblclick = () => { const p = pick; pickClose(); p.onPick(r); };
     box.appendChild(d);
   });
-  $('#pickCount').textContent = (pick.count ? pick.count(rows, q) : `${rows.length}`) + (q ? '' : '') ;
+  $('#pickCount').textContent = pick.count ? pick.count(rows, q) : `${rows.length}`;
+  pickShowDetail();
 }
 function pickOpen(spec) {
   pick = spec; $('#pickEyebrow').textContent = spec.eyebrow || 'buscar'; $('#pickTitle').textContent = spec.title || 'Buscar'; $('#pickSub').textContent = spec.sub || '';
-  $('#pickSearch').value = ''; $('#pickSearch').placeholder = spec.placeholder || 'buscar…'; $('#pickItems').innerHTML = ''; $('#pickCount').textContent = '';
+  $('#pickSearch').value = ''; $('#pickSearch').placeholder = spec.placeholder || 'buscar…'; $('#pickItems').innerHTML = ''; $('#pickDetail').innerHTML = ''; $('#pickCount').textContent = '';
   $('#pickModal').style.display = 'flex'; $('#pickSearch').focus(); pickRefresh();
 }
 function pickClose() { const p = pick; pick = null; $('#pickModal').style.display = 'none'; if (p && p.onClose) p.onClose(); }
@@ -1334,24 +1365,49 @@ $('#pickModal').addEventListener('click', (e) => { if (e.target === $('#pickModa
 $('#pickSearch').addEventListener('input', () => { clearTimeout(pickTimer); pickTimer = setTimeout(pickRefresh, 220); });
 $('#pickSearch').addEventListener('keydown', (e) => {
   if (!pickRows.length) return;
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); pickSel = (pickSel + (e.key === 'ArrowDown' ? 1 : pickRows.length - 1)) % pickRows.length; const items = $('#pickItems').querySelectorAll('.pi'); items.forEach((x, j) => x.classList.toggle('sel', j === pickSel)); items[pickSel] && items[pickSel].scrollIntoView({ block: 'nearest' }); }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); pickSelect((pickSel + (e.key === 'ArrowDown' ? 1 : pickRows.length - 1)) % pickRows.length); const it = $('#pickItems').querySelectorAll('.li')[pickSel]; it && it.scrollIntoView({ block: 'nearest' }); }
   else if (e.key === 'Enter') { e.preventDefault(); const r = pickRows[pickSel]; if (r) { const p = pick; pickClose(); p.onPick(r); } }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pick) pickClose(); });
 
-// sesiones: el buscador lee títulos Y contenido (GET /api/sessions/search?q=)
+// sesiones: busca en títulos Y contenido (GET /api/sessions/search?q=); el detalle muestra la conversación resumida
 function openSessionsPicker() {
   pickOpen({
-    eyebrow: 'sesiones', title: 'Todas las sesiones', sub: 'de este workspace', placeholder: 'buscar en títulos y en lo que se habló… (↑↓ Enter)',
+    eyebrow: 'sesiones', title: 'Todas las sesiones', sub: 'de este workspace', placeholder: 'buscar en títulos y en lo que se habló… (↑↓ · Enter abre)',
     load: async (q) => (await (await fetch('/api/sessions/search?q=' + encodeURIComponent(q) + '&limit=300')).json()).sessions || [],
-    render: (s, q) => `<span class="id">${esc(s.id.slice(-6))}</span><span class="ttl">${pickHl(s.title || '(sin título)', q)}</span><span class="when">${esc((s.updated || '').replace('T', ' ').replace('Z', ''))}</span>` + (s.snippet ? `<span class="snip">${pickHl(s.snippet, q)}</span>` : ''),
+    render: (s, q) => `<div><div class="nm">${pickHl(s.title || '(sin título)', q)}</div><div class="meta"><span>${esc(s.id)}</span><span>${esc((s.updated || '').replace('T', ' ').replace('Z', ''))}</span></div>` + (s.snippet ? `<div class="snip">${pickHl(s.snippet, q)}</div>` : '') + '</div>',
+    detail: async (s, q) => {
+      const d = await (await fetch('/api/sessions/' + encodeURIComponent(s.id))).json();
+      const msgs = (d.messages || []).filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim() && !/^\[harness\]|^\[Context compacted/.test(m.content)).slice(0, 14);
+      const steps = (d.messages || []).filter(m => m.role === 'tool').length;
+      return `<div class="dhead"><span class="nm" style="font:600 16px/1.3 var(--serif)">${esc(s.title || '(sin título)')}</span><span class="meta">${esc(s.id)} · ${esc((d.updated || '').replace('T', ' ').replace('Z', ''))} · ${(d.messages || []).length} mensajes · ${steps} tools</span></div>`
+        + `<div class="dacts"><button class="primary" data-act="open">Abrir</button><button data-act="trace">≡ Traza</button></div>`
+        + `<div class="dmsgs">${msgs.map(m => `<div class="dmsg dm-${m.role}"><span class="who">${m.role === 'user' ? 'vos' : 'agente'}</span>${pickHl(m.content.length > 500 ? m.content.slice(0, 500) + '…' : m.content, q)}</div>`).join('')}${(d.messages || []).length > msgs.length ? '<div class="none">… (abrila para ver todo)</div>' : ''}</div>`
+        + `<div class="dfoot"><span>.lampson/sessions/${esc(s.id)}.json</span><span class="del">borrar</span></div>`;
+    },
+    wire: (s, box) => {
+      box.querySelector('[data-act="open"]').onclick = () => { pickClose(); open(s.id); };
+      box.querySelector('[data-act="trace"]').onclick = () => { pickClose(); openTrace(s.id); };
+      const del = box.querySelector('.dfoot .del');
+      del.onclick = () => inlineConfirm(del, `¿borrar ${s.id}?`, async () => { await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); pickRefresh(); });
+    },
     onPick: (s) => open(s.id),
-    count: (rows, q) => q ? `${rows.length} coincidencia${rows.length === 1 ? '' : 's'}` : `${rows.length} sesión${rows.length === 1 ? '' : 'es'}`,
-    actions: [
-      { label: '≡', title: 'traza', run: (s) => { pickClose(); openTrace(s.id); } },
-      { label: '✕', title: 'borrar', run: async (s, d) => { if (!d.dataset.ask) { d.dataset.ask = '1'; const a = d.querySelector('.acts'); a.innerHTML = '<span style="color:var(--rubric)">¿borrar? sí</span><span>no</span>'; a.style.visibility = 'visible'; a.children[0].onclick = async (ev) => { ev.stopPropagation(); await fetch('/api/sessions/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: s.id }) }); if (s.id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } loadSessions(); pickRefresh(); }; a.children[1].onclick = (ev) => { ev.stopPropagation(); pickRefresh(); }; } } }
-    ]
+    count: (rows, q) => q ? `${rows.length} coincidencia${rows.length === 1 ? '' : 's'}` : `${rows.length} sesión${rows.length === 1 ? '' : 'es'}`
   });
+}
+
+// ---- sidebars plegables: cerrado = barra angosta con su icono; preferencia por lado en localStorage ----
+function sideSet(which, closed) {
+  document.body.classList.toggle(which + '-closed', closed);
+  const a = document.querySelector(which === 'l' ? 'aside:not(.right)' : 'aside.right'); if (a) a.classList.toggle('closed', closed);
+  try { localStorage.setItem('lampson.side.' + which, closed ? '1' : '0'); } catch (e) {}
+}
+for (const which of ['l', 'r']) {
+  const a = document.querySelector(which === 'l' ? 'aside:not(.right)' : 'aside.right'); if (!a) continue;
+  a.querySelector('.fold').onclick = () => sideSet(which, true);
+  a.querySelector('.rail button').onclick = () => sideSet(which, false);
+  let pref = null; try { pref = localStorage.getItem('lampson.side.' + which); } catch (e) {}
+  if (pref === '1') sideSet(which, true);
 }
 
 // ---- lámparas (plugins de tools): pill en la barra superior + modal lista/detalle ----
