@@ -3,7 +3,8 @@ let procOpen = null, procTimer = null;
 async function loadPorts() {
   let r; try { r = await (await fetch(BASE + '/api/ports')).json(); } catch (e) { return; }
   const box = $('#ports'); box.innerHTML = '';
-  const list = (r.ports || []).filter(p => p.port !== 8080 || p.name !== 'synsema.exe');
+  // los procesos de lampson (hub :8080 y los workspaces :808N) no son «servidores del proyecto»
+  const list = (r.ports || []).filter(p => !(p.name === 'synsema.exe' || p.name === 'synsema') || !/\b(web|hub)\.syn\b/.test(p.command || '') && p.port !== 8080);
   $('#portCount').textContent = list.length || ''; autoSec('ports', list.length > 0);
   if (!list.length) { box.innerHTML = '<div class="p none">ninguno</div>'; return; }
   for (const p of list) {

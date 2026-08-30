@@ -44,40 +44,54 @@ function openWorkspaces(selectSlug) {
 function wsNewForm() {
   return `<div class="dhead"><span class="nm serif">Nuevo workspace</span></div><div class="dform">
     <p class="lead">Un workspace es una carpeta de tu disco: el agente solo puede tocar lo que hay adentro. Corre en su propio proceso, con sus sesiones, tareas programadas, MCP y lámparas.</p>
-    <div class="dacts" style="margin-top:0;align-items:center"><button class="primary" data-pick>Elegir carpeta…</button><span class="ds" data-pickhint style="margin:0">abre el diálogo de carpetas de tu sistema</span></div>
-    <label style="margin-top:14px">ruta <input name="path" spellcheck="false" autocomplete="off" placeholder="C:\\proyectos\\mi-app  ·  /home/yo/proyectos/mi-app"></label>
-    <div data-browser style="display:none"><div class="dcap" data-here></div><div class="bitems" data-dirs style="max-height:32vh;border:1px solid var(--rule);border-radius:var(--r);padding:4px"></div></div>
-    <div class="pfoot"><button class="primary" data-go>Crear y abrir</button><button data-browse>explorar en el servidor</button><span class="derr"></span></div></div>`;
+    <div class="pickrow"><button class="primary" data-pick>Elegir carpeta…</button><span class="ds">se abre el diálogo de carpetas de tu sistema · <a href="#" data-browse>o explorá desde acá</a></span></div>
+    <div class="chosen" data-chosen style="display:none"><span class="lk">carpeta</span><code data-chosen-path></code><span class="del" data-clear title="elegir otra">✕</span></div>
+    <div data-browser class="wsbrowser" style="display:none">
+      <div class="bhead"><span class="ds" data-here></span><input name="path" spellcheck="false" autocomplete="off" placeholder="o pegá una ruta y Enter"></div>
+      <div class="bitems" data-dirs></div>
+      <div class="bfoot"><button data-use>Usar esta carpeta</button></div>
+    </div>
+    <div class="pfoot" data-go-row style="display:none;justify-content:flex-end"><span class="derr" style="margin:0 auto 0 0"></span><button class="primary" data-go>Crear y abrir</button></div>
+    <div class="derr" data-err2></div></div>`;
 }
-function wsNewWire(box, err) {
+function wsNewWire(box, err0) {
+  const chosenBox = box.querySelector('[data-chosen]'), goRow = box.querySelector('[data-go-row]'), browser = box.querySelector('[data-browser]');
   const f = n => box.querySelector(`[name="${n}"]`);
-  const browser = box.querySelector('[data-browser]');
+  const err = (m) => { const e = goRow.style.display === 'none' ? box.querySelector('[data-err2]') : goRow.querySelector('.derr'); box.querySelectorAll('.derr').forEach(x => x.textContent = ''); if (e) e.textContent = m || ''; };
+  let chosen = '';
+  const choose = (p) => { chosen = (p || '').trim(); chosenBox.style.display = chosen ? '' : 'none'; goRow.style.display = chosen ? 'flex' : 'none'; box.querySelector('[data-chosen-path]').textContent = chosen; if (chosen) { browser.style.display = 'none'; err(''); } };
+  let here = '';
   const showDir = async (p) => {
+    err('');
     const r = await (await fetch('/api/workspaces/browse?path=' + encodeURIComponent(p || ''))).json();
     browser.style.display = '';
-    box.querySelector('[data-here]').textContent = r.path + (r.error ? ' — ' + r.error : '');
-    f('path').value = r.path || '';
+    here = r.path || ''; box.querySelector('[data-here]').textContent = here + (r.error ? ' — ' + r.error : ''); f('path').value = '';
     const list = box.querySelector('[data-dirs]'); list.innerHTML = '';
-    const up = document.createElement('div'); up.className = 'li nodot'; up.innerHTML = '<div><div class="nm">..</div></div>'; up.onclick = () => showDir(r.parent); list.appendChild(up);
-    for (const d of (r.dirs || [])) { const it = document.createElement('div'); it.className = 'li nodot'; it.innerHTML = `<div><div class="nm" style="font-weight:400">${esc(d)}/</div></div>`; it.onclick = () => showDir(r.path.replace(/[\\/]$/, '') + (r.path.includes('\\') ? '\\' : '/') + d); list.appendChild(it); }
+    const up = document.createElement('div'); up.className = 'li nodot'; up.innerHTML = '<div><div class="nm">..</div><div class="meta">subir un nivel</div></div>'; up.onclick = () => showDir(r.parent); list.appendChild(up);
+    for (const d of (r.dirs || [])) { const it = document.createElement('div'); it.className = 'li nodot'; it.innerHTML = `<div><div class="nm" style="font-weight:400">${esc(d)}/</div></div>`; it.onclick = () => showDir(here.replace(/[\\/]$/, '') + (here.includes('\\') ? '\\' : '/') + d); list.appendChild(it); }
   };
-  box.querySelector('[data-browse]').onclick = () => showDir(f('path').value.trim());
+  box.querySelector('[data-browse]').onclick = (e) => { e.preventDefault(); showDir(chosen || ''); };
+  box.querySelector('[data-use]').onclick = () => choose(here);
+  f('path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = f('path').value.trim(); if (v) showDir(v); } });
+  box.querySelector('[data-clear]').onclick = () => choose('');
   box.querySelector('[data-pick]').onclick = async () => {
-    err('esperando el diálogo de carpetas… (si no aparece, mirá la barra de tareas o usá «explorar en el servidor»)');
+    err('esperando el diálogo de carpetas… (si no lo ves, mirá la barra de tareas)');
     const r = await api('/api/workspaces/pick', {});
-    if (!r.data.native) { err(''); box.querySelector('[data-pickhint]').textContent = 'no hay diálogo en este equipo (VPS): usá el explorador'; showDir(''); return; }
-    err(''); if (r.data.path) f('path').value = r.data.path;
+    if (!r.ok) { err('esta página no es el hub: abrí ' + location.protocol + '//' + location.hostname + ':8080/'); return; }
+    if (!r.data.native) { err('no hay diálogo en este equipo (VPS): explorá desde acá'); showDir(''); return; }
+    err(''); if (r.data.path) choose(r.data.path);
   };
   box.querySelector('[data-go]').onclick = async () => {
-    const path = f('path').value.trim(); if (!path) { err('elegí una carpeta'); return; }
+    if (!chosen) { err('elegí una carpeta'); return; }
     err('creando y arrancando… (el hub se reinicia un instante)');
-    const r = await api('/api/workspaces', { path });
+    const r = await api('/api/workspaces', { path: chosen });
     if (!r.ok) { err(r.data.error || ('error ' + r.status)); return; }
-    // el hub se regenera con la ruta nueva y se reinicia (--watch): esperar a que vuelva y navegar
+    // el hub se regenera con la ruta nueva y se reinicia: esperar a que vuelva y navegar
     const url = r.data.url; let tries = 0;
-    const poll = async () => { tries++; try { const h = await fetch(BASE + '/api/hub'); if (h.ok && tries > 2) { location.href = url; return; } } catch (e) {} if (tries < 40) setTimeout(poll, 500); else err('el hub no volvió: abrí ' + url + ' a mano'); };
+    const poll = async () => { tries++; try { const h = await fetch('/api/hub'); if (h.ok && tries > 2) { location.href = url; return; } } catch (e) {} if (tries < 40) setTimeout(poll, 500); else err('el hub no volvió: abrí ' + url + ' a mano'); };
     setTimeout(poll, 1200);
   };
-  f('path').focus();
 }
-if ($('#wsPill')) { $('#wsPill').onclick = () => openWorkspaces(); paintWorkspacePill(); }
+// standalone (abierto por el puerto del workspace, no por el hub): la pill lleva al hub
+const HUB_URL = (location.port && location.port !== '8080') ? location.protocol + '//' + location.hostname + ':8080/' : '';
+if ($('#wsPill')) { if (HUB_URL) { const pill = $('#wsPill'); pill.style.display = ''; pill.textContent = 'workspaces ↗'; pill.title = 'esta pestaña es el proceso del workspace; los workspaces se gestionan en el hub'; pill.onclick = () => window.open(HUB_URL, '_blank'); } else { $('#wsPill').onclick = () => openWorkspaces(); paintWorkspacePill(); } }
