@@ -3,7 +3,7 @@ name: synsema
 description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, live processes / pseudo-terminals, and the runtime traps that cost hours. Load before touching any .syn file.
 ---
 
-# Synsema quick reference (v0.6.11)
+# Synsema quick reference (v0.6.12)
 
 > Curated 10 KB summary for the agent (the full reference is ~450 KB and lives in the user's editor
 > skill). Kept in sync by hand with each `synsema update`; if `synsema --version` is newer than the
@@ -55,6 +55,9 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   `proc_spawn` in a handler is gone when the handler returns. A process that must outlive requests lives
   inside an `agent` spawned from the handler (own lifecycle; blackboard `share/observe` + `bus_*` are shared
   with handlers). That is how lampson's `process` tool works (`lib/tools/proc.syn`).
+- **Reverse proxy streams (v0.6.12+)**: `proxy to "http://127.0.0.1:N"` passes SSE in real time and tunnels
+  `Upgrade: websocket`; needs `require net("<upstream host>")`; `GET /*path` does not match `/`. **Cron expressions
+  (v0.6.12+)**: `cron_every("0 9 * * mon-fri", task, {"tz": "-03:00"})` — fixed offset, no DST, no persistence.
 - **Own terminal / raw keys (v0.6.11+)**: `let h be term_open({"ctrl_c": "exit"})` → `nothing` without a
   TTY / under `test`/`serve` (fall back to `read_line`); `term_recv(h, secs)` → `{type: "key", key, text,
   ctrl, alt, shift}` (`key` = `"char"|"enter"|"tab"|"backspace"|"up"|…`), `paste`, `resize`, `eof`;
