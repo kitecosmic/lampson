@@ -82,11 +82,14 @@ export task open(source, message, why, timeout_s)
     notify(meta, links)
     give id
 
+-- bajo el hub cada workspace vive en /w/<slug> (LAMPSON_WS); el link público lleva ese prefijo
 task links_for(id, tok)
+    let slug be env("LAMPSON_WS", "")
+    let prefix be when slug == "" then "" otherwise "/w/" + slug
     let base be public_url()
     when base == ""
-        give {"yes": "", "no": "", "path": "/approve/" + id + "/" + tok}
-    give {"yes": base + "/approve/" + id + "/" + tok + "?d=yes", "no": base + "/approve/" + id + "/" + tok + "?d=no", "path": "/approve/" + id + "/" + tok}
+        give {"yes": "", "no": "", "path": prefix + "/approve/" + id + "/" + tok}
+    give {"yes": base + prefix + "/approve/" + id + "/" + tok + "?d=yes", "no": base + prefix + "/approve/" + id + "/" + tok + "?d=no", "path": prefix + "/approve/" + id + "/" + tok}
 
 -- webhook firmado (fire-and-forget)
 task notify(meta, links)

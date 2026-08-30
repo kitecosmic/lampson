@@ -698,3 +698,14 @@ test "schedule: la tool pide humano al programar (incluso en yolo) y describe la
     assert(contains(keys(REG), "schedule"), "registrada")
     assert(contains(agents.PROFILES["build"]["tools"], "schedule"), "build la ve")
     assert(not contains(agents.PROFILES["worker"]["tools"], "schedule"), "worker no")
+
+-- ---------- workspaces (lib/workspaces.syn) ----------
+use "./lib/workspaces.syn" as wsp
+
+test "workspaces: el slug coincide con memo.slug para la misma ruta y normaliza separadores/mayúsculas"
+    let p be "C:\Users\Alguien\Desktop\Mi Proyecto"
+    assert_eq(wsp.norm(p), "c:/users/alguien/desktop/mi proyecto")
+    assert_eq(wsp.norm("/c/Users/x/proj/"), "c:/users/x/proj")
+    assert_eq(wsp.slug_of(p), wsp.slug_of("c:/users/alguien/desktop/mi proyecto/"))
+    assert(starts_with(wsp.slug_of(p), "mi-proyecto-"), wsp.slug_of(p))
+    assert_eq(length(wsp.slug_of(p)), length("mi-proyecto-") + 8)

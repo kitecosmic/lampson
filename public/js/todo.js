@@ -1,6 +1,6 @@
 // todo.js — lista de tareas del agente en la sesión actual (tool todo)
 async function loadTodo() {
-  let r; try { r = await (await fetch('/api/todo' + (session ? '?session=' + encodeURIComponent(session) : ''))).json(); } catch (e) { return; }
+  let r; try { r = await (await fetch(BASE + '/api/todo' + (session ? '?session=' + encodeURIComponent(session) : ''))).json(); } catch (e) { return; }
   const box = $('#todoBox'); box.innerHTML = '';
   const items = r.items || []; const open = items.filter(i => i.status === 'pending' || i.status === 'in_progress').length;
   $('#todoCount').textContent = items.length ? (open ? `${open} · ${items.length}` : `${items.length}`) : ''; autoSec('todo', open > 0);

@@ -1,7 +1,7 @@
 // lsp.js — language servers: sección del panel lateral + vista browse del Panel («+ agregar» = fila con el formulario)
 let lspServers = [], lspPresets = {}, lspGlobalFile = '.lampson/lsp.json';
 async function fetchLsp() {
-  let r; try { r = await (await fetch('/api/lsp')).json(); } catch (e) { return lspServers; }
+  let r; try { r = await (await fetch(BASE + '/api/lsp')).json(); } catch (e) { return lspServers; }
   lspServers = r.servers || []; lspPresets = r.presets || {}; lspGlobalFile = r.global || lspGlobalFile;
   return lspServers;
 }
@@ -53,14 +53,14 @@ function openLsp(selectName) {
               if (!body.name || !body.command || !Object.keys(body.languages).length) { err('falta nombre, comando o extensiones (.ext=languageId)'); return; }
             }
             err('guardando…');
-            const r = await api('/api/lsp/add', body);
+            const r = await api(BASE + '/api/lsp/add', body);
             if (!r.ok) { err(r.data.error || ('error ' + r.status)); return; }
             add('meta', '⌁ ' + esc(r.data.result || 'server agregado')); await loadLsp(); Panel.selectKey(body.name);
           };
           return;
         }
         const del = box.querySelector('.dfoot .del');
-        del.onclick = () => inlineConfirm(del, `¿quitar ${s.name}?`, async () => { const r = await api('/api/lsp/remove', { name: s.name }); if (!r.ok) { err(r.data.error || 'error'); return; } add('meta', '⌁ ' + esc(r.data.result || '')); loadLsp(); });
+        del.onclick = () => inlineConfirm(del, `¿quitar ${s.name}?`, async () => { const r = await api(BASE + '/api/lsp/remove', { name: s.name }); if (!r.ok) { err(r.data.error || 'error'); return; } add('meta', '⌁ ' + esc(r.data.result || '')); loadLsp(); });
       }
     }
   });

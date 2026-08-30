@@ -722,7 +722,17 @@ agent Sched
         otherwise when waited >= 30
             set waited to 0
             try
-                lampson_sched_tick()
+                -- bajo el hub el proceso del workspace (LAMPSON_PORT) ya hace tick: no duplicar corridas
+                let port be env("LAMPSON_PORT", "")
+                let other be false
+                when port != ""
+                    try
+                        let hr be http_get("http://127.0.0.1:" + port + "/w/" + env("LAMPSON_WS", "x") + "/api/health", {"timeout": 2})
+                        set other to hr["ok"]
+                    recover e2
+                        set other to false
+                when not other
+                    lampson_sched_tick()
             recover err
                 print("[lampson] scheduler: " + text(err))
         otherwise

@@ -1,9 +1,12 @@
 -- web.syn — Lampson por URL (chat web con SSE)
 --
---   synsema serve web.syn            → http://127.0.0.1:8080
+--   Un proceso POR WORKSPACE, lanzado por el hub / cli.syn con cwd = .lampson/ws/<slug> (ver lib/workspaces.syn):
+--     synsema serve web.syn --port 808N --bind 127.0.0.1 --env-file <home>/.env
+--   Todas las rutas van bajo /w/:slug/… porque el hub (hub.syn, :8080) proxyea sin quitar el prefijo. El :slug se
+--   ignora (cada proceso es un workspace); LAMPSON_WS trae el propio. Standalone sigue sirviendo en :8080.
 --
--- API:
---   GET  /                       UI (public/index.html)
+-- API (bajo /w/<slug>):
+--   GET  /api/health             {alive, last_used, schedules_on} (hub, terminal)
 --   GET  /api/sessions           lista de sesiones
 --   GET  /api/sessions/:id       historial de una sesión
 --   POST /api/chat               {session?, message, agent?} → SSE con eventos del loop y "done" al final
@@ -37,6 +40,8 @@ require file("memory")
 require file("memory/*")
 require file(".lampson")
 require file(".lampson/*")
+require file.read("public")
+require file.read("public/*")
 
 use "./lib/provider.syn" as provider
 use "./lib/tools.syn" as tools
@@ -133,28 +138,39 @@ serve on 8080
     auth with check_client
     static "./public"
 
-    route "GET /api/sessions" requires auth
+    -- standalone (sin hub: docker, `synsema serve web.syn`): la UI vive igual bajo /w/<slug> (BASE en js/core.js)
+    route "GET /"
+        give redirect("/w/" + (when env("LAMPSON_WS", "") == "" then "local" otherwise env("LAMPSON_WS", "")))
+    route "GET /w/:slug"
+        give html(read_file("public/index.html"))
+
+    -- salud para el hub/supervisor y la terminal (último uso = chat, terminal, eventos o abrir la UI)
+    route "GET /w/:slug/api/health"
+        give {"alive": true, "slug": env("LAMPSON_WS", ""), "last_used": state_get("lampson:last_used", nothing), "schedules_on": length(where(schedule.all(), (t) => t["enabled"] == true)), "version": env("LAMPSON_VERSION", "")}
+
+    route "GET /w/:slug/api/sessions" requires auth
+        state_set("lampson:last_used", now())
         give {"sessions": session.list()}
 
     -- buscador de sesiones (modal «ver todas»): ?q=texto busca en títulos y mensajes de este proyecto
-    route "GET /api/sessions/search" requires auth
+    route "GET /w/:slug/api/sessions/search" requires auth
         let q be when contains(query, "q") then text(query.q) otherwise ""
         let n be when contains(query, "limit") then floor(number(query.limit)) otherwise 200
         give {"q": q, "sessions": session.search(q, n)}
 
-    route "GET /api/sessions/:id" requires auth
+    route "GET /w/:slug/api/sessions/:id" requires auth
         when not session.exists(params.id)
             give not_found("session not found")
         let doc be session.load(params.id)
         let visible be where(doc["messages"], (m) => m["role"] != "system")
         give {"id": doc["id"], "updated": doc["updated"], "meta": doc["meta"], "messages": visible}
 
-    route "GET /api/config" requires auth
+    route "GET /w/:slug/api/config" requires auth
         let cfg be provider.config()
         give {"provider": cfg["provider"], "model": cfg["model"], "wire": cfg["wire"], "vision": provider.supports_vision(cfg), "providers": provider.providers(), "configured": provider.configured(), "permission": lower(env("LAMPSON_PERMISSION", "ask")), "agents": agents.names(), "workspace": env("LAMPSON_WORKSPACE", "./workspace"), "profiles": agents.PROFILES}
 
     -- proveedor/modelo por defecto y API keys → .lampson/config.json (local). La key nunca vuelve al cliente.
-    route "POST /api/settings" requires auth
+    route "POST /w/:slug/api/settings" requires auth
         expect body {provider: text}
         let b be json of request
         let name be lower(text(b["provider"]))
@@ -167,12 +183,12 @@ serve on 8080
         let ncfg be provider.config_for(name, "")
         give {"ok": true, "providers": provider.providers(), "provider": name, "model": ncfg["model"], "vision": provider.supports_vision(ncfg), "configured": provider.configured()}
 
-    route "POST /api/sessions/delete" requires auth
+    route "POST /w/:slug/api/sessions/delete" requires auth
         expect body {id: text}
         let b be json of request
         give {"result": session.delete(text(b["id"]))}
 
-    route "GET /api/tree" requires auth
+    route "GET /w/:slug/api/tree" requires auth
         give tree.tree(6)
 
     -- Terminal real en el navegador: un shell dentro de un pseudo-terminal (pty) por conexión WebSocket.
@@ -180,8 +196,9 @@ serve on 8080
     -- Servidor → navegador: frames de texto con prefijo: "o" + salida cruda del pty (ANSI incluido, xterm.js
     -- la dibuja) | "c" + JSON de control ({type: hello|exit}).
     -- El shell vive lo que vive el socket: cerrar el panel lo mata (el runtime no deja huérfanos).
-    route "GET /api/term" requires auth
+    route "GET /w/:slug/api/term" requires auth
         socket
+            state_set("lampson:last_used", now())
             let sh be term_shell()
             let p be proc_spawn(sh[0], sh[1], {"cwd": term_cwd(), "pty": true, "cols": 120, "rows": 32})
             ws_send(socket, "c" + json_encode({"type": "hello", "shell": sh[0], "pid": proc_stats(p)["pid"], "cwd": term_cwd()}))
@@ -208,25 +225,25 @@ serve on 8080
                     ws_send(socket, "o" + as_text(ev["data"]))
             proc_close(p)
 
-    route "GET /api/update" requires auth
+    route "GET /w/:slug/api/update" requires auth
         give update.check()
 
-    route "POST /api/update" requires auth
+    route "POST /w/:slug/api/update" requires auth
         give {"result": update.apply()}
 
-    route "GET /api/git" requires auth
+    route "GET /w/:slug/api/git" requires auth
         give git.status()
 
-    route "GET /api/memory" requires auth
+    route "GET /w/:slug/api/memory" requires auth
         give {"dir": memo.dir(), "notes": memo.list()}
 
-    route "GET /api/memory/note" requires auth
+    route "GET /w/:slug/api/memory/note" requires auth
         when not contains(query, "name")
             give fail(400, "name required")
         give {"name": query.name, "content": memo.note_read(query.name)}
 
     -- traza legible de una sesión (ver lib/trace.syn)
-    route "GET /api/trace" requires auth
+    route "GET /w/:slug/api/trace" requires auth
         when not contains(query, "session")
             give fail(400, "session required")
         when not matches(query.session, "[A-Za-z0-9_-]{1,40}")
@@ -235,22 +252,22 @@ serve on 8080
         give {"session": query.session, "file": trace.file_of(query.session), "trace": trace.tail(query.session, n)}
 
     -- modelos que declara la API del proveedor (para no tipear nombres a ciegas: DeepSeek es case-sensitive)
-    route "GET /api/models" requires auth
+    route "GET /w/:slug/api/models" requires auth
         let pname be when contains(query, "provider") then lower(text(query.provider)) otherwise ""
         let cfg be provider.config_for(pname, "")
         give provider.list_models(cfg)
 
-    route "GET /api/todo" requires auth
+    route "GET /w/:slug/api/todo" requires auth
         -- ?session=<id> → la lista de esa sesión; sin query, la de la sesión en curso
         when contains(query, "session") and matches(query.session, "[A-Za-z0-9_-]{1,40}")
             give {"items": todo.load(query.session)}
         give {"items": todo.load(nothing)}
 
-    route "GET /api/mcp" requires auth
+    route "GET /w/:slug/api/mcp" requires auth
         give {"servers": mcp.summary(), "global": mcp.GLOBAL_CONFIG, "project": mcp.PROJECT_CONFIG}
 
     -- conectar un server MCP desde la UI: se escribe en el mcp.json del scope y arranca su supervisor
-    route "POST /api/mcp/add" requires auth
+    route "POST /w/:slug/api/mcp/add" requires auth
         expect body {name: text, command: text}
         let b be json of request
         let scope be when contains(b, "scope") then lower(text(b["scope"])) otherwise "global"
@@ -260,7 +277,7 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "POST /api/mcp/remove" requires auth
+    route "POST /w/:slug/api/mcp/remove" requires auth
         expect body {name: text}
         let b be json of request
         try
@@ -269,10 +286,10 @@ serve on 8080
             give fail(400, text(err))
 
     -- language servers (navegación semántica): listar, agregar (preset o comando propio), quitar
-    route "GET /api/lsp" requires auth
+    route "GET /w/:slug/api/lsp" requires auth
         give {"servers": lsp.summary(), "presets": lsp.PRESETS, "global": lsp.GLOBAL_CONFIG, "project": lsp.PROJECT_CONFIG}
 
-    route "POST /api/lsp/add" requires auth
+    route "POST /w/:slug/api/lsp/add" requires auth
         expect body {name: text}
         let b be json of request
         let scope be when contains(b, "scope") then lower(text(b["scope"])) otherwise "global"
@@ -283,7 +300,7 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "POST /api/lsp/remove" requires auth
+    route "POST /w/:slug/api/lsp/remove" requires auth
         expect body {name: text}
         let b be json of request
         try
@@ -292,11 +309,11 @@ serve on 8080
             give fail(400, text(err))
 
     -- lámparas (plugins de tools): listar y encender/apagar desde la barra superior de la UI
-    route "GET /api/lamps" requires auth
+    route "GET /w/:slug/api/lamps" requires auth
         give {"lamps": lamps.summary(), "global": lamps.GLOBAL_DIR, "project": lamps.PROJECT_DIR}
 
     -- el usuario corre una tool de una lámpara encendida él mismo (sin pasar por el modelo)
-    route "POST /api/lamps/run" requires auth
+    route "POST /w/:slug/api/lamps/run" requires auth
         expect body {tool: text}
         let b be json of request
         let args be when contains(b, "args") then b["args"] otherwise {}
@@ -305,7 +322,7 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "POST /api/lamps/remove" requires auth
+    route "POST /w/:slug/api/lamps/remove" requires auth
         expect body {name: text}
         let b be json of request
         try
@@ -313,7 +330,7 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "POST /api/lamps/toggle" requires auth
+    route "POST /w/:slug/api/lamps/toggle" requires auth
         expect body {name: text}
         let b be json of request
         let on be contains(b, "enabled") and b["enabled"] == true
@@ -322,15 +339,16 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "GET /api/agents" requires auth
+    route "GET /w/:slug/api/agents" requires auth
         agents.prune(10, 1800)
         give {"agents": agents.list_children()}
 
     -- Eventos en vivo para la UI (SSE): lo que publican los supervisores de procesos (proc.<name>: líneas y
     -- cambios de estado) y los subagentes (subagent.started|done|<id>). Un bus por programa; cada cliente
     -- tiene su cola acotada (drop_oldest). Heartbeat cada 25 s para que el proxy/navegador no cierre.
-    route "GET /api/events" requires auth
+    route "GET /w/:slug/api/events" requires auth
         stream
+            state_set("lampson:last_used", now())
             let sub be bus_subscribe(["proc.*", "subagent.*", "mcp.*", "approval.*", "schedule.*"], {"max_queue": 512})
             let open be true
             while open
@@ -344,7 +362,7 @@ serve on 8080
                     set open to false
             bus_unsubscribe(sub)
 
-    route "GET /api/agents/log" requires auth
+    route "GET /w/:slug/api/agents/log" requires auth
         when not contains(query, "id")
             give fail(400, "id required")
         when not matches(query.id, "[a-z]+-[0-9]+")
@@ -359,7 +377,7 @@ serve on 8080
         recover err
             give fail(404, "no such sub-agent")
 
-    route "POST /api/agents/stop" requires auth
+    route "POST /w/:slug/api/agents/stop" requires auth
         expect body {id: text}
         let b be json of request
         when not matches(b["id"], "[a-z]+-[0-9]+")
@@ -368,38 +386,38 @@ serve on 8080
         bus_publish("subagent." + b["id"], {"kind": "stop", "line": "stop requested from the UI"})
         give {"result": "stop requested for " + b["id"]}
 
-    route "GET /api/proc" requires auth
+    route "GET /w/:slug/api/proc" requires auth
         give {"processes": proc.list()}
 
-    route "GET /api/proc/log" requires auth
+    route "GET /w/:slug/api/proc/log" requires auth
         when not contains(query, "name")
             give fail(400, "name required")
         let n be when contains(query, "tail") then number(query.tail) otherwise 200
         give {"name": query.name, "running": proc.alive(query.name), "log": proc.logs(query.name, n)}
 
-    route "GET /api/ports" requires auth
+    route "GET /w/:slug/api/ports" requires auth
         give {"ports": proc.listeners()}
 
-    route "POST /api/ports/kill" requires auth
+    route "POST /w/:slug/api/ports/kill" requires auth
         expect body {pid: number}
         let b be json of request
         give {"result": proc.kill_pid(b["pid"])}
 
-    route "POST /api/proc/stop" requires auth
+    route "POST /w/:slug/api/proc/stop" requires auth
         expect body {name: text}
         let b be json of request
         give {"result": proc.halt(b["name"])}
 
-    route "GET /api/file" requires auth
+    route "GET /w/:slug/api/file" requires auth
         when not contains(query, "path")
             give fail(400, "path required")
         give tree.file_content(query.path)
 
     -- configuración general (rueda de la UI): zona horaria, URL pública, webhook… → .lampson/config.json
-    route "GET /api/settings/values" requires auth
+    route "GET /w/:slug/api/settings/values" requires auth
         give {"values": settings.values(), "tz_detected": schedule.tz_offset()}
 
-    route "POST /api/settings/values" requires auth
+    route "POST /w/:slug/api/settings/values" requires auth
         let b be json of request
         try
             each k in keys(b)
@@ -411,17 +429,17 @@ serve on 8080
             give fail(400, text(err))
 
     -- aprobaciones (lib/approvals.syn): las del chat y las de tareas programadas comparten la cola
-    route "POST /api/approve" requires auth
+    route "POST /w/:slug/api/approve" requires auth
         expect body {id: text, decision: bool}
         let b be json of request
         give {"ok": approvals.answer(text(b["id"]), b["decision"])}
 
-    route "GET /api/approvals" requires auth
+    route "GET /w/:slug/api/approvals" requires auth
         give {"approvals": approvals.list(), "public_url": approvals.public_url(), "webhook": approvals.webhook_url() != ""}
 
     -- link de decisión (PÚBLICO a propósito: lo abre el humano desde el teléfono; el token de un solo uso es la
     -- autorización, como en el `approve` nativo de Synsema bajo serve). GET porque un link en un chat es un GET.
-    route "GET /approve/:id/:token"
+    route "GET /w/:slug/approve/:id/:token"
         let d be when contains(query, "d") then lower(text(query.d)) otherwise ""
         when d != "yes" and d != "no"
             give html(approvals.html_page("¿Permitir?", "<a href='?d=yes' style='display:inline-block;padding:10px 18px;border-radius:4px;background:#1d1c1a;color:#fff;text-decoration:none;margin-right:10px'>Sí, permitir</a> <a href='?d=no' style='display:inline-block;padding:10px 18px;border-radius:4px;border:1px solid #a33;color:#a33;text-decoration:none'>No, denegar</a>"))
@@ -431,12 +449,12 @@ serve on 8080
         give html(approvals.html_page(when d == "yes" then "✓ Permitido" otherwise "✗ Denegado", "Lampson sigue con la tarea. Podés cerrar esta pestaña."))
 
     -- tareas programadas (lib/schedule.syn): listar, crear, quitar, encender/apagar, correr ahora, log
-    route "GET /api/schedules" requires auth
+    route "GET /w/:slug/api/schedules" requires auth
         let age be schedule.daemon_age()
         -- este proceso tiene su propio tick (cron_every): las tareas corren mientras la web esté abierta
         give {"tasks": schedule.summary(), "tick": schedule.TICK_SECONDS, "alive": true, "heartbeat_age": age, "mount_ok": schedule.mount_ok(), "workspace": env("LAMPSON_WORKSPACE", ""), "tz": schedule.tz_offset(), "lamps": lamps.summary()}
 
-    route "POST /api/schedules/add" requires auth
+    route "POST /w/:slug/api/schedules/add" requires auth
         let b be json of request
         try
             let t be schedule.add(b)
@@ -444,7 +462,7 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "POST /api/schedules/remove" requires auth
+    route "POST /w/:slug/api/schedules/remove" requires auth
         expect body {id: text}
         let b be json of request
         try
@@ -452,7 +470,7 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "POST /api/schedules/toggle" requires auth
+    route "POST /w/:slug/api/schedules/toggle" requires auth
         expect body {id: text}
         let b be json of request
         let on be contains(b, "enabled") and b["enabled"] == true
@@ -463,7 +481,7 @@ serve on 8080
 
     -- correr ahora: la marca run_now la levanta el próximo tick (así el request no se queda minutos abierto
     -- y la corrida vive en el hilo del cron, no en el del request)
-    route "POST /api/schedules/run" requires auth
+    route "POST /w/:slug/api/schedules/run" requires auth
         expect body {id: text}
         let b be json of request
         try
@@ -472,13 +490,13 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    route "GET /api/schedules/log" requires auth
+    route "GET /w/:slug/api/schedules/log" requires auth
         when not contains(query, "id")
             give fail(400, "id required")
         let n be when contains(query, "tail") then floor(number(query.tail)) otherwise 300
         give {"id": query.id, "log": schedule.log_tail(query.id, n), "task": schedule.get(query.id)}
 
-    route "POST /api/chat" requires auth
+    route "POST /w/:slug/api/chat" requires auth
         expect body {message: text}
         let b be json of request
         let message be b["message"]
@@ -489,6 +507,7 @@ serve on 8080
             set mode to "ask"
         let pname be when contains(b, "provider") then lower(text(b["provider"])) otherwise ""
         let pmodel be when contains(b, "model") then text(b["model"]) otherwise ""
+        state_set("lampson:last_used", now())
         stream
             task emit(kind, data, tag)
                 trace.event(sid, kind, data, tag)

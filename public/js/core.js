@@ -1,5 +1,8 @@
 // core.js — estado compartido y helpers que usan todos los módulos (se carga primero)
 const $ = s => document.querySelector(s);
+// detrás del hub la UI vive en /w/<slug>/ y su API en /w/<slug>/api/…; standalone (sin hub) BASE = ''
+const BASE = (location.pathname.match(/^\/w\/[^/]+/) || [''])[0];
+const WS_SLUG = BASE ? BASE.slice(3) : '';
 const log = $('#log');
 let session = new URLSearchParams(location.search).get('session') || localStorage.getItem('lampson.session') || '';
 let busy = false; let cfg = {};

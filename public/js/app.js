@@ -1,6 +1,6 @@
 // app.js — arranque: config de la cabecera y primera carga de cada sección (se carga último)
 async function loadCfg() {
-  try { cfg = await (await fetch('/api/config')).json(); } catch (e) { cfg = {}; }
+  try { cfg = await (await fetch(BASE + '/api/config')).json(); } catch (e) { cfg = {}; }
   const ws = cfg.workspace || '';
   $('#proj').textContent = ws.split(/[\\/]/).filter(Boolean).pop() || 'workspace'; $('#proj').title = ws;
   $('#hpath').textContent = ws; $('#hpath').title = ws;

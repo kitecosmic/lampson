@@ -4,7 +4,10 @@
 reads, searches, edits and runs commands through tools that are confined to that project by the
 language itself — and every step is visible, in the terminal or in a web UI.
 
-- **Terminal or web**: `lampson` (REPL) or `lampson --web` (http://127.0.0.1:8080).
+- **Workspaces, always on**: every project folder is a *workspace* with its own process (sessions, scheduled tasks,
+  MCP, lamps, dev servers), all behind one hub at http://127.0.0.1:8080 — open several at once and switch without
+  killing the others. `lampson` (terminal) and `lampson --web` (browser) open the workspace of the current folder;
+  `lampson --install` keeps the hub alive across logins.
 - **Any OpenAI- or Anthropic-compatible API** over raw HTTP: DeepSeek, Kimi, Groq, Grok, OpenRouter,
   Ollama, Anthropic, MiniMax… one `.env` line to switch.
 - **Least-privilege by construction**: each tool declares its capabilities; the runtime enforces
@@ -124,15 +127,37 @@ does the same with persistent sessions and memory.
 > Status: developed and tested on Windows 11; the Docker image (Ubuntu 24.04) is built by CI. The Linux/macOS
 > installer is written but not yet exercised on a real machine — issues welcome.
 
+## Workspaces and the hub (how it runs)
+
+```
+lampson                         # in a project folder: registers it as a workspace (first time), makes sure the hub and
+                                # the workspace's process are up, opens the terminal on it
+lampson --web                   # same, then opens http://127.0.0.1:8080/w/<slug> in the browser
+http://127.0.0.1:8080           # the workspaces screen: open one, create one (native folder dialog; a server-side
+                                # browser on a VPS), turn them on/off, life policy
+lampson --hub start|stop|status|logs|restart
+lampson --install               # Windows: Scheduled Task at logon · Linux: systemd --user unit (Restart=always)
+```
+
+Why processes: in Synsema a tool's file capability is a literal path relative to the process cwd, so a workspace is
+a directory `~/lampson/.lampson/ws/<slug>/` with a junction `workspace` → your project (plus junctions to the
+install's `lib/`, `public/`, `skills/`, `lamps/`, `memory/`), and its own `.lampson/` state. Its process
+(`synsema serve web.syn --port 808N --bind 127.0.0.1`) only ever sees that folder. The hub (`hub.syn`, generated
+from `hub.tpl.syn`, one proxy route per workspace) is the only listener you use: it serves the UI and forwards
+`/w/<slug>/api/…` — SSE and the WebSocket terminal included (Synsema ≥ 0.6.12). Workspace processes are detached
+from the hub, so a hub restart never kills them. The hub is also the supervisor: every 15 s it starts what should
+be alive and stops what is idle (⚙ → hours of inactivity, `0` = never; a workspace with enabled scheduled tasks or
+policy «siempre vivo» stays up).
+
+On a VPS put the hub behind your domain (`synsema serve hub.syn --port 443 --domain … --tls-auto …` or your
+edge); workspace ports never leave loopback. `LAMPSON_PUBLIC_URL` = `https://host` and approval links carry
+`/w/<slug>` automatically.
+
 ## Scheduled tasks and the resident process
 
-Lampson can run things with nobody at the keyboard. Scheduled tasks run inside **any** open Lampson — the web UI
-or the terminal REPL (a background thread ticks every 30 s). To run them with nothing open:
-
-```
-lampson --daemon start      # web UI + scheduler + approvals, in the background (synsema daemon)
-lampson --daemon status     # also: stop · logs · restart
-```
+Lampson can run things with nobody at the keyboard. Scheduled tasks run inside the workspace's process (the hub
+keeps it alive while it has enabled tasks) — or inside the terminal REPL when no process is up (a background thread
+ticks every 30 s). `lampson --install` makes the hub survive reboots.
 
 Timezone, public URL and webhook are set from the ⚙ button of the web header (tabs: General · Aprobaciones a
 distancia · Proveedor; stored in `lampson/.lampson/config.json`, `.env` wins) or from `.env`.
@@ -230,9 +255,13 @@ run Lampson in a container.
 ## Architecture
 
 ```
-lampson.ps1 / .sh    launcher: mounts ./workspace, starts terminal or web
+lampson.ps1 / .sh    launcher: resolves the workspace (cli.syn), ensures hub + process, opens terminal or browser
+cli.syn              what launchers ask Synsema: ensure/list/hub-start/hub-stop/hub-restart (last line = JSON)
+hub.tpl.syn          template of the hub (:8080): workspaces screen + API, supervisor tick, one proxy route per workspace
+lib/workspaces.syn   registry (.lampson/workspaces.json), ws/<slug> dirs + junctions, detached processes, health,
+                     life policy, folder picker (native dialog / server-side browser)
 chat.syn             terminal REPL (colors, approvals via Synsema's native `approve`)
-web.syn              HTTP server: POST /api/chat → SSE events; sessions, tree, file viewer, processes, ports
+web.syn              one process per workspace: /w/:slug/api/… → SSE chat, sessions, tree, processes, schedules…
 public/              web UI (no build step, no dependencies; classic scripts served by `static`)
   index.html         markup only: header, the two side panels, the chat; loads css/ and js/ in order
   css/               tokens (fonts, palette, base) · layout (grid, header, panels, chat, composer) · sidebar · chat · panel

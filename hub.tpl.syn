@@ -1,0 +1,127 @@
+-- hub.tpl.syn — PLANTILLA del hub. lib/workspaces.syn genera hub.syn (gitignored) reemplazando `-- @workspaces` por una
+-- ruta proxy por workspace; el hub corre con `synsema daemon start hub.syn --watch` y se reinicia solo al cambiar.
+--
+-- El hub es lo único que escucha hacia afuera (:8080; en un VPS, con --domain/--tls-auto):
+--   GET  /                    pantalla de workspaces (public/hub.html)
+--   GET  /w/<slug>            la UI de ese workspace (public/index.html; los assets /css /js los sirve el hub)
+--   *    /w/<slug>/api/…      proxy al proceso del workspace (127.0.0.1:808N) — SSE y WebSocket pasan (Synsema ≥ 0.6.12)
+--   GET  /w/<slug>/approve/…  links de aprobación de ese workspace
+--   /api/workspaces…          registro, crear (diálogo nativo o explorador), start/stop/quitar, política
+-- Supervisor: cada 15 s arranca los workspaces que deben vivir y apaga los inactivos (política en ⚙ → idle_hours).
+-- Solo loopback puede usar la API del hub (misma regla que web.syn); LAMPSON_WEB_TOKEN para scripts remotos.
+
+intent: "Lampson hub: workspaces registry, supervisor and reverse proxy to one process per workspace"
+
+require serve(8080)
+require net("127.0.0.1")
+require time
+require exec
+require env("LAMPSON_*")
+require env("OS")
+require env("HOME")
+require env("USERPROFILE")
+require file(".lampson")
+require file(".lampson/*")
+require file.read("web.syn")
+require file.read(".env")
+require file.read("chat.syn")
+require file.read("hub.tpl.syn")
+require file("hub.syn")
+require file.read("public")
+require file.read("public/*")
+
+use "./lib/workspaces.syn" as ws
+use "./lib/settings.syn" as settings
+
+task check_client(token, request)
+    let ip be text(ip of request)
+    when ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
+        give {"local": true}
+    let want be env("LAMPSON_WEB_TOKEN", "")
+    when want != "" and token == want
+        give {"local": false}
+    give nothing
+
+task hub_tick()
+    give ws.tick()
+cron_every(15, hub_tick)
+
+serve on 8080
+    max_streams 200
+    auth with check_client
+    static "./public"
+
+    route "GET /"
+        give html(read_file("public/hub.html"))
+
+    -- la UI de un workspace: el mismo index.html; el frontend deduce /w/<slug> de la URL (BASE en js/core.js).
+    -- Sin barra final: el runtime normaliza "/w/x/" → "/w/x" (301), así que la ruta canónica es esta
+    route "GET /w/:slug"
+        give html(read_file("public/index.html"))
+
+    route "GET /api/hub" requires auth
+        give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home()}
+
+    route "GET /api/workspaces" requires auth
+        give {"workspaces": ws.summary(), "idle_hours": ws.idle_hours()}
+
+    -- registrar una carpeta como workspace (y arrancarla)
+    route "POST /api/workspaces" requires auth
+        expect body {path: text}
+        let b be json of request
+        try
+            let w be ws.ensure(text(b["path"]))
+            ws.start_ws(w)
+            ws.wait_ready(w, 8)
+            give {"ok": true, "workspace": w, "url": "/w/" + w["slug"] + "/"}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/workspaces/start" requires auth
+        expect body {slug: text}
+        let b be json of request
+        let w be ws.get(text(b["slug"]))
+        when w == nothing
+            give not_found("no such workspace")
+        ws.start_ws(w)
+        give {"ok": ws.wait_ready(w, 8)}
+
+    route "POST /api/workspaces/stop" requires auth
+        expect body {slug: text}
+        let b be json of request
+        let w be ws.get(text(b["slug"]))
+        when w == nothing
+            give not_found("no such workspace")
+        give {"ok": ws.stop_ws(w)}
+
+    route "POST /api/workspaces/remove" requires auth
+        expect body {slug: text}
+        let b be json of request
+        try
+            give {"ok": true, "result": ws.remove(text(b["slug"]))}
+        recover err
+            give fail(400, text(err))
+
+    -- política por workspace: auto | always | off
+    route "POST /api/workspaces/policy" requires auth
+        expect body {slug: text, policy: text}
+        let b be json of request
+        let w be ws.get(text(b["slug"]))
+        when w == nothing
+            give not_found("no such workspace")
+        when not contains(["auto", "always", "off"], text(b["policy"]))
+            give fail(400, "policy must be auto | always | off")
+        set w["policy"] to text(b["policy"])
+        ws.put(w)
+        give {"ok": true}
+
+    -- diálogo nativo del SO (PC); nothing → la UI usa el explorador propio
+    route "POST /api/workspaces/pick" requires auth
+        let p be ws.pick_folder()
+        give {"path": p, "native": p != nothing}
+
+    route "GET /api/workspaces/browse" requires auth
+        give ws.browse(when contains(query, "path") then text(query.path) otherwise "")
+
+    -- proxies generados (una por workspace registrado):
+    -- @workspaces

@@ -31,6 +31,7 @@
     <span class="hpath" id="hpath"></span>
     <select id="agent" title="perfil de agente: qué tools puede usar"></select>
     <select id="perm" title="qué pasa con un comando peligroso (rm -rf, git push --force, sudo…)"><option value="ask">permisos: preguntar</option><option value="yolo">permisos: permitir todo</option><option value="strict">permisos: denegar</option></select>
+    <span class="pill on" id="wsPill" style="display:none" title="cambiar de workspace">workspace ▾</span>
     <span class="pill" id="lamps" title="lámparas: plugins de tools que vos encendés · clic para ver y activar">lámparas</span>
     <span class="pill" id="model" title="proveedor y modelo · clic para cambiarlos o cargar una API key">…</span>
   </div>
@@ -121,6 +122,7 @@
 <script src="/js/schedules.js"></script>
 <script src="/js/approvals.js"></script>
 <script src="/js/config.js"></script>
+<script src="/js/workspaces.js"></script>
 <script src="/js/update.js"></script>
 <script src="/js/sessions.js"></script>
 <script src="/js/chat.js"></script>

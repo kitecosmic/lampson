@@ -4,7 +4,7 @@
 // terminal, tick cada 30 s) o con `lampson --daemon start` con todo cerrado.
 let schedData = [], schedLamps = [], schedTick = 30, schedMountOk = true, schedLiveTimer = null;
 async function fetchSched() {
-  let r; try { r = await (await fetch('/api/schedules')).json(); } catch (e) { return schedData; }
+  let r; try { r = await (await fetch(BASE + '/api/schedules')).json(); } catch (e) { return schedData; }
   schedData = r.tasks || []; schedLamps = r.lamps || []; schedTick = r.tick || 30; schedMountOk = r.mount_ok !== false;
   return schedData;
 }
@@ -47,11 +47,11 @@ function openSched(selectId) {
       emptyHtml: 'nada coincide',
       detail: async (t) => {
         if (t === SCHED_NEW) return schedForm();
-        let r; try { r = await (await fetch('/api/schedules/log?id=' + encodeURIComponent(t.id) + '&tail=300')).json(); } catch (e) { r = {}; }
+        let r; try { r = await (await fetch(BASE + '/api/schedules/log?id=' + encodeURIComponent(t.id) + '&tail=300')).json(); } catch (e) { r = {}; }
         // r.task = el registro crudo (plan como objeto, session, history fresco); t = el resumen (plan y horarios en texto)
         const raw = r.task || t; const task = Object.assign({}, raw, t, { running: raw.running, session: raw.session, history: raw.history, enabled: raw.enabled });
         let live = '';
-        if (task.running && task.session) { try { const tr = await (await fetch('/api/trace?session=' + encodeURIComponent(task.session) + '&tail=80')).json(); live = tr.trace || '(arrancando…)'; } catch (e) { live = '(arrancando…)'; } }
+        if (task.running && task.session) { try { const tr = await (await fetch(BASE + '/api/trace?session=' + encodeURIComponent(task.session) + '&tail=80')).json(); live = tr.trace || '(arrancando…)'; } catch (e) { live = '(arrancando…)'; } }
         else if (task.running) live = task.action.type === 'prompt' ? 'arrancando el agente…' : 'corriendo ' + task.action.type + '…';
         const hist = (task.history || []).slice().reverse().map(h => `<div class="dmsg ${h.status === 'ok' ? '' : 'dm-bad'}"><span class="who">${esc(new Date(h.started * 1000).toLocaleString())} · ${esc(h.status)}${h.late ? ' · atrasada' : ''}${h.steps != null ? ' · ' + h.steps + ' pasos' : ''}${h.session ? ` · <a href="#" data-session="${esc(h.session)}">sesión ⏰</a>` : ''}</span>${esc(h.summary || '')}</div>`).join('');
         return `<div class="dhead"><span class="nm">${esc(task.name)}</span><span class="meta">${esc(task.plan)} · ${task.running ? '● corriendo' : (task.enabled ? 'próxima ' + esc(fmtWhen(task.next_run)) : 'apagada')}</span></div>
@@ -66,11 +66,11 @@ function openSched(selectId) {
       wire: (t, box) => {
         const err = (m) => { const e = box.querySelector('.derr'); if (e) e.textContent = m || ''; };
         if (t === SCHED_NEW) { schedFormWire(box, err); return; }
-        box.querySelector('[data-run]').onclick = async () => { const r = await api('/api/schedules/run', { id: t.id }); add('meta', '⏰ ' + esc(r.data.result || r.data.error || '')); setTimeout(loadSched, 1500); setTimeout(() => Panel.is('schedules') && Panel.detail(), 2500); };
-        box.querySelector('[data-toggle]').onclick = async () => { const r = await api('/api/schedules/toggle', { id: t.id, enabled: !t.enabled }); if (!r.ok) { err(r.data.error || 'error'); return; } loadSched(); };
+        box.querySelector('[data-run]').onclick = async () => { const r = await api(BASE + '/api/schedules/run', { id: t.id }); add('meta', '⏰ ' + esc(r.data.result || r.data.error || '')); setTimeout(loadSched, 1500); setTimeout(() => Panel.is('schedules') && Panel.detail(), 2500); };
+        box.querySelector('[data-toggle]').onclick = async () => { const r = await api(BASE + '/api/schedules/toggle', { id: t.id, enabled: !t.enabled }); if (!r.ok) { err(r.data.error || 'error'); return; } loadSched(); };
         box.querySelectorAll('[data-session]').forEach(a => a.onclick = (e) => { e.preventDefault(); Panel.close(); open(a.dataset.session); });
         const del = box.querySelector('.dfoot .del');
-        del.onclick = () => inlineConfirm(del, `¿quitar ${t.name}?`, async () => { await api('/api/schedules/remove', { id: t.id }); loadSched(); });
+        del.onclick = () => inlineConfirm(del, `¿quitar ${t.name}?`, async () => { await api(BASE + '/api/schedules/remove', { id: t.id }); loadSched(); });
         const live = box.querySelector('[data-live]'); if (live) live.scrollTop = live.scrollHeight;
         clearTimeout(schedLiveTimer); if (t.running) schedLiveTimer = setTimeout(() => { if (Panel.is('schedules')) Panel.refresh(); }, 3000);
       }
@@ -110,7 +110,7 @@ function schedFormWire(box, err) {
     const body = { name: f('name').value.trim(), when: f('when').value.trim(), action, permission: f('permission').value, notify: f('notify').value.trim() };
     if (!body.when) { err('falta cuándo'); return; }
     err('programando…');
-    const r = await api('/api/schedules/add', body);
+    const r = await api(BASE + '/api/schedules/add', body);
     if (!r.ok) { err(r.data.error || ('error ' + r.status)); return; }
     add('meta', '⏰ ' + esc(r.data.result || 'programada')); setSec('sched', true); await loadSched(); if (r.data.task) Panel.selectKey(r.data.task.id);
   };

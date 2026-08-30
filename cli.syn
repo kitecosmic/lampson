@@ -1,0 +1,68 @@
+-- cli.syn — lo que los launchers (lampson.ps1 / lampson.sh) le piden a Synsema. Corre con cwd = instalación.
+--
+--   LAMPSON_CMD=ensure  LAMPSON_WORKSPACE=<ruta>  synsema run cli.syn
+--       registra/prepara el workspace, asegura el hub y su proceso → imprime UNA línea JSON {slug, port, dir, url, alive}
+--   LAMPSON_CMD=hub-status  → {alive}
+--   LAMPSON_CMD=hub-start | hub-stop
+--   LAMPSON_CMD=list
+-- La salida útil va en la ÚLTIMA línea (JSON) para que el launcher la parsee.
+
+require exec
+require time
+require net("127.0.0.1")
+require env("LAMPSON_*")
+require env("OS")
+require env("HOME")
+require env("USERPROFILE")
+require file(".lampson")
+require file(".lampson/*")
+require file.read("web.syn")
+require file.read(".env")
+require file.read("chat.syn")
+require file.read("hub.tpl.syn")
+require file("hub.syn")
+
+use "./lib/workspaces.syn" as ws
+
+let cmd be env("LAMPSON_CMD", "ensure")
+
+when cmd == "ensure"
+    let path be env("LAMPSON_WORKSPACE", "")
+    when path == ""
+        raise("LAMPSON_WORKSPACE required")
+    let w be ws.ensure(path)
+    when not ws.hub_alive()
+        ws.start_hub()
+    let hc be ws.health(w)
+    when hc == nothing
+        ws.start_ws(w)
+        ws.wait_ready(w, 10)
+        set hc to ws.health(w)
+    ws.touch(w["slug"])
+    print(json_encode({"slug": w["slug"], "port": w["port"], "dir": ws.dir_of(w["slug"]), "url": "http://127.0.0.1:" + text(ws.HUB_PORT) + "/w/" + w["slug"], "alive": hc != nothing, "hub": ws.hub_alive()}))
+otherwise when cmd == "hub-status"
+    print(json_encode({"alive": ws.hub_alive(), "workspaces": ws.summary()}))
+otherwise when cmd == "hub-start"
+    when not ws.hub_alive()
+        ws.start_hub()
+    print(json_encode({"alive": true}))
+otherwise when cmd == "hub-stop"
+    each w in ws.all()
+        ws.stop_ws(w)
+    ws.stop_hub()
+    print(json_encode({"alive": false}))
+otherwise when cmd == "hub-restart"
+    -- lanzado desacoplado por workspaces.restart_hub_later: espera a que el hub termine lo que estaba haciendo,
+    -- lo para y lo vuelve a arrancar con el hub.syn regenerado (bajo systemd, Restart=always ya lo levanta solo)
+    sleep(1.5)
+    ws.stop_hub()
+    sleep(2)
+    when not ws.hub_alive()
+        ws.start_hub()
+    print(json_encode({"restarted": true}))
+otherwise when cmd == "list"
+    each w in ws.summary()
+        print((when w["alive"] then "● " otherwise "○ ") + w["slug"] + "  " + w["path"] + "  :" + text(w["port"]) + "  " + w["policy"])
+    print(json_encode({"count": length(ws.all())}))
+otherwise
+    raise("unknown LAMPSON_CMD " + cmd)

@@ -1,9 +1,9 @@
 // sessions.js — sesiones: las últimas 4 en el panel, «ver todas» abre el Panel (browse) con búsqueda en
 // títulos y contenido (GET /api/sessions/search?q=) y una previsualización de la conversación; traza.
 function forgetSession(id) { if (id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } }
-async function deleteSession(id) { await api('/api/sessions/delete', { id }); forgetSession(id); loadSessions(); }
+async function deleteSession(id) { await api(BASE + '/api/sessions/delete', { id }); forgetSession(id); loadSessions(); }
 async function loadSessions() {
-  let r; try { r = await (await fetch('/api/sessions')).json(); } catch (e) { return; }
+  let r; try { r = await (await fetch(BASE + '/api/sessions')).json(); } catch (e) { return; }
   const box = $('#sessions'); box.innerHTML = '';
   $('#sessCount').textContent = r.sessions.length || '';
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
@@ -23,10 +23,10 @@ function openSessionsPanel() {
     browse: {
       placeholder: 'buscar en títulos y en lo que se habló… (↑↓ · Enter abre)', listWidth: '360px', nodot: true,
       key: s => s.id,
-      load: async (q) => (await (await fetch('/api/sessions/search?q=' + encodeURIComponent(q) + '&limit=300')).json()).sessions || [],
+      load: async (q) => (await (await fetch(BASE + '/api/sessions/search?q=' + encodeURIComponent(q) + '&limit=300')).json()).sessions || [],
       render: (s, q) => `<div><div class="nm serif">${hl(s.title || '(sin título)', q)}</div><div class="meta">${esc(s.id)} · ${esc(fmtIso(s.updated))}</div>` + (s.snippet ? `<div class="snip">${hl(s.snippet, q)}</div>` : '') + '</div>',
       detail: async (s, q) => {
-        const d = await (await fetch('/api/sessions/' + encodeURIComponent(s.id))).json();
+        const d = await (await fetch(BASE + '/api/sessions/' + encodeURIComponent(s.id))).json();
         const msgs = (d.messages || []).filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim() && !/^\[harness\]|^\[Context compacted/.test(m.content)).slice(0, 14);
         const steps = (d.messages || []).filter(m => m.role === 'tool').length;
         return `<div class="dhead"><span class="nm serif">${esc(s.title || '(sin título)')}</span><span class="meta">${esc(s.id)} · ${esc(fmtIso(d.updated))} · ${(d.messages || []).length} mensajes · ${steps} tools</span></div>`
@@ -48,7 +48,7 @@ function openSessionsPanel() {
 }
 async function open(id) {
   session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log'); loadTodo();
-  const r = await fetch('/api/sessions/' + id); if (!r.ok) { session = ''; empty(); return loadSessions(); }
+  const r = await fetch(BASE + '/api/sessions/' + id); if (!r.ok) { session = ''; empty(); return loadSessions(); }
   const d = await r.json();
   const queue = []; // pasos sin resultado todavía, en orden (varias tool calls por turno)
   for (const m of d.messages) {
@@ -64,6 +64,6 @@ $('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.sessi
 // traza legible de una sesión (.lampson/trace/<sid>.log)
 async function openTrace(id) {
   procOpen = null; agentOpen = null;
-  let r; try { r = await (await fetch('/api/trace?session=' + encodeURIComponent(id) + '&tail=600')).json(); } catch (e) { return; }
+  let r; try { r = await (await fetch(BASE + '/api/trace?session=' + encodeURIComponent(id) + '&tail=600')).json(); } catch (e) { return; }
   showText('traza ' + id, r.file || '', r.trace || '(sin traza todavía: se escribe a medida que el agente trabaja)', true);
 }

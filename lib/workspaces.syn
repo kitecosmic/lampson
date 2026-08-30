@@ -1,0 +1,555 @@
+-- lib/workspaces.syn — varios workspaces vivos a la vez: registro, un directorio por workspace, procesos y supervisor
+--
+-- Por qué así (ver ../SPEC-WORKSPACES.md): en Synsema las capabilities de archivo Y los `use "./lib/…"` se resuelven
+-- relativos al CWD del proceso, y `proxy to` es estático (se evalúa al arrancar y anexa el path entero). Entonces:
+--   * cada workspace tiene su propio directorio  .lampson/ws/<slug>/  que ES el cwd de su proceso:
+--       workspace → junction al proyecto        lib public skills lamps memory → junctions a la instalación
+--       web.syn chat.syn → copias (refrescadas al arrancar)        .lampson/ → estado propio (sesiones, tareas…)
+--       .lampson/global → junction a <home>/.lampson (config.json con keys, mcp/lsp globales, skills-*)
+--     con eso `file("workspace/*")`, `use "./lib/x.syn"` y todo el código de siempre funcionan SIN cambios.
+--   * cada workspace corre `synsema serve web.syn --port 808N --bind 127.0.0.1` DESACOPLADO del hub (start /b,
+--     process_group:false): sobrevive a reinicios del hub y a cerrar terminales. Solo loopback.
+--   * el hub (hub.syn, :8080) se GENERA desde hub.tpl.syn con una ruta proxy por workspace y corre con
+--     `synsema serve hub.syn` desacoplado: al registrar/quitar un workspace se reescribe y un helper lo reinicia.
+--   * el hub es supervisor: cada 15 s arranca lo que debe estar vivo (política) y apaga lo inactivo.
+--
+-- Este módulo corre SIEMPRE con cwd = instalación (hub.syn y cli.syn); los procesos de workspace no lo usan.
+
+use "./tools/bash.syn" as t_bash
+use "./tools/proc.syn" as proc
+use "./settings.syn" as settings
+
+export let ROOT be ".lampson/ws"
+export let REGISTRY be ".lampson/workspaces.json"
+export let HUB_PORT be 8080
+export let HUB_FILE be "hub.syn"
+export let HUB_TEMPLATE be "hub.tpl.syn"
+let FIRST_PORT be 8081
+let LINKS be ["lib", "public", "skills", "lamps", "memory"]
+let COPIES be ["web.syn", "chat.syn"]
+
+task is_win()
+    give env("OS", "") == "Windows_NT"
+
+task sh(cmd, t)
+    let sc be t_bash.shell_config()
+    give run(sc["shell"], [sc["flag"], cmd], t)
+
+-- ruta absoluta de la instalación (cwd), en forma Windows si corresponde
+export task home()
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    let h be env("LAMPSON_HOME", "")
+    when h != ""
+        give h
+    let r be sh("pwd -W 2>/dev/null || pwd -P", 10)
+    let p be trim(text(r["stdout"]))
+    when is_win()
+        give replace_text(p, "/", "\\")
+    give p
+
+export task norm(p)
+    let s be lower(replace_text(trim(text(p)), "\\", "/"))
+    when matches(s, "/[a-z]/.*")
+        set s to slice(s, 1, 2) + ":" + slice(s, 2, length(s))
+    while length(s) > 1 and slice(s, length(s) - 1, length(s)) == "/"
+        set s to slice(s, 0, length(s) - 1)
+    give s
+
+-- el mismo slug que memo.slug(): nombre limpio + 8 hex del hash de la ruta normalizada → las sesiones y la memoria
+-- guardadas hasta hoy siguen asociadas al mismo workspace
+export task slug_of(path)
+    let n be norm(path)
+    let parts be where(split(n, "/"), (x) => x != "")
+    let base be when length(parts) > 0 then parts[length(parts) - 1] otherwise "workspace"
+    let runs be find_all(base, "[a-z0-9]+")
+    let clean be when length(runs) == 0 then "project" otherwise join(runs, "-")
+    give clean + "-" + slice(decode(sha256(n), "hex"), 0, 8)
+
+-- ---------- registro ----------
+task load_reg()
+    try
+        let doc be json_decode(read_file(REGISTRY))
+        when not contains(doc, "workspaces")
+            set doc["workspaces"] to {}
+        when not contains(doc, "next_port")
+            set doc["next_port"] to FIRST_PORT
+        give doc
+    recover err
+        give {"workspaces": {}, "next_port": FIRST_PORT}
+
+task save_reg(doc)
+    write_file(REGISTRY, json_encode(doc))
+
+export task all()
+    require file(".lampson")
+    require file(".lampson/*")
+    let doc be load_reg()
+    let out be []
+    each k in sort_by(keys(doc["workspaces"]), (x) => 0 - doc["workspaces"][x]["last_used"])
+        set out to append(out, doc["workspaces"][k])
+    give out
+
+export task get(slug)
+    require file(".lampson")
+    require file(".lampson/*")
+    let doc be load_reg()
+    when contains(doc["workspaces"], slug)
+        give doc["workspaces"][slug]
+    give nothing
+
+export task by_path(path)
+    require file(".lampson")
+    require file(".lampson/*")
+    let n be norm(path)
+    each w in all()
+        when norm(w["path"]) == n
+            give w
+    give nothing
+
+export task put(w)
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    let doc be load_reg()
+    set doc["workspaces"][w["slug"]] to w
+    save_reg(doc)
+    give w
+
+export task touch(slug)
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    let w be get(slug)
+    when w == nothing
+        give false
+    set w["last_used"] to now()
+    put(w)
+    give true
+
+-- ---------- directorio del workspace ----------
+export task dir_of(slug)
+    give ROOT + "/" + slug
+
+task link(where_, target)
+    when is_win()
+        let r be run("cmd", ["/c", "mklink", "/J", replace_text(where_, "/", "\\"), replace_text(target, "/", "\\")], 15)
+        give r["exit_code"] == 0
+    let r be run("ln", ["-s", target, where_], 10)
+    give r["exit_code"] == 0
+
+task unlink(where_)
+    when is_win()
+        run("cmd", ["/c", "rmdir", replace_text(where_, "/", "\\")], 10)
+    otherwise
+        run("rm", ["-f", where_], 10)
+    give true
+
+task is_link_dir(p)
+    give file_exists(p)
+
+-- crea/repara .lampson/ws/<slug>: junctions al proyecto y a la instalación, copias de los entries
+export task prepare(w)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("web.syn")
+    require file.read("chat.syn")
+    let d be dir_of(w["slug"])
+    let h be home()
+    let sep be when is_win() then "\\" otherwise "/"
+    let fresh be not file_exists(d + "/.lampson/.keep")
+    write_file(d + "/.lampson/.keep", "")
+    when fresh
+        migrate(w, d)
+    -- el proyecto (si la junction apunta a otro lado — carpeta movida — se rehace)
+    let ws_link be d + "/workspace"
+    when file_exists(ws_link)
+        let target be current_target(ws_link)
+        when target != "" and norm(target) != norm(w["path"])
+            unlink(ws_link)
+    when not file_exists(ws_link)
+        when not link(ws_link, w["path"])
+            raise("could not link " + ws_link + " → " + w["path"])
+    each n in LINKS
+        when not file_exists(d + "/" + n)
+            link(d + "/" + n, h + sep + n)
+    when not file_exists(d + "/.lampson/global")
+        link(d + "/.lampson/global", h + sep + ".lampson")
+    each f in COPIES
+        write_file(d + "/" + f, read_file(f))
+    give d
+
+-- estado guardado ANTES de los workspaces (en <home>/.lampson, separado por slug en cada registro): sesiones y trazas
+-- del proyecto, sus tareas programadas y el encendido de lámparas se mueven a <ws>/.lampson la primera vez
+task migrate(w, d)
+    let slug be w["slug"]
+    let moved be 0
+    try
+        each e in list_dir(".lampson/sessions")
+            when not e["is_dir"]
+                let doc be nothing
+                try
+                    set doc to json_decode(read_file(".lampson/sessions/" + e["name"]))
+                recover err
+                    set doc to nothing
+                when doc != nothing and contains(doc, "meta") and contains(doc["meta"], "project") and doc["meta"]["project"] == slug
+                    let id be replace_text(e["name"], ".json", "")
+                    sh("mkdir -p '" + d + "/.lampson/sessions' '" + d + "/.lampson/trace' && mv -f '.lampson/sessions/" + e["name"] + "' '" + d + "/.lampson/sessions/' && mv -f .lampson/trace/" + id + ".* '" + d + "/.lampson/trace/' 2>/dev/null; true", 20)
+                    set moved to moved + 1
+    recover err
+        set moved to moved
+    try
+        let sdoc be json_decode(read_file(".lampson/schedules.json"))
+        let mine be where(sdoc["tasks"], (t) => contains(t, "project") and t["project"] == slug)
+        when length(mine) > 0
+            write_file(d + "/.lampson/schedules.json", json_encode({"tasks": mine, "seq": when contains(sdoc, "seq") then sdoc["seq"] otherwise length(mine)}))
+            set sdoc["tasks"] to where(sdoc["tasks"], (t) => not (contains(t, "project") and t["project"] == slug))
+            write_file(".lampson/schedules.json", json_encode(sdoc))
+            each t in mine
+                sh("mkdir -p '" + d + "/.lampson/schedules' && mv -f '.lampson/schedules/" + t["id"] + ".log' '" + d + "/.lampson/schedules/' 2>/dev/null; true", 10)
+    recover err
+        set moved to moved
+    try
+        when file_exists(".lampson/lamps.json")
+            write_file(d + "/.lampson/lamps.json", read_file(".lampson/lamps.json"))
+    recover err
+        set moved to moved
+    give moved
+
+-- destino real de una junction/symlink (Git Bash: pwd -W dentro)
+task current_target(p)
+    try
+        let r be sh("cd '" + p + "' && (pwd -W 2>/dev/null || pwd -P)", 10)
+        give trim(text(r["stdout"]))
+    recover err
+        give ""
+
+-- registra (si hace falta) y prepara el workspace de una carpeta → la entrada del registro
+export task ensure(path)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("web.syn")
+    require file.read("chat.syn")
+    require file.read("hub.tpl.syn")
+    require file("hub.syn")
+    let existing be by_path(path)
+    let w be existing
+    when w == nothing
+        let doc be load_reg()
+        let slug be slug_of(path)
+        when contains(doc["workspaces"], slug)
+            -- mismo slug, otra ruta (mayúsculas/minúsculas, junction): reasociar
+            set w to doc["workspaces"][slug]
+            set w["path"] to text(path)
+        otherwise
+            let port be doc["next_port"]
+            set doc["next_port"] to port + 1
+            save_reg(doc)
+            let parts be where(split(replace_text(text(path), "\\", "/"), "/"), (x) => x != "")
+            set w to {"slug": slug, "name": parts[length(parts) - 1], "path": text(path), "port": port, "policy": "auto", "created": now(), "last_used": now()}
+        put(w)
+        when regen_hub() and hub_alive()
+            restart_hub_later()
+    prepare(w)
+    give w
+
+export task remove(slug)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("hub.tpl.syn")
+    require file("hub.syn")
+    require net("127.0.0.1")
+    let w be get(slug)
+    when w == nothing
+        raise("no workspace '" + text(slug) + "'")
+    stop_ws(w)
+    let doc be load_reg()
+    let keep be {}
+    each k in keys(doc["workspaces"])
+        when k != slug
+            set keep[k] to doc["workspaces"][k]
+    set doc["workspaces"] to keep
+    save_reg(doc)
+    when regen_hub() and hub_alive()
+        restart_hub_later()
+    give "workspace '" + slug + "' quitado del registro (la carpeta " + dir_of(slug) + " y el proyecto quedan en disco)"
+
+-- ---------- hub generado ----------
+task hub_routes(w)
+    let base be "http://127.0.0.1:" + text(w["port"])
+    let lines be []
+    each m in ["GET", "POST"]
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/api/*path\"\n        proxy to \"" + base + "\"")
+    set lines to append(lines, "    route \"GET /w/" + w["slug"] + "/approve/*path\"\n        proxy to \"" + base + "\"")
+    give join(lines, "\n")
+
+-- reescribe hub.syn desde la plantilla si cambió (bajo --watch, el hub se reinicia solo)
+export task regen_hub()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("hub.tpl.syn")
+    require file("hub.syn")
+    let tpl be read_file(HUB_TEMPLATE)
+    let blocks be []
+    each w in all()
+        set blocks to append(blocks, hub_routes(w))
+    let body be replace_text(tpl, "    -- @workspaces", when length(blocks) == 0 then "    -- (sin workspaces registrados todavía)" otherwise join(blocks, "\n"))
+    let cur be ""
+    try
+        set cur to read_file(HUB_FILE)
+    recover err
+        set cur to ""
+    when cur != body
+        write_file(HUB_FILE, body)
+        give true
+    give false
+
+-- ---------- procesos ----------
+-- lanzar DESACOPLADO (sobrevive al request y al proceso que lo lanzó); log en <ws>/.lampson/web.log
+-- Windows: `start /b` hereda los handles de stdout → quien capture la salida del lanzador (PowerShell, un pipe)
+-- se queda esperando al nieto. Start-Process con redirección crea handles nuevos: el nieto queda suelto de verdad.
+task spawn_detached(cwd, cmdline, envs)
+    when is_win()
+        -- WorkingDirectory absoluto: el relativo se resolvería contra el cwd del PowerShell (que ya es `cwd`)
+        let h be home()
+        let abs be when cwd == "." then h otherwise h + "\\" + replace_text(cwd, "/", "\\")
+        let ps be "Start-Process -FilePath cmd -ArgumentList '/c', '" + replace_text(cmdline, "'", "''") + "' -WorkingDirectory '" + replace_text(abs, "'", "''") + "' -WindowStyle Hidden"
+        let p be proc_spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], {"cwd": cwd, "env": envs, "process_group": false})
+        proc_wait(p, 15)
+        proc_close(p)
+    otherwise
+        let p be proc_spawn("sh", ["-c", "nohup " + cmdline + " >/dev/null 2>&1 &"], {"cwd": cwd, "env": envs, "process_group": false})
+        proc_wait(p, 5)
+        proc_close(p)
+    give true
+
+export task start_ws(w)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("web.syn")
+    require file.read("chat.syn")
+    require file.read(".env")
+    let d be prepare(w)
+    let h be home()
+    let sep be when is_win() then "\\" otherwise "/"
+    let envf be h + sep + ".env"
+    let envs be {"LAMPSON_WS": w["slug"], "LAMPSON_WORKSPACE": w["path"], "LAMPSON_PORT": text(w["port"]), "LAMPSON_HOME": h}
+    let exe be env("LAMPSON_SYNSEMA", "synsema")
+    -- el .env de la instalación (cwd = home; la capability es relativa, la ruta que se pasa al hijo es absoluta)
+    let cmd be exe + " serve web.syn --port " + text(w["port"]) + " --bind 127.0.0.1" + (when file_exists(".env") then " --env-file \"" + envf + "\"" otherwise "") + " > .lampson/web.log 2>&1"
+    spawn_detached(d, cmd, envs)
+    give true
+
+-- ¿responde? → {alive, last_used, schedules_on, version} | nothing
+export task health(w)
+    require net("127.0.0.1")
+    require time
+    try
+        let r be http_get("http://127.0.0.1:" + text(w["port"]) + "/w/" + w["slug"] + "/api/health", {"timeout": 2})
+        when r["ok"]
+            give json_decode(body of r)
+        give nothing
+    recover err
+        give nothing
+
+-- esperar hasta que responda (arranque)
+export task wait_ready(w, secs)
+    require net("127.0.0.1")
+    require time
+    let deadline be now() + secs
+    while now() < deadline
+        when health(w) != nothing
+            give true
+        sleep(0.4)
+    give false
+
+export task stop_ws(w)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require net("127.0.0.1")
+    let victims be where(proc.listeners(), (l) => l["port"] == w["port"])
+    each l in victims
+        proc.kill_pid(l["pid"])
+    give length(victims) > 0
+
+-- ---------- hub ----------
+export task hub_alive()
+    require net("127.0.0.1")
+    require time
+    try
+        let r be http_get("http://127.0.0.1:" + text(HUB_PORT) + "/api/hub", {"timeout": 2})
+        give r["ok"]
+    recover err
+        give false
+
+export task start_hub()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("hub.tpl.syn")
+    require file("hub.syn")
+    regen_hub()
+    -- desacoplado y con cwd = instalación (synsema daemon arranca el serve con otro cwd y los `use "./lib/…"`,
+    -- que son relativos al cwd, no se encuentran). Sin --watch: en esta carpeta el watcher recorre las junctions de
+    -- los workspaces (proyectos enteros) y el server nunca llega a escuchar; el reinicio lo hace restart_hub_later.
+    let exe be env("LAMPSON_SYNSEMA", "synsema")
+    spawn_detached(".", exe + " serve " + HUB_FILE + " > .lampson/hub.log 2>&1", {"LAMPSON_HOME": home()})
+    give true
+
+-- hub.syn cambió (workspace nuevo/quitado): un helper DESACOPLADO (cli.syn hub-restart) para el hub y lo vuelve a
+-- arrancar — puede llamarse desde el propio hub (que va a morir en el medio) o desde cli.syn
+export task restart_hub_later()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    let exe be env("LAMPSON_SYNSEMA", "synsema")
+    spawn_detached(".", exe + " run cli.syn > .lampson/hub-restart.log 2>&1", {"LAMPSON_HOME": home(), "LAMPSON_CMD": "hub-restart"})
+    give true
+
+export task stop_hub()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    let victims be where(proc.listeners(), (l) => l["port"] == HUB_PORT)
+    each l in victims
+        proc.kill_pid(l["pid"])
+    give length(victims) > 0
+
+-- ---------- política y supervisor (tick del hub) ----------
+export task idle_hours()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let doc be settings.load()
+    when contains(doc, "idle_hours")
+        let v be number(text(doc["idle_hours"]))
+        give when v < 0 then 0 otherwise v
+    give 4
+
+-- ¿debe estar vivo? always | auto (usado hace < idle_hours, o con tareas encendidas) | off
+export task should_live(w, hc)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    require time
+    let pol be when contains(w, "policy") then w["policy"] otherwise "auto"
+    when pol == "always"
+        give true
+    when pol == "off"
+        give false
+    when hc != nothing and contains(hc, "schedules_on") and hc["schedules_on"] > 0
+        give true
+    when schedules_on_disk(w) > 0
+        give true
+    let ih be idle_hours()
+    when ih == 0
+        give true
+    let last be when hc != nothing and contains(hc, "last_used") and hc["last_used"] != nothing then hc["last_used"] otherwise w["last_used"]
+    give now() - last < ih * 3600
+
+-- tareas encendidas según el json del workspace (sirve aunque el proceso esté apagado)
+task schedules_on_disk(w)
+    try
+        let doc be json_decode(read_file(dir_of(w["slug"]) + "/.lampson/schedules.json"))
+        give length(where(doc["tasks"], (t) => t["enabled"] == true))
+    recover err
+        give 0
+
+-- un tick: arranca lo que debe vivir y no responde; apaga lo que no debe y responde
+export task tick()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require net("127.0.0.1")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("web.syn")
+    require file.read("chat.syn")
+    let started be []
+    let stopped be []
+    each w in all()
+        let hc be health(w)
+        let want be should_live(w, hc)
+        when want and hc == nothing
+            start_ws(w)
+            set started to append(started, w["slug"])
+        otherwise when not want and hc != nothing
+            stop_ws(w)
+            set stopped to append(stopped, w["slug"])
+    give {"started": started, "stopped": stopped}
+
+-- resumen para la UI del hub
+export task summary()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require net("127.0.0.1")
+    require file(".lampson")
+    require file(".lampson/*")
+    let out be []
+    each w in all()
+        let hc be health(w)
+        set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "port": w["port"], "policy": when contains(w, "policy") then w["policy"] otherwise "auto", "created": w["created"], "last_used": when hc != nothing and contains(hc, "last_used") and hc["last_used"] != nothing then hc["last_used"] otherwise w["last_used"], "alive": hc != nothing, "schedules_on": when hc != nothing and contains(hc, "schedules_on") then hc["schedules_on"] otherwise schedules_on_disk(w), "url": "/w/" + w["slug"]})
+    give out
+
+-- ---------- explorador de carpetas ----------
+-- diálogo nativo del SO (PC con escritorio). Devuelve la ruta elegida, "" si canceló, nothing si no hay diálogo.
+export task pick_folder()
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    try
+        when is_win()
+            let ps be "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Elegí la carpeta del proyecto (workspace de Lampson)'; $d.ShowNewFolderButton = $true; $f = New-Object System.Windows.Forms.Form; $f.TopMost = $true; if ($d.ShowDialog($f) -eq 'OK') { Write-Output $d.SelectedPath }"
+            let r be run("powershell", ["-NoProfile", "-STA", "-Command", ps], 300)
+            give trim(text(r["stdout"]))
+        let r be run("sh", ["-c", "if command -v osascript >/dev/null; then osascript -e 'POSIX path of (choose folder with prompt \"Carpeta del proyecto\")'; elif command -v zenity >/dev/null; then zenity --file-selection --directory --title='Carpeta del proyecto'; else exit 3; fi"], 300)
+        when r["exit_code"] == 3
+            give nothing
+        give trim(text(r["stdout"]))
+    recover err
+        give nothing
+
+-- listado de subcarpetas por shell (VPS sin escritorio): sin capabilities de archivo sobre el disco
+export task browse(path)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    let p be when path == nothing or trim(text(path)) == "" then env("HOME", env("USERPROFILE", "/")) otherwise text(path)
+    let r be sh("cd \"" + replace_text(p, "\"", "") + "\" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P) && ls -1 -d -- */ 2>/dev/null", 10)
+    let lines be where(split(replace_text(text(r["stdout"]), "\r", ""), "\n"), (x) => trim(x) != "")
+    when length(lines) == 0
+        give {"path": p, "dirs": [], "error": "no existe o no se puede leer"}
+    let here be lines[0]
+    when is_win()
+        set here to replace_text(here, "/", "\\")
+    let dirs be apply(slice(lines, 1, length(lines)), (d) => replace_text(d, "/", ""))
+    let parts be where(split(replace_text(here, "\\", "/"), "/"), (x) => x != "")
+    let parent be when length(parts) > 1 then join(slice(parts, 0, length(parts) - 1), when is_win() then "\\" otherwise "/") otherwise (when is_win() then parts[0] + "\\" otherwise "/")
+    give {"path": here, "parent": parent, "dirs": where(dirs, (d) => not starts_with(d, "."))}

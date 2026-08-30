@@ -28,6 +28,8 @@
 let ROOTS be [
     {"dir": ".lampson/skills-global", "source": "global"},
     {"dir": ".lampson/skills-claude", "source": "global"},
+    {"dir": ".lampson/global/skills-global", "source": "global"},
+    {"dir": ".lampson/global/skills-claude", "source": "global"},
     {"dir": "skills", "source": "harness"},
     {"dir": "workspace/.claude/skills", "source": "project"},
     {"dir": "workspace/.agents/skills", "source": "project"},

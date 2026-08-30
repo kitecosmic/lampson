@@ -2,7 +2,7 @@
 // switch, tools con formulario generado del schema, correr, borrar) y la ayuda «?».
 let lampsData = [], lampsMeta = { global: 'lamps/', project: '.lampson/lamps/' };
 async function fetchLamps() {
-  let r; try { r = await (await fetch('/api/lamps')).json(); } catch (e) { return lampsData; }
+  let r; try { r = await (await fetch(BASE + '/api/lamps')).json(); } catch (e) { return lampsData; }
   lampsData = r.lamps || []; lampsMeta = { global: r.global || 'lamps/', project: r.project || '.lampson/lamps/' };
   const on = lampsData.filter(l => l.enabled).length;
   const pill = $('#lamps'); pill.textContent = lampsData.length ? `lámparas ${on}/${lampsData.length}` : 'lámparas'; pill.classList.toggle('on', on > 0);
@@ -81,7 +81,7 @@ function openLamps(selectName) {
         const errEl = box.querySelector('[data-err]');
         box.querySelector('.sw input').onchange = async (ev) => {
           errEl.textContent = '';
-          const r = await api('/api/lamps/toggle', { name: l.name, enabled: ev.target.checked });
+          const r = await api(BASE + '/api/lamps/toggle', { name: l.name, enabled: ev.target.checked });
           if (!r.ok) { errEl.textContent = r.data.error || ('error ' + r.status); ev.target.checked = !ev.target.checked; return; }
           add('meta', '☼ ' + esc(r.data.result || '')); loadLamps(); loadSched();
         };
@@ -92,7 +92,7 @@ function openLamps(selectName) {
             const st = tdiv.querySelector('.st'), out = tdiv.querySelector('.out'); const got = lampArgs(tdiv, props, required);
             if (got.error) { st.textContent = got.error; return; }
             st.textContent = 'corriendo…'; out.style.display = 'none'; b.disabled = true;
-            const r = await api('/api/lamps/run', { tool: 'lamp_' + l.name + '_' + t.name, args: got.args });
+            const r = await api(BASE + '/api/lamps/run', { tool: 'lamp_' + l.name + '_' + t.name, args: got.args });
             st.textContent = r.ok ? '' : (r.data.error || 'error ' + r.status);
             if (r.ok) { out.textContent = r.data.output; out.style.display = ''; }
             b.disabled = false;
@@ -100,7 +100,7 @@ function openLamps(selectName) {
         }
         const del = box.querySelector('.dfoot .del');
         if (del) del.onclick = () => inlineConfirm(del, `¿borrar ${l.name} del disco?`, async () => {
-          const r = await api('/api/lamps/remove', { name: l.name });
+          const r = await api(BASE + '/api/lamps/remove', { name: l.name });
           if (!r.ok) { errEl.textContent = r.data.error || ('error ' + r.status); return; }
           add('meta', '☼ ' + esc(r.data.result || '')); loadLamps();
         });

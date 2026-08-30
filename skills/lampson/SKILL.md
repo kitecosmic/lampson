@@ -78,6 +78,11 @@ the terminal button and run `npm run dev`), then tell me the URL".
   a vision model instead of guessing what the image shows.
 - Sessions can be deleted (`/delete <id>`, or ✕ in the web sidebar).
 
+## Workspaces
+- Each project folder is a workspace with its own Lampson process; the user switches between them from the
+  header pill or http://127.0.0.1:8080 (the hub). You only ever see this workspace. If the user asks to work on
+  another project, tell them to open it as a workspace (hub screen, or `lampson` in that folder) — you cannot.
+
 ## Network exposure
 - The web server listens on all interfaces but every `/api/*` route (and the terminal socket) only
   accepts loopback clients; others get 401 unless they present `LAMPSON_WEB_TOKEN`. If the user asks

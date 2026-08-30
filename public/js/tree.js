@@ -1,7 +1,7 @@
 // tree.js — árbol de archivos (panel derecho) con estado git, y el visor de archivos
 let gitStatus = { changes: {} };
 async function loadGit() {
-  try { gitStatus = await (await fetch('/api/git')).json(); } catch (e) { gitStatus = { repo: false, changes: {} }; }
+  try { gitStatus = await (await fetch(BASE + '/api/git')).json(); } catch (e) { gitStatus = { repo: false, changes: {} }; }
   const g = $('#git'); if (!gitStatus.repo) { g.style.display = 'none'; return; }
   const k = gitStatus.counts || {}; const nuevos = (k.added||0)+(k.untracked||0);
   const parts = []; // solo contadores distintos de cero — lo demás es ruido
@@ -20,7 +20,7 @@ function gitClass(path, isDir) {
 async function loadTree() {
   await loadGit();
   const box = $('#tree'); box.innerHTML = '';
-  let t; try { t = await (await fetch('/api/tree')).json(); } catch (e) { box.innerHTML = '<div class="row none">sin árbol</div>'; return; }
+  let t; try { t = await (await fetch(BASE + '/api/tree')).json(); } catch (e) { box.innerHTML = '<div class="row none">sin árbol</div>'; return; }
   const render = (entries, parent, depth) => {
     for (const e of entries) {
       const n = document.createElement('div'); n.className = 'node';
@@ -41,7 +41,7 @@ async function loadTree() {
 }
 async function openFile(path, row) {
   document.querySelectorAll('.row.active').forEach(x => x.classList.remove('active')); if (row) row.classList.add('active');
-  const r = await fetch('/api/file?path=' + encodeURIComponent(path)); const d = await r.json();
+  const r = await fetch(BASE + '/api/file?path=' + encodeURIComponent(path)); const d = await r.json();
   if (!r.ok) { add('denied', esc(d.error || 'error')); return; }
   $('#vpath').textContent = d.path; $('#vmeta').textContent = d.lines + ' líneas';
   $('#vbody').className = ''; $('#vbody').innerHTML = String(d.content).split('\n').map((l, i) => `<span class="ln">${i + 1}</span>${esc(l)}`).join('\n');

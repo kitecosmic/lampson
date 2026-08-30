@@ -15,3 +15,5 @@ tests/*.txt
 *.tmp
 
 *.tgz
+# hub generado desde hub.tpl.syn por lib/workspaces.syn
+hub.syn

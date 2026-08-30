@@ -7,7 +7,15 @@
 --
 -- Forma: {"provider": "deepseek", "model": "deepseek-chat", "keys": {"deepseek": "sk-…"}}
 
-let PATH be ".lampson/config.json"
+-- bajo el hub cada workspace corre con su propio .lampson/ y una junction .lampson/global → <home>/.lampson:
+-- la config (keys, ⚙) es una sola para todos. Sin junction (instalación directa, tests) es .lampson/config.json
+task cfg_path()
+    try
+        when file_exists(".lampson/global/config.json") or file_exists(".lampson/global")
+            give ".lampson/global/config.json"
+    recover err
+        give ".lampson/config.json"
+    give ".lampson/config.json"
 
 export task load()
     require file.read(".lampson")
@@ -18,7 +26,7 @@ export task load()
     when env("LAMPSON_NO_CONFIG", "") == "1"
         give {"provider": "", "model": "", "keys": {}}
     try
-        let doc be json_decode(read_file(PATH))
+        let doc be json_decode(read_file(cfg_path()))
         -- claves siempre presentes: quien lee no tiene que chequear (y `and` no cortocircuita)
         when not contains(doc, "keys")
             set doc["keys"] to {}
@@ -33,7 +41,7 @@ export task load()
 export task save(doc)
     require file(".lampson")
     require file(".lampson/*")
-    write_file(PATH, json_encode(doc))
+    write_file(cfg_path(), json_encode(doc))
     give true
 
 -- key guardada para un proveedor, como TEXTO ("" si no hay). Sellarla con as_secret antes de usarla.
@@ -71,13 +79,13 @@ export task set_default(name, model)
 
 -- valores de configuración generales (rueda de la UI): tz, public_url, webhook_url, webhook_secret…
 -- Vacío = borrar la clave. Nunca se devuelven secretos al navegador: `values()` marca webhook_secret como has_*.
-export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret"]
+export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret", "idle_hours"]
 
 -- el archivo REAL, ignorando LAMPSON_NO_CONFIG: escribir con el doc en blanco de los tests pisaría provider/keys
 -- (pasó el 2026-08-29 probando la rueda con un web de test)
 task load_raw()
     try
-        let doc be json_decode(read_file(PATH))
+        let doc be json_decode(read_file(cfg_path()))
         when not contains(doc, "keys")
             set doc["keys"] to {}
         when not contains(doc, "provider")

@@ -29,7 +29,7 @@ function openTerm() {
     }
   });
   $('#tmeta').textContent = 'conectando…';
-  termWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/term'); termWs.binaryType = 'arraybuffer';
+  termWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + BASE + '/api/term'); termWs.binaryType = 'arraybuffer';
   const send = (o) => { if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify(o)); };
   termWs.onopen = () => { $('#termpane').classList.add('live'); send({ type: 'resize', cols: term.cols, rows: term.rows }); term.focus(); };
   termWs.onmessage = (e) => { // "o" + salida del pty | "c" + JSON de control

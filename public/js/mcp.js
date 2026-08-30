@@ -2,7 +2,7 @@
 // derecha; «+ conectar» es una fila más cuyo detalle es el formulario)
 let mcpServers = [], mcpFiles = { global: '.lampson/mcp.json', project: '' };
 async function fetchMcp() {
-  let r; try { r = await (await fetch('/api/mcp')).json(); } catch (e) { return mcpServers; }
+  let r; try { r = await (await fetch(BASE + '/api/mcp')).json(); } catch (e) { return mcpServers; }
   mcpServers = r.servers || []; mcpFiles = { global: r.global || '.lampson/mcp.json', project: r.project || '' };
   return mcpServers;
 }
@@ -50,7 +50,7 @@ function openMcp(selectName) {
             const env = {};
             for (const tok of f('env').value.trim().split(/\s+/).filter(Boolean)) { const i = tok.indexOf('='); if (i > 0) env[tok.slice(0, i)] = tok.slice(i + 1); }
             err('conectando…');
-            const r = await api('/api/mcp/add', { name, command, env, scope: f('scope').value });
+            const r = await api(BASE + '/api/mcp/add', { name, command, env, scope: f('scope').value });
             if (!r.ok) { err(r.data.error || ('error ' + r.status)); return; }
             add('meta', '⌁ ' + esc(r.data.result || 'server conectado')); await loadMcp(); Panel.selectKey(name);
           };
@@ -58,7 +58,7 @@ function openMcp(selectName) {
           return;
         }
         const del = box.querySelector('.dfoot .del');
-        del.onclick = () => inlineConfirm(del, `¿quitar ${s.name}?`, async () => { const r = await api('/api/mcp/remove', { name: s.name }); if (!r.ok) { err(r.data.error || 'error'); return; } add('meta', '⌁ ' + esc(r.data.result || '')); loadMcp(); });
+        del.onclick = () => inlineConfirm(del, `¿quitar ${s.name}?`, async () => { const r = await api(BASE + '/api/mcp/remove', { name: s.name }); if (!r.ok) { err(r.data.error || 'error'); return; } add('meta', '⌁ ' + esc(r.data.result || '')); loadMcp(); });
       }
     }
   });

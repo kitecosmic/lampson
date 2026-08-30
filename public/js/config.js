@@ -17,7 +17,7 @@ function cfgField(v, key, label, placeholder, ds, type) {
   return `<label class="col">${label}<input name="${key}" type="${type || 'text'}" spellcheck="false" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(v[key] || '')}" ${v[key + '_from_env'] ? 'disabled title="fijado en .env (LAMPSON_' + key.toUpperCase() + '): editalo ahí"' : ''}><span class="ds">${ds}</span></label>`;
 }
 async function openCfg(section, onboarding) {
-  let r; try { r = await (await fetch('/api/settings/values')).json(); } catch (e) { r = { values: {} }; }
+  let r; try { r = await (await fetch(BASE + '/api/settings/values')).json(); } catch (e) { r = { values: {} }; }
   const v = r.values || {};
   Panel.open({
     id: 'config', eyebrow: 'configuración', title: onboarding ? 'Bienvenido a Lampson' : 'Configuración', sub: 'lampson/.lampson/config.json', layout: 'browse', noClose: !!onboarding,
@@ -30,6 +30,7 @@ async function openCfg(section, onboarding) {
       detail: (s) => {
         if (s.id === 'general') return `<div class="dhead"><span class="nm serif">General</span></div><div class="dform"><p class="lead">Se guarda en <code>lampson/.lampson/config.json</code> (local). Un valor fijado en <code>.env</code> gana y se muestra bloqueado.</p>`
           + cfgField(v, 'tz', 'zona horaria', '-03:00', 'para «daily 09:00» y los horarios de las tareas programadas · vacío = la del sistema' + (typeof r.tz_detected === 'number' ? ` (ahora: ${fmtOff(r.tz_detected)})` : ''))
+            + cfgField(v, 'idle_hours', 'apagar workspaces inactivos tras', '4', 'horas sin uso tras las que el hub apaga el proceso de un workspace (vuelve a arrancar al abrirlo, en 1-2 s) - 0 = nunca - los que tienen tareas programadas encendidas o politica siempre vivo no se apagan')
           + `<div class="pfoot"><button class="primary" data-save>Guardar</button><span class="derr"></span></div></div>`;
         if (s.id === 'approvals') return `<div class="dhead"><span class="nm serif">Aprobaciones a distancia</span></div><div class="dform"><p class="lead">Cuando una tarea programada (o el chat) necesita tu permiso, además de aparecer acá puede avisarte a tu canal con <b>links de un solo uso</b> para permitir o denegar desde el teléfono.</p>`
           + cfgField(v, 'public_url', 'URL pública', 'https://lampson.midominio.com', 'por dónde se llega a este lampson desde afuera (túnel, VPS, edge con TLS); con esto cada aprobación trae links <code>/approve/&lt;id&gt;/&lt;token&gt;?d=yes|no</code>')
@@ -51,11 +52,12 @@ async function openCfg(section, onboarding) {
         const save = box.querySelector('[data-save]');
         if (save) save.onclick = async () => {
           const body = {};
-          for (const key of ['tz', 'public_url', 'webhook_url']) { const el = box.querySelector(`[name="${key}"]`); if (el && !el.disabled) body[key] = el.value.trim(); }
+          for (const key of ['tz', 'public_url', 'webhook_url', 'idle_hours']) { const el = box.querySelector(`[name="${key}"]`); if (el && !el.disabled) body[key] = el.value.trim(); }
           const sec = box.querySelector('[name="webhook_secret"]'); if (sec && sec.value.trim()) body.webhook_secret = sec.value.trim();
           if (body.tz && !/^[+-]?\d{1,2}(:?\d{2})?$/.test(body.tz)) { err('zona horaria: usá -03:00 o +0200'); return; }
+          if (body.idle_hours && !/^[0-9]+([.][0-9]+)?$/.test(body.idle_hours)) { err('inactividad: horas (0 = nunca)'); return; }
           err('guardando…');
-          const r2 = await api('/api/settings/values', body);
+          const r2 = await api(BASE + '/api/settings/values', body);
           if (!r2.ok) { err(r2.data.error || ('error ' + r2.status)); return; }
           Object.assign(v, r2.data.values || {}); err('✓ guardado'); add('meta', '⚙ configuración guardada'); loadSched(); loadApprovals();
         };
@@ -67,7 +69,7 @@ async function openCfg(section, onboarding) {
             f('model').value = setupSel === cfg.provider ? (cfg.model || p.model || '') : (p.model || ''); f('model').placeholder = p.model || '';
             // modelos válidos según la API del proveedor (evita tipear "DeepSeek-V4-Pro" cuando la API quiere "deepseek-v4-pro")
             const dl = box.querySelector('#modelList'); dl.innerHTML = ''; f('model').title = '';
-            if (p.has_key || setupSel === 'ollama') fetch('/api/models?provider=' + encodeURIComponent(setupSel)).then(r => r.json()).then(d => { if (setupSel !== p.name) return; if (d.error) { f('model').title = 'no pude listar modelos: ' + d.error; return; } dl.innerHTML = (d.models || []).map(m => `<option value="${esc(m)}">`).join(''); f('model').title = (d.models || []).length ? 'modelos disponibles: ' + d.models.join(', ') : ''; }).catch(() => {});
+            if (p.has_key || setupSel === 'ollama') fetch(BASE + '/api/models?provider=' + encodeURIComponent(setupSel)).then(r => r.json()).then(d => { if (setupSel !== p.name) return; if (d.error) { f('model').title = 'no pude listar modelos: ' + d.error; return; } dl.innerHTML = (d.models || []).map(m => `<option value="${esc(m)}">`).join(''); f('model').title = (d.models || []).length ? 'modelos disponibles: ' + d.models.join(', ') : ''; }).catch(() => {});
             f('key').value = ''; f('key').disabled = setupSel === 'ollama';
             f('key').placeholder = setupSel === 'ollama' ? 'ollama no necesita key' : (p.has_key ? 'hay una key guardada · pegá otra para reemplazarla' : 'pegala acá');
           };
@@ -80,7 +82,7 @@ async function openCfg(section, onboarding) {
             if (setupSel !== 'ollama' && !p.has_key && !body.key) { err('falta la API key'); return; }
             saveP.disabled = true;
             try {
-              const r2 = await api('/api/settings', body);
+              const r2 = await api(BASE + '/api/settings', body);
               if (!r2.ok) { err(r2.data.error || ('error ' + r2.status)); return; }
               const d = r2.data; cfg.providers = d.providers; cfg.provider = d.provider; cfg.model = d.model; cfg.vision = d.vision; cfg.configured = d.configured; paintModel(); paintAttach();
               if (onboarding) { Panel.close(); if (log.querySelector('.empty')) empty(); } else { err('✓ guardado'); Panel.detail(); }

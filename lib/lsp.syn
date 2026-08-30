@@ -22,7 +22,16 @@
 
 use "./tools/common.syn" as c
 
-export let GLOBAL_CONFIG be ".lampson/lsp.json"
+-- global = compartido por todos los workspaces: .lampson/global/ (junction al .lampson de la instalación) cuando
+-- el proceso corre bajo el hub; .lampson/ en una instalación directa o en los tests
+task global_config()
+    try
+        when file_exists(".lampson/global")
+            give ".lampson/global/lsp.json"
+    recover err
+        give ".lampson/lsp.json"
+    give ".lampson/lsp.json"
+export let GLOBAL_CONFIG be global_config()
 export let PROJECT_CONFIG be "workspace/.lampson/lsp.json"
 let CALL_TIMEOUT be 60
 let START_WAIT be 25

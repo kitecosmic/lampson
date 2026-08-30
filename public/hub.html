@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Lampson · workspaces</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/layout.css">
+<link rel="stylesheet" href="/css/chat.css">
+<link rel="stylesheet" href="/css/panel.css">
+<link rel="stylesheet" href="/css/hub.css">
+<script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body class="hub">
+<header>
+  <div class="hrow">
+    <span class="brand">lampson<span class="proj">workspaces</span></span>
+    <span class="spacer"></span>
+    <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
+  </div>
+</header>
+<main>
+  <div id="stage">
+    <div class="empty">
+      <p class="eyebrow">workspaces</p>
+      <h1>¿En qué proyecto trabajamos?</h1>
+      <p class="lead">Cada workspace es una carpeta de tu disco con su propio agente: sesiones, tareas programadas, lámparas, MCP. Corren en procesos separados, así podés tener varios abiertos a la vez. Los que tienen tareas encendidas siguen vivos aunque cierres todo.</p>
+      <div class="wsgrid" id="wsGrid"></div>
+      <p class="lead" style="margin-top:22px">Desde una terminal: <code>cd mi-proyecto &amp;&amp; lampson</code> (terminal) o <code>lampson --web</code> (esta web, en ese workspace).</p>
+    </div>
+  </div>
+</main>
+<script src="/js/panel.js"></script>
+<script src="/js/hub.js"></script>
+</body>
+</html>

@@ -4,7 +4,7 @@
 // recargar por timer; los timers quedan como respaldo lento por si el stream se cae (reconexión con backoff).
 let events = null, evBackoff = 1000;
 function connectEvents() {
-  try { events = new EventSource('/api/events'); } catch (e) { events = null; return; }
+  try { events = new EventSource(BASE + '/api/events'); } catch (e) { events = null; return; }
   events.onopen = () => { evBackoff = 1000; };
   events.addEventListener('event', e => {
     let ev; try { ev = JSON.parse(e.data); } catch { return; }
