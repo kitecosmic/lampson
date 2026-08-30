@@ -12,8 +12,8 @@ language itself — and every step is visible, in the terminal or in a web UI.
   Ollama, Anthropic, MiniMax… one `.env` line to switch.
 - **Least-privilege by construction**: each tool declares its capabilities; the runtime enforces
   them. File tools can only touch the mounted workspace (absolute paths, `..`, sibling dirs → denied).
-- **Permissions you control**: `ask` (approve dangerous commands, in the terminal or with a button in
-  the web UI), `yolo`, `strict`. Destructive system commands are always blocked.
+- **Permissions you control**: `ask` (approve dangerous commands, with a ↑↓ menu in the terminal or a
+  button in the web UI), `yolo`, `strict`. Destructive system commands are always blocked.
 - **Agents**: `build` (edits), `plan` (read-only), `review` (runs tests, never edits), `explore`,
   `worker` (scoped implementation). **Sub-agents**: `delegate` runs several of them *in parallel*
   (real threads) with their own context and a restricted toolset, or in the *background* — the report
@@ -45,8 +45,14 @@ language itself — and every step is visible, in the terminal or in a web UI.
   and edit them (web panel, `/memory`).
 - **`!command`**: run something yourself from the chat inside a real pseudo-terminal (prompts, passwords
   and REPLs work); the output lands in the agent's context.
-- **Terminal in the browser**: the web UI opens a real shell (pty, cwd = your project) in the center pane
-  — `>_ terminal` in the header. Synsema 0.6.8+.
+- **Terminals in the browser**: the web UI opens a real shell (pty, cwd = your project) in the center pane
+  — `>_ terminal` in the header, `+ nueva terminal` for another one (up to 4 tabs, one shell each), plus the
+  usual window controls: minimize (the pane hides, every shell keeps running, the header button turns green),
+  full screen, close (kills the active shell). **A page reload doesn't kill them**: each shell lives in a
+  supervisor agent (`lib/term.syn`), not in the socket, so the page comes back, asks `GET /api/terms` and
+  re-attaches by id with a replay of the last output — same pid, same session, same `cd`. With no socket
+  attached for 30 min the shell is collected, and everything dies with lampson. A shell that exits keeps its
+  output on screen — read the last logs, then `+` for a fresh one. Synsema 0.6.8+.
 - **Local only**: the web API (chat with tools, terminal, process control) answers loopback clients
   only; anything else gets 401. To let a script in from elsewhere, set `LAMPSON_WEB_TOKEN` in `.env`
   and send `Authorization: Bearer <token>`.
@@ -260,8 +266,10 @@ cli.syn              what launchers ask Synsema: ensure/list/hub-start/hub-stop/
 hub.tpl.syn          template of the hub (:8080): workspaces screen + API, supervisor tick, one proxy route per workspace
 lib/workspaces.syn   registry (.lampson/workspaces.json), ws/<slug> dirs + junctions, detached processes, health,
                      life policy, folder picker (native dialog / server-side browser)
-chat.syn             terminal REPL (colors, approvals via Synsema's native `approve`)
+chat.syn             terminal REPL (colors, ↑↓ menus for approvals / setup / confirmations, `approve` without a TTY)
 web.syn              one process per workspace: /w/:slug/api/… → SSE chat, sessions, tree, processes, schedules…
+lib/term.syn         browser terminals: one supervisor agent per pty (survives the socket → survives F5),
+                     bus bridge term.ctl.<id> / term.out.<id>, replay buffer, idle collection
 public/              web UI (no build step, no dependencies; classic scripts served by `static`)
   index.html         markup only: header, the two side panels, the chat; loads css/ and js/ in order
   css/               tokens (fonts, palette, base) · layout (grid, header, panels, chat, composer) · sidebar · chat · panel

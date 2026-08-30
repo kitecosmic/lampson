@@ -1,0 +1,162 @@
+-- lib/term.syn — terminales del navegador que SOBREVIVEN a un F5.
+--
+-- DISEÑO (mismo patrón que lib/tools/proc.syn): un proc_spawn hecho dentro de un handler muere cuando
+-- termina el request — y un socket es un request. Por eso el pty vive dentro de un AGENTE supervisor
+-- (lo único con ciclo de vida propio bajo `serve`) y el socket es sólo un PUENTE por el bus:
+--
+--   navegador → socket → bus "term.ctl.<id>"  → agente → proc_send / proc_resize / kill / replay
+--   agente    → bus "term.out.<id>" → socket → navegador   ("o" salida · "exit" código · "replay")
+--
+-- Cerrar la pestaña del navegador ya no mata la shell: el socket se va, el agente sigue. Al volver, la UI
+-- pide GET /api/terms, ve las que están vivas y se reengancha con ?id=<id>; el agente le reenvía los
+-- últimos chunks del pty (replay en memoria) para que la pantalla no aparezca en blanco.
+--
+-- Recolección: cada socket enganchado manda un ping; sin NINGÚN socket por IDLE_CLOSE segundos, el
+-- supervisor cierra la shell. Y todo muere con el proceso lampson, como siempre (sin huérfanos).
+--
+-- OJO (miga del runtime): un agente NO ve las constantes ni las tasks del módulo, sólo sus parámetros y
+-- las builtins — por eso KEEP_CHUNKS / IDLE_CLOSE viajan en el `spawn`.
+
+export let MAX_TERMS be 4
+let KEEP_CHUNKS be 240          -- replay: últimos N chunks del pty (bastante más que una pantalla)
+let IDLE_CLOSE be 1800          -- 30 min sin ningún socket enganchado → se recoge la shell
+let IDS_KEY be "term:ids"
+
+-- shell del terminal web: [cmd, args]. Windows: pwsh si está, si no PowerShell 5; unix: bash de login.
+-- En pwsh, los directorios de `ls` salen sin fondo azul (el default de $PSStyle se lee mal en oscuro).
+export task shell()
+    require exec
+    require env("OS")
+    when env("OS", "") == "Windows_NT"
+        try
+            run("pwsh", ["-NoLogo", "-Command", "exit"], 10)
+            give ["pwsh", ["-NoLogo", "-NoExit", "-Command", "$PSStyle.FileInfo.Directory = $PSStyle.Foreground.BrightBlue"]]
+        recover err
+            give ["powershell", ["-NoLogo"]]
+    give ["bash", ["-l"]]
+
+-- cwd del terminal: la ruta REAL del proyecto (LAMPSON_WORKSPACE), no la junction ./workspace —
+-- así el prompt muestra dónde estás de verdad y coincide con el header.
+export task cwd()
+    require env("LAMPSON_*")
+    give env("LAMPSON_WORKSPACE", "workspace")
+
+-- ---------- supervisor: un agente por terminal ----------
+agent TermSup
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let key be "term:" + id
+    let p be nothing
+    try
+        set p to proc_spawn(sh, args, {"cwd": dir, "pty": true, "cols": cols, "rows": rows})
+    recover err
+        share {"status": "exited", "pid": 0, "shell": sh, "cwd": dir, "started": nothing, "error": text(err)} as key
+    when p != nothing
+        share {"status": "running", "pid": proc_stats(p)["pid"], "shell": sh, "cwd": dir, "started": now(), "error": ""} as key
+        let sub be bus_subscribe("term.ctl." + id)
+        let chunks be []
+        let seen be now()
+        let open be true
+        while open
+            let ev be select({"p": p, "c": sub}, 20)
+            when ev == nothing
+                when proc_status(p) != "running"
+                    set open to false
+                otherwise when now() - seen > idle
+                    proc_close(p)
+                    set open to false
+            otherwise when ev["name"] == "c"
+                let m be ev["data"]
+                set seen to now()
+                when m["k"] == "in"
+                    proc_send(p, m["d"])
+                otherwise when m["k"] == "resize"
+                    proc_resize(p, floor(m["cols"]), floor(m["rows"]))
+                otherwise when m["k"] == "replay"
+                    -- sólo para el socket que lo pidió (`to`): con dos pestañas abiertas, la otra no repite
+                    bus_publish("term.out." + id, {"k": "replay", "to": m["to"], "d": join(chunks, "")})
+                otherwise when m["k"] == "kill"
+                    proc_close(p)
+                    set open to false
+            otherwise when ev["type"] == "exit"
+                bus_publish("term.out." + id, {"k": "exit", "to": "", "code": ev["data"]["exit_code"]})
+                set open to false
+            otherwise
+                let d be when is_bytes(ev["data"]) then decode(ev["data"], "utf8_lossy") otherwise ev["data"]
+                set chunks to append(chunks, d)
+                when length(chunks) > keep
+                    set chunks to slice(chunks, length(chunks) - keep, length(chunks))
+                bus_publish("term.out." + id, {"k": "o", "to": "", "d": d})
+        proc_close(p)
+        bus_unsubscribe(sub)
+        share {"status": "exited", "pid": 0, "shell": sh, "cwd": dir, "started": nothing, "error": ""} as key
+
+-- ---------- estado (blackboard) ----------
+
+export task state(id)
+    observe "term:" + id as st
+    give st
+
+export task alive(id)
+    let st be state(id)
+    when st == nothing
+        give false
+    give st["status"] == "running"
+
+task ids()
+    observe IDS_KEY as v
+    when v == nothing
+        give []
+    give v
+
+-- las terminales vivas, para que la UI reconstruya sus pestañas después de un F5
+export task list()
+    let out be []
+    each id in ids()
+        let st be state(id)
+        when st != nothing and st["status"] == "running"
+            set out to append(out, {"id": id, "pid": st["pid"], "shell": st["shell"], "cwd": st["cwd"], "started": st["started"]})
+    give out
+
+export task count()
+    give length(list())
+
+task new_id()
+    require time
+    require random
+    give "t" + text(floor(now() * 1000)) + "-" + text(floor(random() * 10000))
+
+-- arranca una terminal nueva y devuelve su id (nothing si ya se llegó al máximo)
+export task start(cols, rows)
+    require exec
+    require time
+    require random
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    when count() >= MAX_TERMS
+        give nothing
+    let sh be shell()
+    let dir be cwd()
+    let id be new_id()
+    -- "starting" ANTES del spawn: la clave puede tener el estado viejo de un id anterior y list() miente
+    share {"status": "starting", "pid": 0, "shell": sh[0], "cwd": dir, "started": now(), "error": ""} as "term:" + id
+    share append(ids(), id) as IDS_KEY
+    spawn TermSup with id = id, sh = sh[0], args = sh[1], dir = dir, cols = cols, rows = rows, keep = KEEP_CHUNKS, idle = IDLE_CLOSE
+    let waited be 0
+    while waited < 30 and state(id)["status"] == "starting"
+        sleep(0.1)
+        set waited to waited + 1
+    give id
+
+-- entrada del navegador hacia la shell (el socket es sólo el cartero)
+export task ctl(id, msg)
+    give bus_publish("term.ctl." + id, msg)
+
+export task kill(id)
+    give bus_publish("term.ctl." + id, {"k": "kill"})

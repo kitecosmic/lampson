@@ -3,7 +3,7 @@ name: synsema
 description: Writing, checking, running and testing Synsema (.syn) code — syntax reflexes, capabilities, live processes / pseudo-terminals, and the runtime traps that cost hours. Load before touching any .syn file.
 ---
 
-# Synsema quick reference (v0.6.12)
+# Synsema quick reference (v0.6.13)
 
 > Curated 10 KB summary for the agent (the full reference is ~450 KB and lives in the user's editor
 > skill). Kept in sync by hand with each `synsema update`; if `synsema --version` is newer than the
@@ -14,6 +14,13 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   `synsema test file.syn` (runs `test "..."` blocks) · `synsema serve file.syn` (HTTP server) ·
   `synsema update` (self-update; then refresh the AI skill with the command it prints).
 - Errors carry `file:line` and a suggestion. Read them; they are usually right.
+- **Read the repo without opening files (v0.6.13+)**: `synsema code outline` (project map: intent,
+  symbols, imports per file), `routes [path]` (the table each `serve` publishes: method, path, auth,
+  stream/socket/proxy, response kind, capabilities), `refs <name>` (every use, through module aliases),
+  `symbol <name>`, `caps` (declared vs. effective vs. `missing`, with the `require` to add), `check`,
+  `search <text>`, `deps`. Add `--json` for scripts. Same eight tools over MCP: `synsema code --mcp`
+  (server `synsema-code`, static — it never talks to a running server). `outline` before opening a
+  `.syn`, `refs` before renaming, `check` after every edit.
 
 ## Syntax reflexes (Python → Synsema)
 - `let x be 5` / `set x to 6` (no `=`) · `-- comment` · `when / otherwise when / otherwise` (no colons)

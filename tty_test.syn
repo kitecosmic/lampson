@@ -45,6 +45,17 @@ let seen6 be strip_ansi(log)
 assert(contains(seen6, "❯ ") and not contains(seen6, "dos"), seen6)
 print("  ✓ Ctrl+U vacía el buffer")
 set log to ""
+-- menú ↑↓ de lib/line.syn (choose): /delete confirma antes de borrar, con ❯ y línea de ayuda
+keys("/delete zzz-no-existe\r", 2.5)
+let seen7 be strip_ansi(log)
+assert(contains(seen7, "❯ cancelar") and contains(seen7, "Enter confirma"), seen7)
+print("  ✓ /delete abre el menú ❯ con su línea de ayuda")
+set log to ""
+keys(decode(bytes("1b", "hex")), 1.5)
+let seen8 be strip_ansi(log)
+assert(contains(seen8, "no se borró"), seen8)
+print("  ✓ Esc cancela el menú")
+set log to ""
 keys("/exit\r", 4)
 assert(contains(strip_ansi(log), "bye"), strip_ansi(log))
 print("  ✓ /exit sale limpio")

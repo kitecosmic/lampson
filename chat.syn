@@ -334,7 +334,7 @@ let COMMANDS be [
     ["/setup", "", "elegir proveedor, modelo y pegar la API key (queda en lampson/.lampson/config.json, local)"],
     ["/paste", "", "adjuntar la imagen del portapapeles al próximo mensaje (copiá una captura y escribí /paste)"],
     ["/image", "<ruta>", "adjuntar una imagen (png/jpg/gif/webp) al próximo mensaje; /image sin ruta muestra o quita las pendientes"],
-    ["/delete", "<id>", "borrar una sesión guardada (ver /sessions)"],
+    ["/delete", "<id>", "borrar una sesión guardada, con confirmación (ver /sessions)"],
     ["/config", "", "ver la configuración vigente (proveedor, modelo, límites, workspace)"],
     ["/files", "", "árbol completo del workspace"],
     ["/procs", "", "procesos que el agente dejó corriendo (servidores) y su estado"],
@@ -349,7 +349,7 @@ let COMMANDS be [
     ["/lamps", "[on <nombre> | off <nombre> | run <lámpara> <tool> [json] | remove <nombre>]", "lámparas (plugins de tools): listar, encender o apagar (global: lampson/lamps/ · proyecto: .lampson/lamps/)"],
     ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
     ["/schedule", "[add <json> | run <id> | on <id> | off <id> | remove <id> | log <id>]", "tareas programadas (cada 6h, todos los días a las 9…): lámpara, comando o corrida del agente; corren mientras lampson esté abierto (o con lampson --daemon start, sin nada abierto)"],
-    ["/approve", "<id> yes|no", "responder una aprobación pendiente de una tarea programada que corre en background"],
+    ["/approve", "<id> [yes|no]", "responder una aprobación pendiente de una tarea programada que corre en background (sin yes|no la pregunta con el menú ↑↓)"],
     ["/out", "[n]", "resultado completo de la última tool del turno (n = contar hacia atrás: /out 2 es la anteúltima)"],
     ["/verbose", "", "alternar: mostrar SIEMPRE el output completo de cada tool (queda guardado en config.json)"],
     ["/trace", "[n]", "traza legible de esta sesión (pasos, tools, tiempos, tokens, errores): .lampson/trace/<sesión>.log"],
@@ -601,23 +601,37 @@ task skills_list()
 -- lampson/.lampson/config.json (local, gitignored) y vale para terminal y web. Sin TTY no pregunta.
 task setup_wizard()
     print("")
-    print("  " + cyan("Configuremos el modelo.") + " Elegí un proveedor (número o nombre):")
     let list be provider.providers()
-    each e in enumerate(list)
-        let p be e["item"]
-        print("  " + pad(text(e["index"] + 1) + ".", 4) + pad(p["name"], 12) + dim(p["model"]) + (when p["name"] == "ollama" then dim("  (local, sin key)") otherwise (when p["has_key"] then green("  ● key guardada") otherwise "")))
-    let choice be read_line("  proveedor: ")
-    when choice == nothing or trim(choice) == ""
+    -- menú ↑↓/Enter (o inicial / número) cuando hay TTY; sin TTY, la lista numerada + read_line de siempre.
+    -- Las etiquetas van en texto plano: las pinta el menú (ver lib/line.syn).
+    let labels be []
+    each p in list
+        set labels to append(labels, pad(p["name"], 12) + pad(p["model"], 26) + (when p["name"] == "ollama" then "(local, sin key)" otherwise (when p["has_key"] then "● key guardada" otherwise "")))
+    flush()
+    let pick be ed.choose("  " + cyan("Configuremos el modelo.") + " Elegí un proveedor:", labels, COLOR)
+    let name be ""
+    when pick == nothing
         print("  (sin cambios)")
         give false
-    let name be lower(trim(choice))
-    when matches(name, "[0-9]+")
-        let i be floor(number(name)) - 1
-        when i >= 0 and i < length(list)
-            set name to list[i]["name"]
-    when not contains(provider.PRESETS, name)
-        print("  " + red("no conozco el proveedor " + name))
-        give false
+    otherwise when pick == -1
+        print("  " + cyan("Configuremos el modelo.") + " Elegí un proveedor (número o nombre):")
+        each e in enumerate(list)
+            let p be e["item"]
+            print("  " + pad(text(e["index"] + 1) + ".", 4) + pad(p["name"], 12) + dim(p["model"]) + (when p["name"] == "ollama" then dim("  (local, sin key)") otherwise (when p["has_key"] then green("  ● key guardada") otherwise "")))
+        let choice be read_line("  proveedor: ")
+        when choice == nothing or trim(choice) == ""
+            print("  (sin cambios)")
+            give false
+        set name to lower(trim(choice))
+        when matches(name, "[0-9]+")
+            let i be floor(number(name)) - 1
+            when i >= 0 and i < length(list)
+                set name to list[i]["name"]
+        when not contains(provider.PRESETS, name)
+            print("  " + red("no conozco el proveedor " + name))
+            give false
+    otherwise
+        set name to list[pick]["name"]
     let preset be provider.PRESETS[name]
     let model be read_line("  modelo [" + preset["model"] + "]: ")
     set model to when model == nothing then "" otherwise trim(model)
@@ -955,9 +969,16 @@ while running
                 when length(pending_images) == 0
                     print("  sin imágenes pendientes · uso: /image <ruta>  o  /paste")
                 otherwise
-                    print("  " + text(length(pending_images)) + " imagen(es) pendiente(s) — se mandan con tu próximo mensaje. ¿Quitarlas? (s/N)")
-                    let a be read_line("  ")
-                    when a != nothing and lower(trim(a)) == "s"
+                    print("  " + text(length(pending_images)) + " imagen(es) pendiente(s) — se mandan con tu próximo mensaje.")
+                    flush()
+                    let ipick be ed.choose("  ¿qué hago con ellas?", ["dejarlas", "quitarlas"], COLOR)
+                    when ipick == -1
+                        print("  ¿Quitarlas? (s/N)")
+                        let a be read_line("  ")
+                        when a != nothing and lower(trim(a)) == "s"
+                            set pending_images to []
+                            print("  quitadas")
+                    otherwise when ipick == 1
                         set pending_images to []
                         print("  quitadas")
             otherwise
@@ -969,7 +990,12 @@ while running
             otherwise when id == sid
                 print("  esa es la sesión actual; hacé /new primero")
             otherwise
-                print("  " + session.delete(id))
+                flush()
+                let dpick be ed.choose("  ¿borrar la sesión " + id + "?", ["cancelar", "borrar"], COLOR)
+                when dpick == 1 or dpick == -1   -- sin TTY el comando ya es explícito: borra
+                    print("  " + session.delete(id))
+                otherwise
+                    print("  (no se borró)")
         otherwise when input == "/new"
             set sid to session.new_id()
             set messages to [system_msg]
@@ -1126,14 +1152,29 @@ while running
                     print("      " + dim("permisos " + s["permission"] + " · próxima " + s["next_local"] + (when s["last_run"] != nothing then " · última " + s["last_status"] + ": " + first_line(s["last_summary"], 80) otherwise "")))
                 let pend be approvals.pending()
                 each ap in pend
-                    print("  " + yellow("⚠ aprobación pendiente " + ap["id"] + ": " + first_line(ap["message"], 100)) + dim("  → /approve " + ap["id"] + " yes|no"))
+                    print("  " + yellow("⚠ aprobación pendiente " + ap["id"] + ": " + first_line(ap["message"], 100)) + dim("  → /approve " + ap["id"]))
                 print("  " + dim("corren solas mientras lampson esté abierto (tick cada " + text(schedule.TICK_SECONDS) + " s) · con todo cerrado: lampson --daemon start · run/on/off/remove/log <id>"))
         otherwise when starts_with(input, "/approve ")
             let atoks be where(split(trim(slice(input, 9, length(input))), " "), (x) => x != "")
-            when length(atoks) < 2 or not contains(["yes", "no", "si", "sí", "y", "n"], lower(atoks[1]))
+            let yes be false
+            let answered be false
+            when length(atoks) == 1
+                -- «/approve <id>» a secas: menú ↑↓ (sin TTY, el uso de siempre)
+                flush()
+                let apick be ed.choose("  aprobación " + atoks[0], ["permitir", "denegar"], COLOR)
+                when apick == -1
+                    print("  uso: /approve <id> yes|no   (pendientes: /schedule)")
+                otherwise when apick == nothing
+                    print("  (sin responder)")
+                otherwise
+                    set yes to apick == 0
+                    set answered to true
+            otherwise when length(atoks) < 2 or not contains(["yes", "no", "si", "sí", "y", "n"], lower(atoks[1]))
                 print("  uso: /approve <id> yes|no   (pendientes: /schedule)")
             otherwise
-                let yes be contains(["yes", "si", "sí", "y"], lower(atoks[1]))
+                set yes to contains(["yes", "si", "sí", "y"], lower(atoks[1]))
+                set answered to true
+            when answered
                 when approvals.answer(atoks[0], yes)
                     print("  " + (when yes then green("✓ permitido ") otherwise red("✗ denegado ")) + atoks[0])
                 otherwise

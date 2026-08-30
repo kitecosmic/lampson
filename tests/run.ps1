@@ -35,6 +35,9 @@ try {
     # editor de línea (lib/line.syn) manejado por un PTY real: menú de /, Tab, argumentos
     synsema run tty_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # terminales web que sobreviven al socket (lib/term.syn): supervisor, bus, replay, kill
+    synsema run term_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
     # cliente MCP contra tests/mock_mcp.js (node)
     $env:LAMPSON_MCP_CONFIG = ".lampson/tmp/mcp_test.json"
     synsema run mcp_test.syn

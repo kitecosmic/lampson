@@ -21,7 +21,7 @@
     <span class="brand">lampson<span class="proj" id="proj">…</span></span>
     <span class="spacer"></span>
     <button class="hbtn upd" id="update" style="display:none"></button>
-    <button class="hbtn" id="term" title="abrir un terminal real (shell en el workspace)">&gt;_ terminal</button>
+    <button class="hbtn" id="term" title="terminal real (shell en el workspace): lo abre, lo trae de vuelta si está minimizado y lo esconde si está a la vista — verde = shell abierta">&gt;_ terminal</button>
     <button class="hbtn" id="new" title="empezar una conversación nueva">+ sesión</button>
     <button class="theme-toggle" id="cfgBtn" type="button" title="configuración: zona horaria, aprobaciones a distancia, proveedor"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
@@ -92,7 +92,7 @@
   <div id="stage">
     <div id="viewer"><div class="vh"><b id="vpath"></b><span id="vmeta"></span><span class="spacer"></span><span class="x" id="vclose">✕ cerrar</span></div><pre id="vbody"></pre></div>
     <div id="log"></div>
-    <div id="termpane"><div class="vh"><span class="st"></span><b>terminal</b><span id="tmeta"></span><span class="spacer"></span><span class="x" id="tclose">✕ cerrar</span></div><div id="xterm"></div></div>
+    <div id="termpane"><div class="vh"><span class="st"></span><b>terminal</b><span class="ttabs" id="ttabs"></span><button class="hbtn sm new" id="tnew" title="abrir otra terminal: una shell nueva en el workspace">+ nueva terminal</button><span id="tmeta"></span><span class="spacer"></span><span class="wbtn" id="tmin" title="minimizar: esconde el panel y la shell sigue viva">&#8212;</span><span class="wbtn" id="tmax" title="pantalla completa">&#9633;</span><span class="wbtn cl" id="tclose" title="cerrar esta terminal y matar su shell">&#10005;</span></div><div id="xterms"></div></div>
   </div>
   <div>
     <form id="f">

@@ -14,6 +14,9 @@ header { grid-area:top; border-bottom:1px solid var(--rule); background:var(--pa
 .hbtn:hover { color:var(--ink); border-color:var(--ink-3); }
 .hbtn.upd { color:var(--amber); border-color:var(--amber); }
 .hbtn.upd:hover { color:var(--ink); border-color:var(--ink); }
+/* terminal minimizada: la shell sigue viva y el botón la trae de vuelta */
+.hbtn.live { color:var(--str); border-color:var(--str); }
+.hbtn.live:hover { color:var(--ink); border-color:var(--ink); }
 .theme-toggle { display:flex; align-items:center; justify-content:center; background:none; border:0; color:var(--ink-3); cursor:pointer; padding:6px; border-radius:var(--r); line-height:0; }
 .theme-toggle:hover { color:var(--ink); background:var(--paper-2); }
 header select { font:400 11.5px/1 var(--mono); color:var(--ink-2); background:var(--paper); border:1px solid var(--rule); border-radius:var(--r); padding:5px 6px; cursor:pointer; }
@@ -54,14 +57,41 @@ main { grid-area:main; display:grid; grid-template-rows:1fr auto; min-height:0; 
 #viewer pre { margin:0; padding:14px 18px; font:400 12.5px/1.62 var(--mono); tab-size:4; }
 #viewer pre .ln { display:inline-block; width:4ch; margin-right:16px; color:var(--ink-3); text-align:right; user-select:none; }
 #viewer pre.log { color:var(--ink-2); white-space:pre-wrap; }
-/* terminal real (xterm.js sobre un pty del servidor) — ocupa la zona central como un archivo abierto */
-#termpane { display:none; height:100%; flex-direction:column; }
-#termpane .vh { position:static; }
+/* terminal real (xterm.js sobre un pty del servidor) — ocupa la zona central como un archivo abierto.
+   Varias terminales conviven como pestañas: una instancia de xterm por .xt, sólo la activa a la vista. */
+#termpane { display:none; height:100%; flex-direction:column; overflow:hidden; }
+#termpane .vh { position:static; flex:none; }
 #termpane .vh .st { width:7px; height:7px; border-radius:50%; background:var(--ink-3); }
 #termpane.live .vh .st { background:var(--str); }
-#xterm { flex:1; min-height:0; padding:10px 14px; background:var(--paper); }
-#xterm .xterm { height:100%; }
-#xterm .xterm-viewport { background:transparent !important; }
+/* cabecera del panel en UNA línea: pestañas y botones no se encogen y la meta se recorta */
+#termpane .vh b, #termpane .vh .ttabs, #termpane .vh .hbtn, #termpane .vh .wbtn { flex:none; white-space:nowrap; }
+#termpane .vh #tmeta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* pestañas: en cuál estás se ve de lejos (la activa lleva el acento del tema, clara y oscura) */
+.vh .ttabs { display:flex; align-items:center; gap:5px; }
+.vh .ttab { cursor:pointer; min-width:20px; text-align:center; padding:2px 7px; border-radius:2px; border:1px solid var(--rule-2); color:var(--ink-3); background:transparent; }
+.vh .ttab:hover { color:var(--ink); border-color:var(--ink-3); }
+.vh .ttab.on { color:var(--accent); border-color:var(--accent); background:var(--accent-bg); font-weight:600; }
+.vh .ttab.dead { text-decoration:line-through; opacity:.75; }
+/* «+ nueva terminal»: mismo botón que los del encabezado, en el acento para que se vea */
+.vh .hbtn.sm { padding:4px 9px; font-size:9.5px; letter-spacing:.08em; }
+.vh .hbtn.new { color:var(--accent); border-color:var(--accent); }
+.vh .hbtn.new:hover { background:var(--accent-bg); color:var(--accent); border-color:var(--accent); }
+.vh .hbtn.new:disabled { color:var(--ink-3); border-color:var(--rule-2); background:transparent; }
+/* minimizar · pantalla completa · cerrar, a la derecha como en cualquier ventana */
+.vh .wbtn { cursor:pointer; width:22px; height:20px; display:inline-flex; align-items:center; justify-content:center; border-radius:2px; color:var(--ink-3); font-size:12px; line-height:1; }
+.vh .wbtn:hover { color:var(--ink); background:var(--paper); }
+.vh .wbtn.cl:hover { color:var(--rubric); }
+/* El aire alrededor de cada terminal va como MARGEN, nunca como padding: el FitAddon mide el alto/ancho
+   del contenedor con getComputedStyle (que con box-sizing:border-box incluye su padding) y sólo
+   descuenta el padding del .xterm, que es 0. Con padding calculaba una fila de más, el .xterm-screen
+   desbordaba el hueco, el #stage sacaba su barra de scroll, eso robaba 7px de ancho, el
+   ResizeObserver volvía a ajustar y cada rebote hacía clear()+resize() del terminal y un resize del
+   pty: el parpadeo. Con margen el fit mide exactamente el hueco; overflow:hidden es el cinturón. */
+#termpane.max { position:fixed; inset:0; z-index:60; height:auto; background:var(--paper); }
+#xterms { flex:1; min-height:0; display:flex; }
+#xterms .xt { flex:1; min-height:0; margin:10px 14px; background:var(--paper); overflow:hidden; }
+#xterms .xt .xterm { height:100%; }
+#xterms .xt .xterm-viewport { background:transparent !important; }
 
 /* ---- composer ---- */
 form { padding:12px 40px 12px; border-top:1px solid var(--rule); background:var(--paper); box-sizing:border-box; width:100%; max-width:100%; min-width:0; }

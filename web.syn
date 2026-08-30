@@ -64,6 +64,7 @@ use "./lib/schedule.syn" as schedule
 use "./lib/sched_run.syn" as sched_run
 use "./lib/approvals.syn" as approvals
 use "./lib/permission.syn" as permission
+use "./lib/term.syn" as term
 
 let APPROVAL_TIMEOUT be 180
 
@@ -85,22 +86,6 @@ task as_text(x)
     when is_bytes(x)
         give decode(x, "utf8_lossy")
     give x
-
--- shell para el terminal web: [cmd, args]. Windows: pwsh si está, si no PowerShell 5; unix: bash de login.
--- En pwsh, los directorios de `ls` salen sin fondo azul (el default de $PSStyle se lee mal en un tema oscuro).
-task term_shell()
-    when env("OS", "") == "Windows_NT"
-        try
-            run("pwsh", ["-NoLogo", "-Command", "exit"], 10)
-            give ["pwsh", ["-NoLogo", "-NoExit", "-Command", "$PSStyle.FileInfo.Directory = $PSStyle.Foreground.BrightBlue"]]
-        recover err
-            give ["powershell", ["-NoLogo"]]
-    give ["bash", ["-l"]]
-
--- cwd del terminal: la ruta REAL del proyecto (LAMPSON_WORKSPACE), no la junction ./workspace —
--- así el prompt muestra dónde estás de verdad y coincide con el header.
-task term_cwd()
-    give env("LAMPSON_WORKSPACE", "workspace")
 
 task boot(profile, mode, ask_fn, pname, model)
     let cfg be provider.config_for(pname, model)
@@ -209,39 +194,61 @@ serve on 8080
     route "GET /w/:slug/api/tree" requires auth
         give tree.tree(6)
 
-    -- Terminal real en el navegador: un shell dentro de un pseudo-terminal (pty) por conexión WebSocket.
-    -- Navegador → servidor: texto JSON {type: "in", data: teclas} | {type: "resize", cols, rows}.
-    -- Servidor → navegador: frames de texto con prefijo: "o" + salida cruda del pty (ANSI incluido, xterm.js
-    -- la dibuja) | "c" + JSON de control ({type: hello|exit}).
-    -- El shell vive lo que vive el socket: cerrar el panel lo mata (el runtime no deja huérfanos).
+    -- Terminales del navegador. El pty NO vive en este handler: vive en un agente supervisor
+    -- (lib/term.syn), y este socket es un puente por el bus. Así la shell sobrevive a un F5 —
+    -- la pestaña se reengancha con ?id=<id> y recibe el replay de lo último que imprimió.
+    -- Navegador → servidor: {type: "in", data} | {type: "resize", cols, rows} | {type: "kill"}.
+    -- Servidor → navegador: "o" + salida cruda del pty | "c" + JSON de control (hello | exit).
+    -- Sin ningún socket enganchado por 30 min, el supervisor recoge la shell; todo muere con lampson.
     route "GET /w/:slug/api/term" requires auth
         socket
             state_set("lampson:last_used", now())
-            let sh be term_shell()
-            let p be proc_spawn(sh[0], sh[1], {"cwd": term_cwd(), "pty": true, "cols": 120, "rows": 32})
-            ws_send(socket, "c" + json_encode({"type": "hello", "shell": sh[0], "pid": proc_stats(p)["pid"], "cwd": term_cwd()}))
-            let open be true
-            while open
-                let ev be select({"ui": socket, "sh": p}, 600)
-                when ev == nothing
-                    set open to proc_status(p) == "running"
-                otherwise when ev["name"] == "ui"
-                    when ev["type"] == "close"
-                        set open to false
-                    otherwise when ev["type"] == "binary"
-                        proc_send(p, ev["data"])
+            let id be when contains(query, "id") then text(query.id) otherwise ""
+            when id == "" or not term.alive(id)
+                set id to term.start(120, 32)          -- nothing = ya hay MAX_TERMS abiertas
+            when id == nothing
+                ws_send(socket, "c" + json_encode({"type": "exit", "code": -1, "error": "too_many"}))
+            otherwise
+                let st be term.state(id)
+                ws_send(socket, "c" + json_encode({"type": "hello", "id": id, "shell": st["shell"], "pid": st["pid"], "cwd": st["cwd"]}))
+                let sub be bus_subscribe("term.out." + id)
+                -- el replay vuelve marcado con este id de socket: otra pestaña abierta no lo repite
+                let me be text(floor(now() * 1000)) + "-" + text(floor(random() * 100000))
+                term.ctl(id, {"k": "replay", "to": me})
+                while true
+                    let ev be select({"ui": socket, "sh": sub}, 20)
+                    when ev == nothing
+                        when not term.alive(id)
+                            stop
+                        term.ctl(id, {"k": "ping"})           -- «sigo acá»: sin pings se recoge la shell
+                    otherwise when ev["name"] == "ui"
+                        when ev["type"] == "close"
+                            stop
+                        otherwise when ev["type"] == "binary"
+                            term.ctl(id, {"k": "in", "d": as_text(ev["data"])})
+                        otherwise
+                            let m be json_decode(ev["data"])
+                            when m["type"] == "in"
+                                term.ctl(id, {"k": "in", "d": m["data"]})
+                            otherwise when m["type"] == "resize"
+                                term.ctl(id, {"k": "resize", "cols": m["cols"], "rows": m["rows"]})
+                            otherwise when m["type"] == "kill"
+                                term.kill(id)                  -- cerrar la pestaña SÍ mata la shell, a pedido
                     otherwise
-                        let m be json_decode(ev["data"])
-                        when m["type"] == "in"
-                            proc_send(p, m["data"])
-                        otherwise when m["type"] == "resize"
-                            proc_resize(p, floor(m["cols"]), floor(m["rows"]))
-                otherwise when ev["type"] == "exit"
-                    ws_send(socket, "c" + json_encode({"type": "exit", "code": ev["data"]["exit_code"]}))
-                    set open to false
-                otherwise
-                    ws_send(socket, "o" + as_text(ev["data"]))
-            proc_close(p)
+                        let d be ev["data"]
+                        when d["k"] == "exit"
+                            ws_send(socket, "c" + json_encode({"type": "exit", "code": d["code"]}))
+                            stop
+                        otherwise when d["k"] == "replay"
+                            when d["to"] == me and d["d"] != ""
+                                ws_send(socket, "o" + d["d"])
+                        otherwise
+                            ws_send(socket, "o" + d["d"])
+                bus_unsubscribe(sub)
+
+    -- las terminales vivas: la UI las repinta como pestañas al cargar (después de un F5 siguen ahí)
+    route "GET /w/:slug/api/terms" requires auth
+        give {"terminals": term.list(), "max": term.MAX_TERMS}
 
     route "GET /w/:slug/api/update" requires auth
         give update.check()

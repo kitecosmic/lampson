@@ -1,0 +1,74 @@
+-- term_test.syn — terminales del navegador que sobreviven al socket (lib/term.syn). Sin HTTP: prueba el
+-- mecanismo real (agente supervisor + bus + replay + kill), que es lo que hace que un F5 no mate la shell.
+-- Corre con `synsema run` (los agentes necesitan el swarm; ver tests/run.ps1|sh).
+require exec
+require time
+require random
+require env("LAMPSON_*")
+require env("OS")
+require file("workspace")
+require file("workspace/*")
+
+use "./lib/term.syn" as term
+
+task drain(sub, secs)
+    let out be ""
+    let deadline be now() + secs
+    while now() < deadline
+        let ev be bus_recv(sub, 0.4)
+        when ev != nothing and ev["data"]["k"] == "o"
+            set out to out + ev["data"]["d"]
+    give out
+
+let id be term.start(100, 24)
+assert(id != nothing, "start() devolvió nothing (¿ya hay MAX_TERMS abiertas?)")
+assert(term.alive(id), "la shell no quedó viva")
+let st be term.state(id)
+assert(st["pid"] > 0, "sin pid: " + json_encode(st))
+print("  ✓ start() deja una shell viva (pid " + text(st["pid"]) + ")")
+
+-- el navegador: se suscribe a la salida y manda teclas por el bus
+let sub be bus_subscribe("term.out." + id)
+term.ctl(id, {"k": "in", "d": "echo marca-uno\r"})
+let seen be strip_ansi(drain(sub, 8))
+assert(contains(seen, "marca-uno"), seen)
+print("  ✓ las teclas llegan al pty y su salida vuelve por el bus")
+
+-- F5: el socket se va (esto es exactamente lo que pasaba antes y mataba la shell)
+bus_unsubscribe(sub)
+sleep(1.5)
+assert(term.alive(id), "la shell murió al irse el socket (el F5 la mataría)")
+print("  ✓ irse NO mata la shell")
+
+-- la UI vuelve, pide la lista y se reengancha por id
+let ids be apply(term.list(), (t) => t["id"])
+assert(contains(ids, id), "list() no la ofrece: " + json_encode(term.list()))
+let sub2 be bus_subscribe("term.out." + id)
+term.ctl(id, {"k": "replay", "to": "yo"})
+let replay be ""
+let deadline be now() + 6
+while now() < deadline and replay == ""
+    let ev be bus_recv(sub2, 0.4)
+    when ev != nothing and ev["data"]["k"] == "replay" and ev["data"]["to"] == "yo"
+        set replay to ev["data"]["d"]
+assert(contains(strip_ansi(replay), "marca-uno"), strip_ansi(replay))
+print("  ✓ list() + replay: la pestaña vuelve con lo que ya había impreso")
+
+-- y la shell sigue siendo LA MISMA: responde a teclas nuevas con el mismo pid
+term.ctl(id, {"k": "in", "d": "echo marca-dos\r"})
+let seen2 be strip_ansi(drain(sub2, 8))
+assert(contains(seen2, "marca-dos"), seen2)
+assert(term.state(id)["pid"] == st["pid"], "cambió el pid: no es la misma shell")
+print("  ✓ es la misma sesión (mismo pid) y sigue usable")
+bus_unsubscribe(sub2)
+
+-- el ✕ de la UI: eso sí la mata
+term.kill(id)
+let waited be 0
+while waited < 50 and term.alive(id)
+    sleep(0.1)
+    set waited to waited + 1
+assert(not term.alive(id), "kill() no mató la shell")
+assert(length(term.list()) == 0, "list() todavía la muestra: " + json_encode(term.list()))
+print("  ✓ kill() mata la shell (es lo que hace el ✕)")
+print("term_test: todo OK")

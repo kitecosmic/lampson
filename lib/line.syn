@@ -320,7 +320,10 @@ export task read(prompt, color, ctx)
     term_close(h)
     give result
 
--- menú vertical de opciones (aprobaciones): ↑↓ + Enter, o la letra inicial / número; Esc = nothing
+-- menú vertical de opciones (aprobaciones, /setup, confirmaciones): ↑↓ + Enter, o la letra inicial /
+-- número; Esc = nothing. La activa lleva ❯ y color; debajo, la línea de ayuda. Las opciones llegan en
+-- TEXTO PLANO (sin ANSI): el menú es el que pinta, y un reset de color adentro le cortaría la línea.
+let CHOOSE_HELP be "Enter confirma · Esc cancela"
 export task choose(question, options, color)
     let h be term_open({"ctrl_c": "exit"})
     when h == nothing
@@ -329,6 +332,11 @@ export task choose(question, options, color)
     let done be false
     let result be nothing
     let drawn be 0
+    -- Reservar el alto del bloque ANTES de dibujarlo: al pie de la pantalla esto scrollea una sola vez y
+    -- deja el menú entero a la vista. Sin esto, el ESC[nA del redibujo apunta a una línea que el scroll
+    -- movió y el menú aparece duplicado más abajo en cada tecla (visto con los 9 proveedores de /setup).
+    let need be length(options) + 2
+    term_write(h, rep("\n", need) + ESC + "[" + text(need) + "A")
     while not done
         let out be ""
         when drawn > 0
@@ -336,10 +344,11 @@ export task choose(question, options, color)
         set out to out + "\r" + ESC + "[J" + question
         let i be 0
         each o in options
-            set out to out + "\r\n" + "    " + (when i == sel then sgr(color, "7", " " + o + " ") otherwise " " + sgr(color, "2", o))
+            set out to out + "\r\n" + (when i == sel then "  " + sgr(color, "1;36", "❯ " + o) otherwise "    " + sgr(color, "2", o))
             set i to i + 1
+        set out to out + "\r\n\r\n  " + sgr(color, "2", CHOOSE_HELP)
         term_write(h, out)
-        set drawn to length(options)
+        set drawn to length(options) + 2   -- una línea por opción + la vacía + la de ayuda
         let ev be term_recv(h, 600)
         when ev == nothing
             set result to nothing
@@ -361,9 +370,11 @@ export task choose(question, options, color)
                 let t be lower(ev["text"])
                 let j be 0
                 each o in options
-                    when t == text(j + 1) or t == lower(slice(o, 0, 1))
-                        set result to j
-                        set done to true
+                    -- la PRIMERA que coincide gana: con 9 proveedores hay iniciales repetidas (o, g…)
+                    when not done
+                        when t == text(j + 1) or t == lower(slice(o, 0, 1))
+                            set result to j
+                            set done to true
                     set j to j + 1
     term_write(h, "\r\n")
     term_close(h)
