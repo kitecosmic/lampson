@@ -138,11 +138,29 @@ serve on 8080
     auth with check_client
     static "./public"
 
-    -- standalone (sin hub: docker, `synsema serve web.syn`): la UI vive igual bajo /w/<slug> (BASE en js/core.js)
-    route "GET /"
-        give redirect("/w/" + (when env("LAMPSON_WS", "") == "" then "local" otherwise env("LAMPSON_WS", "")))
+    -- la UI vive bajo /w/<slug> (BASE en js/core.js); si alguien entra por el puerto del proceso, es lo mismo
+    -- Acceso DIRECTO por el puerto del proceso (sin X-Forwarded-Host, que solo agrega el hub al proxyear): la UI se
+    -- usa siempre por el hub → redirigir a http://127.0.0.1:8080/w/<slug>. Standalone sin hub (docker) no hay
+    -- LAMPSON_WS y se sirve acá mismo.
     route "GET /w/:slug"
+        let h be headers of request
+        when env("LAMPSON_WS", "") != "" and not contains(h, "x-forwarded-host")
+            give redirect("http://127.0.0.1:8080/w/" + params.slug)
         give html(read_file("public/index.html"))
+    route "GET /"
+        when env("LAMPSON_WS", "") == ""
+            give redirect("/w/local")
+        give redirect("http://127.0.0.1:8080/w/" + env("LAMPSON_WS", ""))
+    route "GET /api/hub"
+        proxy to "http://127.0.0.1:8080"
+    route "GET /api/workspaces"
+        proxy to "http://127.0.0.1:8080"
+    route "GET /api/workspaces/*path"
+        proxy to "http://127.0.0.1:8080"
+    route "POST /api/workspaces"
+        proxy to "http://127.0.0.1:8080"
+    route "POST /api/workspaces/*path"
+        proxy to "http://127.0.0.1:8080"
 
     -- salud para el hub/supervisor y la terminal (último uso = chat, terminal, eventos o abrir la UI)
     route "GET /w/:slug/api/health"

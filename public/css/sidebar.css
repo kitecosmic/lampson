@@ -78,3 +78,7 @@
 .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
 .del.ask .no { color:var(--ink-2); cursor:pointer; }
 .del.ask .yes:hover, .del.ask .no:hover { text-decoration:underline; text-underline-offset:.18em; }
+
+/* puertos ocupados por lampson: visibles pero sin link ni ✕ */
+.p .port.own { color:var(--ink-3); font-weight:400; }
+.p.own .cm { color:var(--ink-3); }

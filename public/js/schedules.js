@@ -68,7 +68,7 @@ function openSched(selectId) {
         if (t === SCHED_NEW) { schedFormWire(box, err); return; }
         box.querySelector('[data-run]').onclick = async () => { const r = await api(BASE + '/api/schedules/run', { id: t.id }); add('meta', '⏰ ' + esc(r.data.result || r.data.error || '')); setTimeout(loadSched, 1500); setTimeout(() => Panel.is('schedules') && Panel.detail(), 2500); };
         box.querySelector('[data-toggle]').onclick = async () => { const r = await api(BASE + '/api/schedules/toggle', { id: t.id, enabled: !t.enabled }); if (!r.ok) { err(r.data.error || 'error'); return; } loadSched(); };
-        box.querySelectorAll('[data-session]').forEach(a => a.onclick = (e) => { e.preventDefault(); Panel.close(); open(a.dataset.session); });
+        box.querySelectorAll('[data-session]').forEach(a => a.onclick = (e) => { e.preventDefault(); Panel.close(); openSession(a.dataset.session); });
         const del = box.querySelector('.dfoot .del');
         del.onclick = () => inlineConfirm(del, `¿quitar ${t.name}?`, async () => { await api(BASE + '/api/schedules/remove', { id: t.id }); loadSched(); });
         const live = box.querySelector('[data-live]'); if (live) live.scrollTop = live.scrollHeight;

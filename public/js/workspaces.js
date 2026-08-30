@@ -1,6 +1,9 @@
 // workspaces.js — el selector de workspace de la cabecera (dentro de un workspace) y el Panel de workspaces.
 // La API de workspaces es del HUB (raíz, sin BASE): /api/workspaces…  Sin hub (standalone) el selector se oculta.
 let wsList = [], wsIdle = 4;
+// abierto por el puerto de un proceso (:808N) las URLs de otros workspaces tienen que ir al hub (:8080), no a este proceso
+const HUB_BASE = (location.port && location.port !== '8080') ? location.protocol + '//' + location.hostname + ':8080' : '';
+function wsUrl(w) { return HUB_BASE + w.url; }
 async function fetchWorkspaces() {
   try { const r = await (await fetch('/api/workspaces')).json(); wsList = r.workspaces || []; wsIdle = r.idle_hours; return true; } catch (e) { wsList = []; return false; }
 }
@@ -31,12 +34,12 @@ function openWorkspaces(selectSlug) {
       wire: (w, box) => {
         const err = (m) => { const e = box.querySelector('.derr'); if (e) e.textContent = m || ''; };
         if (w === WS_NEW) { wsNewWire(box, err); return; }
-        box.querySelector('[data-open]').onclick = () => { if (w.slug !== WS_SLUG) location.href = w.url; else Panel.close(); };
+        box.querySelector('[data-open]').onclick = () => { if (w.slug !== WS_SLUG) location.href = wsUrl(w); else Panel.close(); };
         const st = box.querySelector('[data-start]'); if (st) st.onclick = async () => { err('arrancando…'); const r = await api('/api/workspaces/start', { slug: w.slug }); err(r.data.ok ? '' : 'no respondió a tiempo'); Panel.refresh(); };
         const sp = box.querySelector('[data-stop]'); if (sp) sp.onclick = async () => { await api('/api/workspaces/stop', { slug: w.slug }); setTimeout(() => Panel.refresh(), 800); };
         box.querySelector('[name="policy"]').onchange = async (ev) => { const r = await api('/api/workspaces/policy', { slug: w.slug, policy: ev.target.value }); if (!r.ok) err(r.data.error || 'error'); };
         const del = box.querySelector('.dfoot .del');
-        del.onclick = () => inlineConfirm(del, `¿quitar ${w.name} del registro?`, async () => { const r = await api('/api/workspaces/remove', { slug: w.slug }); if (!r.ok) { err(r.data.error || 'error'); return; } if (w.slug === WS_SLUG) location.href = '/'; else Panel.refresh(); });
+        del.onclick = () => inlineConfirm(del, `¿quitar ${w.name} del registro?`, async () => { const r = await api('/api/workspaces/remove', { slug: w.slug }); if (!r.ok) { err(r.data.error || 'error'); return; } if (w.slug === WS_SLUG) location.href = HUB_BASE + '/'; else Panel.refresh(); });
       }
     }
   });
@@ -87,11 +90,9 @@ function wsNewWire(box, err0) {
     const r = await api('/api/workspaces', { path: chosen });
     if (!r.ok) { err(r.data.error || ('error ' + r.status)); return; }
     // el hub se regenera con la ruta nueva y se reinicia: esperar a que vuelva y navegar
-    const url = r.data.url; let tries = 0;
+    const url = HUB_BASE + r.data.url; let tries = 0;
     const poll = async () => { tries++; try { const h = await fetch('/api/hub'); if (h.ok && tries > 2) { location.href = url; return; } } catch (e) {} if (tries < 40) setTimeout(poll, 500); else err('el hub no volvió: abrí ' + url + ' a mano'); };
     setTimeout(poll, 1200);
   };
 }
-// standalone (abierto por el puerto del workspace, no por el hub): la pill lleva al hub
-const HUB_URL = (location.port && location.port !== '8080') ? location.protocol + '//' + location.hostname + ':8080/' : '';
-if ($('#wsPill')) { if (HUB_URL) { const pill = $('#wsPill'); pill.style.display = ''; pill.textContent = 'workspaces ↗'; pill.title = 'esta pestaña es el proceso del workspace; los workspaces se gestionan en el hub'; pill.onclick = () => window.open(HUB_URL, '_blank'); } else { $('#wsPill').onclick = () => openWorkspaces(); paintWorkspacePill(); } }
+if ($('#wsPill')) { $('#wsPill').onclick = () => openWorkspaces(); paintWorkspacePill(); }

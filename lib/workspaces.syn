@@ -24,7 +24,8 @@ export let REGISTRY be ".lampson/workspaces.json"
 export let HUB_PORT be 8080
 export let HUB_FILE be "hub.syn"
 export let HUB_TEMPLATE be "hub.tpl.syn"
-let FIRST_PORT be 8081
+-- rango alto para no chocar con lo que usan las apps (3000, 5173, 8000, 8080-8090…): solo el hub queda en 8080
+let FIRST_PORT be 47101
 let LINKS be ["lib", "public", "skills", "lamps", "memory"]
 let COPIES be ["web.syn", "chat.syn"]
 
@@ -81,6 +82,38 @@ task load_reg()
 
 task save_reg(doc)
     write_file(REGISTRY, json_encode(doc))
+
+-- registros hechos con puertos 808N (antes de 0.2.3): reasignar al rango alto; los procesos viejos se paran en
+-- ensure/tick (por puerto) y el supervisor los levanta en el nuevo
+export task migrate_ports()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("hub.tpl.syn")
+    require file("hub.syn")
+    let doc be load_reg()
+    let changed be false
+    when doc["next_port"] < FIRST_PORT
+        set doc["next_port"] to FIRST_PORT
+        set changed to true
+    each k in keys(doc["workspaces"])
+        let w be doc["workspaces"][k]
+        when w["port"] < FIRST_PORT
+            let old be w["port"]
+            each l in proc.listeners()
+                when l["port"] == old
+                    proc.kill_pid(l["pid"])
+            set w["port"] to doc["next_port"]
+            set doc["next_port"] to doc["next_port"] + 1
+            set doc["workspaces"][k] to w
+            set changed to true
+    when changed
+        save_reg(doc)
+        regen_hub()
+    give changed
 
 export task all()
     require file(".lampson")
@@ -241,6 +274,7 @@ export task ensure(path)
     require file.read("chat.syn")
     require file.read("hub.tpl.syn")
     require file("hub.syn")
+    migrate_ports()
     let existing be by_path(path)
     let w be existing
     when w == nothing
@@ -490,6 +524,8 @@ export task tick()
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    when migrate_ports() and hub_alive()
+        restart_hub_later()
     let started be []
     let stopped be []
     each w in all()

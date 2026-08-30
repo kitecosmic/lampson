@@ -9,7 +9,7 @@ async function loadSessions() {
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
   const shown = r.sessions.slice(0, 4);
   for (const s of shown) {
-    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => open(s.id);
+    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => openSession(s.id);
     d.querySelector('.tr').onclick = (ev) => { ev.stopPropagation(); openTrace(s.id); };
     d.querySelector('.del:not(.tr)').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del:not(.tr)'), '¿borrar?', () => deleteSession(s.id)); };
     box.appendChild(d);
@@ -35,18 +35,18 @@ function openSessionsPanel() {
           + `<div class="dfoot"><span>.lampson/sessions/${esc(s.id)}.json</span><span class="del">borrar</span></div>`;
       },
       wire: (s, box) => {
-        box.querySelector('[data-act="open"]').onclick = () => { Panel.close(); open(s.id); };
+        box.querySelector('[data-act="open"]').onclick = () => { Panel.close(); openSession(s.id); };
         box.querySelector('[data-act="trace"]').onclick = () => { Panel.close(); openTrace(s.id); };
         const del = box.querySelector('.dfoot .del');
         del.onclick = () => inlineConfirm(del, `¿borrar ${s.id}?`, async () => { await deleteSession(s.id); Panel.refresh(); });
       },
-      onPick: (s) => open(s.id),
+      onPick: (s) => openSession(s.id),
       count: (rows, q) => q ? `${rows.length} coincidencia${rows.length === 1 ? '' : 's'}` : `${rows.length} sesión${rows.length === 1 ? '' : 'es'}`,
       emptyHtml: 'todavía no hay sesiones'
     }
   });
 }
-async function open(id) {
+async function openSession(id) {
   session = id; localStorage.setItem('lampson.session', id); log.innerHTML = ''; log.classList.remove('hero'); showPane('log'); loadTodo();
   const r = await fetch(BASE + '/api/sessions/' + id); if (!r.ok) { session = ''; empty(); return loadSessions(); }
   const d = await r.json();
