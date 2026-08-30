@@ -526,7 +526,9 @@ export task pick_folder()
     require env("OS")
     try
         when is_win()
-            let ps be "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Elegí la carpeta del proyecto (workspace de Lampson)'; $d.ShowNewFolderButton = $true; $f = New-Object System.Windows.Forms.Form; $f.TopMost = $true; if ($d.ShowDialog($f) -eq 'OK') { Write-Output $d.SelectedPath }"
+            -- Shell.Application.BrowseForFolder: el diálogo del Explorador; sale al frente aunque este proceso no tenga
+            -- ventana (FolderBrowserDialog de WinForms quedaba detrás desde un proceso oculto). 0x40 = con campo de ruta, 0x1 = solo carpetas
+            let ps be "$s = New-Object -ComObject Shell.Application; $f = $s.BrowseForFolder(0, 'Elegí la carpeta del proyecto (workspace de Lampson)', 0x41, 0); if ($f) { Write-Output $f.Self.Path }"
             let r be run("powershell", ["-NoProfile", "-STA", "-Command", ps], 300)
             give trim(text(r["stdout"]))
         let r be run("sh", ["-c", "if command -v osascript >/dev/null; then osascript -e 'POSIX path of (choose folder with prompt \"Carpeta del proyecto\")'; elif command -v zenity >/dev/null; then zenity --file-selection --directory --title='Carpeta del proyecto'; else exit 3; fi"], 300)

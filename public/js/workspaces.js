@@ -27,7 +27,7 @@ function openWorkspaces(selectSlug) {
         <div class="ddesc">${w.schedules_on ? `${w.schedules_on} tarea${w.schedules_on === 1 ? '' : 's'} programada${w.schedules_on === 1 ? '' : 's'} encendida${w.schedules_on === 1 ? '' : 's'} (lo mantienen vivo). ` : ''}Último uso: ${esc(fmtWhen(w.last_used))}.</div>
         <div class="dacts"><button class="primary" data-open>${w.slug === WS_SLUG ? 'Ya estás acá' : 'Abrir'}</button>${w.alive ? '<button data-stop>■ apagar</button>' : '<button data-start>▶ encender</button>'}</div>
         <div class="dform" style="margin-top:14px"><label>vida <select name="policy"><option value="auto" ${w.policy === 'auto' ? 'selected' : ''}>auto — vivo mientras se use (${wsIdle === 0 ? 'nunca se apaga' : 'se apaga tras ' + wsIdle + ' h sin uso'}) o tenga tareas</option><option value="always" ${w.policy === 'always' ? 'selected' : ''}>siempre vivo</option><option value="off" ${w.policy === 'off' ? 'selected' : ''}>apagado — solo cuando lo abrís</option></select></label><span class="ds">las horas de inactividad se cambian en ⚙ → General</span></div>
-        <div class="dfoot"><span>/w/${esc(w.slug)}/ · :${w.port} (solo loopback)</span><span class="del">quitar del registro</span></div><div class="derr"></div>`,
+        <div class="dfoot"><span>/w/${esc(w.slug)} · :${w.port} (solo loopback)</span><span class="del">quitar del registro</span></div><div class="derr"></div>`,
       wire: (w, box) => {
         const err = (m) => { const e = box.querySelector('.derr'); if (e) e.textContent = m || ''; };
         if (w === WS_NEW) { wsNewWire(box, err); return; }
@@ -44,7 +44,7 @@ function openWorkspaces(selectSlug) {
 function wsNewForm() {
   return `<div class="dhead"><span class="nm serif">Nuevo workspace</span></div><div class="dform">
     <p class="lead">Un workspace es una carpeta de tu disco: el agente solo puede tocar lo que hay adentro. Corre en su propio proceso, con sus sesiones, tareas programadas, MCP y lámparas.</p>
-    <div class="dacts" style="margin-top:0"><button class="primary" data-pick>Elegir carpeta…</button><span class="ds" data-pickhint>abre el diálogo de tu sistema</span></div>
+    <div class="dacts" style="margin-top:0;align-items:center"><button class="primary" data-pick>Elegir carpeta…</button><span class="ds" data-pickhint style="margin:0">abre el diálogo de carpetas de tu sistema</span></div>
     <label style="margin-top:14px">ruta <input name="path" spellcheck="false" autocomplete="off" placeholder="C:\\proyectos\\mi-app  ·  /home/yo/proyectos/mi-app"></label>
     <div data-browser style="display:none"><div class="dcap" data-here></div><div class="bitems" data-dirs style="max-height:32vh;border:1px solid var(--rule);border-radius:var(--r);padding:4px"></div></div>
     <div class="pfoot"><button class="primary" data-go>Crear y abrir</button><button data-browse>explorar en el servidor</button><span class="derr"></span></div></div>`;
@@ -63,7 +63,7 @@ function wsNewWire(box, err) {
   };
   box.querySelector('[data-browse]').onclick = () => showDir(f('path').value.trim());
   box.querySelector('[data-pick]').onclick = async () => {
-    err('esperando el diálogo… (mirá la barra de tareas)');
+    err('esperando el diálogo de carpetas… (si no aparece, mirá la barra de tareas o usá «explorar en el servidor»)');
     const r = await api('/api/workspaces/pick', {});
     if (!r.data.native) { err(''); box.querySelector('[data-pickhint]').textContent = 'no hay diálogo en este equipo (VPS): usá el explorador'; showDir(''); return; }
     err(''); if (r.data.path) f('path').value = r.data.path;

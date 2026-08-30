@@ -22,9 +22,8 @@ paintTheme();
 // tarjetas
 async function paintGrid() {
   const grid = $('#wsGrid'); let r; try { r = await (await fetch(BASE + '/api/workspaces')).json(); } catch (e) { grid.innerHTML = '<div class="card"><p>el hub no responde</p></div>'; return; }
-  wsList = r.workspaces || []; wsIdle = r.idle_hours;
   grid.innerHTML = '';
-  for (const w of wsList) {
+  for (const w of (r.workspaces || [])) {
     const c = document.createElement('a'); c.className = 'card ws' + (w.alive ? ' on' : ''); c.href = w.url;
     c.innerHTML = `<h3>${w.alive ? '● vivo' : '○ apagado'}${w.schedules_on ? ' · ⏰ ' + w.schedules_on : ''}</h3><p class="nm">${esc(w.name)}</p><p class="pth">${esc(w.path)}</p><p class="meta">último uso ${esc(fmtWhen(w.last_used))}</p>`;
     grid.appendChild(c);

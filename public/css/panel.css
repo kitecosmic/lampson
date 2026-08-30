@@ -123,3 +123,12 @@
 .panel .phelp p { margin:0 0 12px; max-width:78ch; }
 .panel .phelp ul { margin:0 0 16px 20px; padding:0; display:grid; gap:4px; max-width:78ch; }
 .panel .phelp button { text-transform:none; letter-spacing:0; font:400 12px/1 var(--mono); padding:6px 10px; }
+
+/* detalle: la prosa y los formularios de las vistas no heredan la mono del contenedor */
+.panel .bdetail .lead, .panel .bdetail .ddesc, .panel .bdetail .ds, .panel .bdetail .none { font-family:var(--serif); }
+.panel .bdetail .ds { display:block; color:var(--ink-3); font:400 11.5px/1.45 var(--serif); }
+.panel .bdetail .dform input, .panel .bdetail .dform select, .panel .bdetail .dform textarea { max-width:560px; }
+.panel .bdetail .dform label { color:var(--ink-3); }
+.panel .bdetail .dform label.col { max-width:560px; }
+.panel .bdetail .dacts .ds { display:inline; color:var(--ink-3); }
+.panel .bdetail .dfoot { font-family:var(--mono); }
