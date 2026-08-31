@@ -335,6 +335,21 @@ test "una tool NO puede salir del workspace (least-privilege real): abs, .., her
     assert_error(() => call_tool(REG["find"], {"pattern": "*", "path": ".."}))
     assert_error(() => call_tool(REG["write"], {"path": "../pwned.txt", "content": "x"}))
 
+test "escape del workspace: mensaje instructivo (no 'Capability not granted' ni 'os error 123')"
+    -- abs de Windows, abs con backslash y ..: el modelo debe recibir la regla + qué hacer, no un críptico
+    each bad in ["C:/Users/x/nota.md", "C:\\Users\\x\\nota.md", "../memoria-global.md", "a/../../fuera.txt"]
+        let msg be ""
+        try
+            call_tool(REG["write"], {"path": bad, "content": "x"})
+        recover err
+            set msg to text(err)
+        assert(contains(msg, "path escapes the workspace"), bad + " → " + msg)
+        assert(contains(msg, "memory tool"), msg)
+        assert(not contains(msg, "Capability not granted"), msg)
+    -- "foo..bar" NO es un escape (.. solo cuenta como segmento) y "/x" se re-rootea como siempre
+    call_tool(REG["write"], {"path": T + "/foo..bar.txt", "content": "ok"})
+    assert(contains(call_tool(REG["read"], {"path": T + "/foo..bar.txt"}), "ok"))
+
 test "perfiles: plan no ve write/edit/bash; subagentes no ven delegate"
     let plan be agents.registry_for("plan")
     assert(contains(plan, "read") and contains(plan, "delegate"))
@@ -559,6 +574,29 @@ test "diff: líneas cambiadas con contexto y números; archivo nuevo = todo +; e
     assert_eq(e["old"], "x\ny\n")
     assert_eq(e["new"], "x\nz\n")
     assert_eq(diff.diff(e["old"], e["new"], 1, false)["removed"], 1)
+
+test "diff: corridas largas de +/- se colapsan a 4 + '⋮ ±N líneas más' + 2 (rewrite de 200 líneas)"
+    -- 200 líneas viejas → 200 nuevas, todo distinto: cae en el camino bloque quitado + bloque agregado
+    let olds be []
+    let news be []
+    let i be 0
+    while i < 200
+        set olds to append(olds, "vieja " + text(i))
+        set news to append(news, "nueva " + text(i))
+        set i to i + 1
+    let big be diff.diff(join(olds, "\n"), join(news, "\n"), 2, false)
+    assert_eq(big["added"], 200)
+    assert_eq(big["removed"], 200)
+    -- 4 + marcador + 2 por corrida, dos corridas (− y +) = 14 filas en vez de 400
+    assert_eq(length(big["lines"]), 14)
+    let bs be join(apply((l) => replace_re(l, "\s+$", ""), big["lines"]), "\n")
+    assert(contains(bs, "⋮ −194 líneas más") and contains(bs, "⋮ +194 líneas más"), bs)
+    assert(contains(bs, "- vieja 0") and contains(bs, "- vieja 199"), bs)
+    assert(contains(bs, "+ nueva 0") and contains(bs, "+ nueva 199"), bs)
+    -- una corrida de exactamente 7 NO se colapsa (el marcador no ahorraría nada)
+    let seven be diff.diff("q", join(["q", "1", "2", "3", "4", "5", "6", "7"], "\n"), 2, false)
+    assert_eq(seven["added"], 7)
+    assert(not contains(join(seven["lines"], "\n"), "⋮"), join(seven["lines"], "\n"))
 
 -- ---------- tareas programadas (lib/schedule.syn) ----------
 use "./lib/schedule.syn" as schedule

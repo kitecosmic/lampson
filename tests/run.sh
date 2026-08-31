@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # tests/run.sh — corre los tests unitarios sobre un workspace DESCARTABLE (ver tests/run.ps1).
 set -euo pipefail
+# En Git Bash/MSYS `ln -s` COPIA el directorio (no enlaza) y el restore no puede deshacerlo:
+# el mount queda como carpeta plana (visto 2026-08-31). En Windows usá tests\run.ps1.
+case "$(uname -s)" in MINGW*|MSYS*) echo "en Windows corré tests\\run.ps1 (acá ln -s copia y rompe la junction del workspace)" >&2; exit 1;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mount="$here/workspace"
 tmp="${TMPDIR:-/tmp}/lampson-test-workspace"

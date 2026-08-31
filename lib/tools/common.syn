@@ -11,6 +11,13 @@ export let ROOT be "workspace"
 export let MAX_OUTPUT be 30000
 export let IGNORED_DIRS be [".git", "node_modules", ".synsema", ".lampson", "workspace", "target", "dist", "build", "coverage", "__pycache__", ".venv", ".next", ".netlify", ".cache", ".turbo"]
 
+-- true si algún segmento del path es ".." (no cuenta "foo..bar")
+task has_dotdot(p)
+    each part in split(p, "/")
+        when part == ".."
+            give true
+    give false
+
 -- path del modelo → path real bajo workspace/
 export task ws(path)
     let p be when path == nothing then "." otherwise replace_text(text(path), "\\", "/")
@@ -22,6 +29,12 @@ export task ws(path)
             set p to slice(p, 1, length(p))
         otherwise
             set stripping to false
+    -- escape del workspace (C:\… o ..): mensaje instructivo ANTES del runtime. Sin esto el modelo
+    -- recibía "Capability not granted: file_write(…)" (con ..) u "os error 123" (con C:\…, que parece
+    -- un error de sintaxis de la ruta) y quemaba reintentos probando variantes (visto 2026-08-31:
+    -- quiso guardar una "memoria global" fuera del workspace, como el install global de skills).
+    when contains(split(p, "/")[0], ":") or has_dotdot(p)
+        raise("path escapes the workspace: \"" + text(path) + "\" — file tools only reach the mounted workspace; use paths relative to its root (e.g. \"src/app.ts\"). Do not retry with other path variants. To keep notes across sessions use the memory tool (the harness stores them per project, outside the repo); for anything else outside the workspace, explain what you need and ask the user.")
     when p == "." or p == "" or p == ROOT
         give ROOT
     when starts_with(p, ROOT + "/")

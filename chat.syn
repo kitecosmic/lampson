@@ -79,6 +79,10 @@ task dim(s)
     give c("2", s)
 task yellow(s)
     give c("33", s)
+-- actividad de tools (▸, $): amarillo atenuado, para que el 33 pleno quede solo como "atención
+-- requerida" (⚠ aprobaciones, avisos) — semáforo: actividad ≠ advertencia (2026-08-31)
+task act(s)
+    give c("2;33", s)
 task green(s)
     give c("32", s)
 task red(s)
@@ -276,7 +280,7 @@ task on_event(kind, data, tag)
             set pending_call to desc
         otherwise
             set pending_call to ""
-            print("  " + yellow("▸ " + desc))
+            print("  " + act("▸ " + desc))
     otherwise when kind == "tool_result"
         let out be data["output"]
         let name be data["call"]["name"]
@@ -284,7 +288,7 @@ task on_event(kind, data, tag)
         let d be diff_of(name, out)
         let path be when d != nothing then text(data["call"]["args"]["path"]) otherwise ""
         set turn_outputs to append(turn_outputs, {"name": name, "args": data["call"]["args"], "output": out, "diff": d, "path": path})
-        let lead be when pending_call != "" then "  " + yellow("▸ " + pending_call) + "  " otherwise "    "
+        let lead be when pending_call != "" then "  " + act("▸ " + pending_call) + "  " otherwise "    "
         set pending_call to ""
         when d != nothing
             print_diff_with(lead, path, d)
@@ -1015,7 +1019,7 @@ while running
                 print(dim("  hay " + text(length(turn_outputs)) + " resultados en este turno: /out 1 … /out " + text(length(turn_outputs))))
             otherwise
                 let o be turn_outputs[length(turn_outputs) - back]
-                print("  " + yellow("▸ " + permission.describe_call(o["name"], o["args"])))
+                print("  " + act("▸ " + permission.describe_call(o["name"], o["args"])))
                 print_full(o)
         otherwise when starts_with(input, "/trace")
             let n be trim(slice(input, 6, length(input)))
@@ -1354,7 +1358,7 @@ while running
             when cmd == ""
                 print("  uso: !<comando>   p.ej. !git status · !npm test · !cat .env")
             otherwise
-                print("  " + yellow("$ " + cmd))
+                print("  " + act("$ " + cmd))
                 flush()
                 let out be run_interactive(cmd)
                 set messages to append(messages, {"role": "user", "content": "[The user ran this command in the shell themselves]\n$ " + cmd + "\n" + tools.truncate(out, 6000)})

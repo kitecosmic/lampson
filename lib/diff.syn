@@ -8,6 +8,10 @@ use "./ui.syn" as ui
 
 let ESC be decode(bytes("1b", "hex"))
 let LIMIT be 80
+-- corridas largas de +/- se colapsan: HEAD líneas, "⋮ ±N líneas más", TAIL líneas (un rewrite de 200
+-- líneas pintaba 200 rojas + 200 verdes; el diff completo sigue en la UI web, que recibe old/new crudos)
+let HEAD be 4
+let TAIL be 2
 
 -- línea de diff con fondo (verde/rojo) rellenada hasta el ancho útil, cortada si se pasa
 task row(color, kind, num, body, width)
@@ -39,6 +43,26 @@ task lpad(s, n)
     while length(out) < n
         set out to " " + out
     give out
+
+-- vuelca una corrida de líneas +/- ya formateadas: entera si es corta, colapsada si supera HEAD+TAIL+1
+task flush_run(lines, rows, op, color, width)
+    when length(rows) <= HEAD + TAIL + 1
+        each r in rows
+            set lines to append(lines, r)
+        give lines
+    let i be 0
+    while i < HEAD
+        set lines to append(lines, rows[i])
+        set i to i + 1
+    let hidden be length(rows) - HEAD - TAIL
+    let sign be when op == "+" then "+" otherwise "−"
+    let code be when op == "+" then "32;2" otherwise "31;2"
+    set lines to append(lines, sgr(color, code, lpad("", width) + " ⋮ " + sign + text(hidden) + " líneas más"))
+    set i to length(rows) - TAIL
+    while i < length(rows)
+        set lines to append(lines, rows[i])
+        set i to i + 1
+    give lines
 
 -- LCS clásico: devuelve la lista de ops {"op": " "|"-"|"+", "a": idx_old, "b": idx_new}
 task lcs_ops(a, b)
@@ -135,6 +159,9 @@ export task diff(old, new, ctx, color)
         set idx to idx + 1
     set idx to 0
     let skipping be false
+    -- corrida de +/- consecutivos: se junta y se vuelca colapsada (flush_run) al cambiar de tipo
+    let run_op be ""
+    let run_rows be []
     each o in ops
         let near be false
         let w be idx - ctx
@@ -142,6 +169,10 @@ export task diff(old, new, ctx, color)
             when w >= 0 and w < length(ops) and ops[w]["op"] != " "
                 set near to true
             set w to w + 1
+        when o["op"] != run_op and run_op != ""
+            set lines to flush_run(lines, run_rows, run_op, color, width)
+            set run_op to ""
+            set run_rows to []
         when o["op"] == " "
             when near
                 set lines to append(lines, row(color, " ", text(pre + o["b"] + 1), mid_b[o["b"]], width))
@@ -150,12 +181,16 @@ export task diff(old, new, ctx, color)
                 set lines to append(lines, sgr(color, "2", lpad("", width) + " ⋯"))
                 set skipping to true
         otherwise when o["op"] == "-"
-            set lines to append(lines, row(color, "-", text(pre + o["a"] + 1), mid_a[o["a"]], width))
+            set run_op to "-"
+            set run_rows to append(run_rows, row(color, "-", text(pre + o["a"] + 1), mid_a[o["a"]], width))
             set skipping to false
         otherwise
-            set lines to append(lines, row(color, "+", text(pre + o["b"] + 1), mid_b[o["b"]], width))
+            set run_op to "+"
+            set run_rows to append(run_rows, row(color, "+", text(pre + o["b"] + 1), mid_b[o["b"]], width))
             set skipping to false
         set idx to idx + 1
+    when run_op != ""
+        set lines to flush_run(lines, run_rows, run_op, color, width)
     -- contexto posterior (del sufijo común)
     let after_start be length(b) - suf
     let upto be when after_start + ctx < length(b) then after_start + ctx otherwise length(b)
