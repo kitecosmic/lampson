@@ -329,9 +329,7 @@ let COMMANDS be [
     ["/ask", "", "permisos: PREGUNTAR antes de un comando peligroso (rm -rf, git push --force, sudo…)"],
     ["/yolo", "", "permisos: PERMITIR comandos peligrosos sin preguntar (los destructivos del sistema siguen bloqueados)"],
     ["/strict", "", "permisos: DENEGAR comandos peligrosos"],
-    ["/model", "<nombre>", "cambiar el modelo para esta sesión (mismo proveedor y key)"],
-    ["/provider", "[nombre] [modelo]", "cambiar de proveedor (deepseek, anthropic, openai, minimax…); sin args lista cuáles tienen key"],
-    ["/setup", "", "elegir proveedor, modelo y pegar la API key (queda en lampson/.lampson/config.json, local)"],
+    ["/model", "[proveedor] [modelo]", "elegir proveedor y modelo con flechas (la lista de modelos la da la API); pide la key solo si falta; queda guardado"],
     ["/paste", "", "adjuntar la imagen del portapapeles al próximo mensaje (copiá una captura y escribí /paste)"],
     ["/image", "<ruta>", "adjuntar una imagen (png/jpg/gif/webp) al próximo mensaje; /image sin ruta muestra o quita las pendientes"],
     ["/delete", "<id>", "borrar una sesión guardada, con confirmación (ver /sessions)"],
@@ -381,7 +379,7 @@ task complete_args(cmd, head, last)
         give workspace_paths(last)
     when cmd == "/resume" or cmd == "/delete"
         give apply((s) => s["id"], session.list())
-    when cmd == "/provider"
+    when cmd == "/provider" or cmd == "/model" or cmd == "/setup"
         when first
             give apply((p) => p["name"], provider.providers())
         give []
@@ -420,9 +418,8 @@ task complete_args(cmd, head, last)
             give []
         give apply((s) => s["id"], schedule.summary())
     when cmd == "/agent"
-        give ["build", "plan", "review", "explore", "worker"]
-    when cmd == "/model"
-        give []
+        -- solo los perfiles elegibles por el usuario: `worker` es interno de delegate (agents.names lo filtra)
+        give agents.names()
     give []
 
 -- rutas del workspace que empiezan con el prefijo escrito (directorios con "/" final para seguir completando)
@@ -599,50 +596,139 @@ task skills_list()
 -- ---------- onboarding ----------
 -- Primera vez (ningún proveedor con key) o /setup: elegir proveedor, modelo y pegar la key. Va a
 -- lampson/.lampson/config.json (local, gitignored) y vale para terminal y web. Sin TTY no pregunta.
-task setup_wizard()
-    print("")
-    let list be provider.providers()
-    -- menú ↑↓/Enter (o inicial / número) cuando hay TTY; sin TTY, la lista numerada + read_line de siempre.
-    -- Las etiquetas van en texto plano: las pinta el menú (ver lib/line.syn).
-    let labels be []
-    each p in list
-        set labels to append(labels, pad(p["name"], 12) + pad(p["model"], 26) + (when p["name"] == "ollama" then "(local, sin key)" otherwise (when p["has_key"] then "● key guardada" otherwise "")))
+-- ---------- /model · /provider · /setup: UN solo flujo ----------
+-- Proveedor → modelo (lista viva de la API del proveedor) → key solo si falta. Todo con menús ↑↓ cuando hay
+-- TTY; sin TTY, listas numeradas + read_line. Siempre se GUARDA en lampson/.lampson/config.json (igual que
+-- la web): ya no hay "solo esta sesión". Con args (`/model glm glm-5.3-flash`) aplica directo lo que vino y
+-- pregunta solo lo que falte. cur_name/cur_model = lo activo, para marcarlo y ponerlo primero.
+let MENU_MAX be 18
+
+-- menú o lista numerada según haya TTY. Devuelve el índice elegido, o nothing si el usuario canceló.
+task pick_from(question, labels)
     flush()
-    let pick be ed.choose("  " + cyan("Configuremos el modelo.") + " Elegí un proveedor:", labels, COLOR)
-    let name be ""
+    let pick be ed.choose("  " + question, labels, COLOR)
     when pick == nothing
-        print("  (sin cambios)")
+        give nothing
+    when pick != -1
+        give pick
+    print("  " + question + " (número)")
+    each e in enumerate(labels)
+        print("  " + pad(text(e["index"] + 1) + ".", 4) + e["item"])
+    let choice be read_line("  > ")
+    when choice == nothing or trim(choice) == ""
+        give nothing
+    let c be trim(choice)
+    when matches(c, "^[0-9]+$")
+        let i be floor(number(c)) - 1
+        when i >= 0 and i < length(labels)
+            give i
+        give nothing
+    -- también vale escribir el nombre (primera palabra de la etiqueta)
+    each e in enumerate(labels)
+        when lower(split(trim(e["item"]), " ")[0]) == lower(c)
+            give e["index"]
+    give nothing
+
+task ask_provider(cur_name)
+    let list be provider.providers()
+    -- el actual primero, después el resto en orden
+    let ordered be where(list, (p) => p["name"] == cur_name) + where(list, (p) => p["name"] != cur_name)
+    let labels be []
+    each p in ordered
+        let flag be when p["name"] == "ollama" then "local, sin key" otherwise (when p["has_key"] then "● key" otherwise "")
+        set labels to append(labels, pad(p["name"], 12) + pad(p["model"], 26) + pad(flag, 16) + (when p["name"] == cur_name then "◀ actual" otherwise ""))
+    let i be pick_from(cyan("Proveedor:"), labels)
+    when i == nothing
+        give ""
+    give ordered[i]["name"]
+
+-- modelos del proveedor según su API; si son muchos, un filtro antes del menú; siempre "otro…" para tipear
+task ask_model(name, cur_name, cur_model)
+    let pcfg be provider.config_for(name, "")
+    let default be when name == cur_name and cur_model != "" then cur_model otherwise pcfg["model"]
+    let lm be provider.list_models(pcfg)
+    when lm["error"] != nothing
+        print("  " + dim("no pude listar los modelos de " + name + " (" + lm["error"] + ")"))
+        let typed be read_line("  modelo [" + default + "]: ")
+        give when typed == nothing or trim(typed) == "" then default otherwise trim(typed)
+    let ids be lm["models"]
+    when length(ids) > MENU_MAX
+        print("  " + dim(text(length(ids)) + " modelos en " + name + " · escribí parte del nombre para filtrar (Enter = los primeros " + text(MENU_MAX) + ")"))
+        let f be read_line("  filtro: ")
+        let ff be when f == nothing then "" otherwise lower(trim(f))
+        when ff != ""
+            set ids to where(ids, (m) => contains(lower(m), ff))
+        when length(ids) == 0
+            print("  " + dim("ningún modelo contiene «" + ff + "»"))
+            set ids to lm["models"]
+        when length(ids) > MENU_MAX
+            set ids to slice(ids, 0, MENU_MAX)
+    -- el default primero (si la API lo lista), después el resto; al final la opción de escribir
+    let ordered be where(ids, (m) => m == default) + where(ids, (m) => m != default)
+    let labels be apply((m) => m + (when m == default then "   ◀ actual" otherwise ""), ordered)
+    set labels to append(labels, "otro… (escribir)")
+    let i be pick_from(cyan("Modelo de " + name + ":") + dim("  (según su API)"), labels)
+    when i == nothing
+        give ""
+    when i == length(labels) - 1
+        let typed be read_line("  modelo [" + default + "]: ")
+        give when typed == nothing or trim(typed) == "" then default otherwise trim(typed)
+    give ordered[i]
+
+-- pide la key si el proveedor no tiene una guardada. Devuelve false si el usuario canceló.
+task ensure_key(name)
+    when name == "ollama" or provider.has_key(name)
+        give true
+    print("  " + dim("la key se guarda en lampson/.lampson/config.json (solo en esta máquina)"))
+    let key be read_line("  API key de " + name + ": ")
+    when key == nothing
         give false
-    otherwise when pick == -1
-        print("  " + cyan("Configuremos el modelo.") + " Elegí un proveedor (número o nombre):")
-        each e in enumerate(list)
-            let p be e["item"]
-            print("  " + pad(text(e["index"] + 1) + ".", 4) + pad(p["name"], 12) + dim(p["model"]) + (when p["name"] == "ollama" then dim("  (local, sin key)") otherwise (when p["has_key"] then green("  ● key guardada") otherwise "")))
-        let choice be read_line("  proveedor: ")
-        when choice == nothing or trim(choice) == ""
+    when trim(key) == ""
+        print("  " + yellow("sin key: podés agregarla después con /model"))
+        give true
+    settings.set_key(name, trim(key))
+    give true
+
+-- pre_name / pre_model: lo que vino por args ("" = preguntar). Devuelve true si guardó algo.
+task setup_wizard(pre_name, pre_model, cur_name, cur_model)
+    print("")
+    let name be lower(trim(pre_name))
+    when name == ""
+        set name to ask_provider(cur_name)
+        when name == ""
             print("  (sin cambios)")
             give false
-        set name to lower(trim(choice))
-        when matches(name, "[0-9]+")
-            let i be floor(number(name)) - 1
-            when i >= 0 and i < length(list)
-                set name to list[i]["name"]
-        when not contains(provider.PRESETS, name)
-            print("  " + red("no conozco el proveedor " + name))
+    when not contains(provider.PRESETS, name)
+        print("  " + red("no conozco el proveedor " + name) + " · disponibles: " + join(sort_by(keys(provider.PRESETS), (x) => x), ", "))
+        give false
+    -- la key va antes que el modelo: sin key la API no lista los modelos
+    when not ensure_key(name)
+        print("  (sin cambios)")
+        give false
+    let model be trim(pre_model)
+    when model == ""
+        set model to ask_model(name, cur_name, cur_model)
+        when model == ""
+            print("  (sin cambios)")
             give false
-    otherwise
-        set name to list[pick]["name"]
-    let preset be provider.PRESETS[name]
-    let model be read_line("  modelo [" + preset["model"] + "]: ")
-    set model to when model == nothing then "" otherwise trim(model)
-    when name != "ollama"
-        print("  " + dim("la key se guarda en lampson/.lampson/config.json (solo en esta máquina); Enter para dejar la actual"))
-        let key be read_line("  API key de " + name + ": ")
-        when key != nothing and trim(key) != ""
-            settings.set_key(name, trim(key))
+    -- un "modelo" que empieza con / es un comando tipeado por error (o un stdin que se acabó): no se guarda
+    when starts_with(model, "/")
+        print("  (sin cambios)")
+        give false
+    set model to provider.normalize_model(name, model)
     settings.set_default(name, model)
-    print("  " + green("listo") + " · " + name + " · " + (when model == "" then preset["model"] otherwise model) + dim("   (cambialo cuando quieras con /setup o /provider)"))
+    print("  " + green("✓ " + name + " · " + model + " · guardado") + dim("   (/model para cambiarlo; /model <proveedor> [modelo] va directo)"))
     give true
+
+-- `/model x y` · `/provider x y` · `/setup`: args → (proveedor, modelo). Un solo arg que no es proveedor =
+-- modelo del proveedor actual.
+task setup_from_args(rest, cur_name, cur_model)
+    let args be where(split(trim(rest), " "), (x) => x != "")
+    when length(args) == 0
+        give setup_wizard("", "", cur_name, cur_model)
+    when length(args) == 1 and not contains(provider.PRESETS, lower(args[0]))
+        give setup_wizard(cur_name, args[0], cur_name, cur_model)
+    give setup_wizard(args[0], when length(args) > 1 then args[1] otherwise "", cur_name, cur_model)
 
 -- ---------- imágenes en el REPL ----------
 -- Una terminal no puede pegar una imagen, así que se lee del portapapeles (/paste) o de un archivo
@@ -685,10 +771,14 @@ let cfg be provider.config()
 when not provider.configured() and cfg["provider"] != "ollama"
     print("")
     print("  Bienvenido a Lampson. Todavía no hay ninguna API key configurada.")
-    when setup_wizard()
+    when setup_wizard("", "", cfg["provider"], cfg["model"])
         set cfg to provider.config()
 let env_info be agents.env_info(cfg)
 let profile be lower(env("LAMPSON_AGENT", "build"))
+-- `--agent worker` (o cualquier nombre desconocido): worker es interno de delegate, no un perfil de sesión
+when not contains(agents.names(), profile)
+    print("agente '" + profile + "' no disponible · disponibles: " + join(agents.names(), ", ") + " · uso build")
+    set profile to "build"
 task system_for(p)
     give {"role": "system", "content": prompt.build(env_info, agents.addendum_for(p))}
 task opts_for(p, mode)
@@ -932,34 +1022,10 @@ while running
             let lines be when n == "" then 40 otherwise floor(number(n))
             print(dim("  " + trace.file_of(sid)))
             print(trace.tail(sid, lines))
-        otherwise when starts_with(input, "/model")
-            let want be trim(slice(input, 6, length(input)))
-            when want == ""
-                print("modelo actual: " + cfg["model"] + " · uso: /model <nombre>")
-                let lm be provider.list_models(cfg)
-                when lm["error"] != nothing
-                    print("  " + dim("no pude listar los modelos de " + cfg["provider"] + ": " + lm["error"]))
-                otherwise
-                    print("  disponibles en " + cfg["provider"] + ": " + join(lm["models"], ", "))
-            otherwise
-                set cfg["model"] to provider.normalize_model(cfg["provider"], want)
-                print("modelo=" + want + " (solo esta sesión; para fijarlo: LAMPSON_MODEL en lampson\\.env)")
-        otherwise when starts_with(input, "/provider")
-            let args be where(split(trim(slice(input, 9, length(input))), " "), (x) => x != "")
-            when length(args) == 0
-                print("  proveedor actual: " + cfg["provider"] + " · modelo " + cfg["model"])
-                each p in provider.providers()
-                    print("  " + (when p["has_key"] then green("● ") otherwise dim("○ ")) + pad(p["name"], 12) + dim(p["model"] + (when p["has_key"] then "" otherwise "   (sin key: LAMPSON_API_KEY_" + upper(p["name"]) + " en lampson\\.env)")))
-                print("  uso: /provider <nombre> [modelo]")
-            otherwise when not contains(provider.PRESETS, lower(args[0]))
-                print("  no conozco el proveedor " + args[0] + " · disponibles: " + join(sort_by(keys(provider.PRESETS), (x) => x), ", "))
-            otherwise
-                set cfg to provider.config_for(args[0], when length(args) > 1 then args[1] otherwise "")
-                when not cfg["has_key"]
-                    print("  " + yellow("ojo: no hay key para " + cfg["provider"] + " — agregá LAMPSON_API_KEY_" + upper(cfg["provider"]) + "=… en lampson\\.env (se usará LAMPSON_API_KEY, que probablemente falle)"))
-                print("  proveedor=" + cfg["provider"] + " · modelo=" + cfg["model"] + " · " + cfg["wire"] + " → " + cfg["base_url"] + dim("   (solo esta sesión; para fijarlo: LAMPSON_PROVIDER en .env)"))
-        otherwise when input == "/setup"
-            when setup_wizard()
+        otherwise when starts_with(input, "/model") or starts_with(input, "/provider") or starts_with(input, "/setup")
+            -- un solo flujo (ver setup_wizard): proveedor → modelo (lista de la API) → key si falta; se guarda en config.json
+            let rest be trim(replace_re(input, "^/(model|provider|setup)", ""))
+            when setup_from_args(rest, cfg["provider"], cfg["model"])
                 set cfg to provider.config()
         otherwise when input == "/paste"
             attach_image("clip", "")
@@ -1271,7 +1337,7 @@ while running
             let want be trim(slice(input, 6, length(input)))
             when want == ""
                 print("agente=" + profile + " · disponibles: " + join(agents.names(), ", "))
-            otherwise when contains(agents.PROFILES, want)
+            otherwise when contains(agents.names(), want)
                 set profile to want
                 set system_msg to system_for(profile)
                 set opts to opts_for(profile, mode)

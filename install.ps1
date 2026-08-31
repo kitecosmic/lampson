@@ -55,7 +55,7 @@ if (-not (Test-Path $envFile)) {
     Copy-Item (Join-Path $Home_ ".env.example") $envFile
     if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
         Write-Host ""
-        Say "Which provider? (deepseek | anthropic | openai | minimax | kimi | groq | grok | openrouter | ollama)"
+        Say "Which provider? (deepseek | anthropic | openai | glm | minimax | kimi | groq | grok | openrouter | ollama)"
         $prov = Read-Host "  provider [deepseek]"; if ($prov -eq "") { $prov = "deepseek" }
         $key = Read-Host "  API key (leave empty to fill .env later)"
         $c = Get-Content $envFile -Raw

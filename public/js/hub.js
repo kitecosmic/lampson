@@ -24,8 +24,16 @@ async function paintGrid() {
   const grid = $('#wsGrid'); let r; try { r = await (await fetch(BASE + '/api/workspaces')).json(); } catch (e) { grid.innerHTML = '<div class="card"><p>el hub no responde</p></div>'; return; }
   grid.innerHTML = '';
   for (const w of (r.workspaces || [])) {
-    const c = document.createElement('a'); c.className = 'card ws' + (w.alive ? ' on' : ''); c.href = w.url;
+    const c = document.createElement('a'); c.className = 'card ws' + (w.alive ? ' on' : ' off'); c.href = w.url;
     c.innerHTML = `<h3>${w.alive ? '● vivo' : '○ apagado'}${w.schedules_on ? ' · ⏰ ' + w.schedules_on : ''}</h3><p class="nm">${esc(w.name)}</p><p class="pth">${esc(w.path)}</p><p class="meta">último uso ${esc(fmtWhen(w.last_used))}</p>`;
+    // entrar = usarlo: si está apagado se enciende acá mismo (con aviso en la tarjeta) y después se abre. La ruta
+    // /w/<slug> del hub también lo enciende sola, así que un link directo funciona igual; esto solo da feedback.
+    if (!w.alive) c.onclick = async (e) => {
+      e.preventDefault(); if (c.dataset.busy) return; c.dataset.busy = '1';
+      const h = c.querySelector('h3'); h.textContent = '⟳ encendiendo…'; c.classList.add('busy');
+      try { const r = await api('/api/workspaces/start', { slug: w.slug }); if (!r.ok || !r.data.ok) { h.textContent = '○ no arrancó · mirá .lampson/ws/' + w.slug + '/.lampson/web.log'; c.classList.remove('busy'); delete c.dataset.busy; return; } } catch (err) {}
+      location.href = w.url;
+    };
     grid.appendChild(c);
   }
   const add = document.createElement('a'); add.className = 'card ws new'; add.href = '#'; add.innerHTML = '<h3>+</h3><p class="nm">nuevo workspace</p><p class="pth">elegí una carpeta de tu disco</p>';

@@ -6,6 +6,10 @@ body.hub #stage { display:flex; align-items:center; padding:20px 40px; }
 .card.ws { display:block; text-decoration:none; color:inherit; cursor:pointer; transition:border-color .12s; }
 .card.ws:hover { border-color:var(--ink-3); }
 .card.ws.on { border-color:var(--accent); }
+/* estado a un vistazo: verde vivo · rojo apagado · ámbar mientras arranca */
+.card.ws.on h3 { color:var(--ok); }
+.card.ws.off h3 { color:var(--rubric); }
+.card.ws.busy h3 { color:var(--amber); }
 .card.ws.new { border-style:dashed; }
 .card.ws .nm { font:600 16px/1.3 var(--serif); color:var(--ink); margin:0 0 4px; }
 .card.ws .pth { font:400 11px/1.4 var(--mono); color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:0 0 6px; }

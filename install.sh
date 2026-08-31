@@ -36,7 +36,7 @@ ENVF="$HOME_DIR/.env"
 if [ ! -f "$ENVF" ]; then
     cp "$HOME_DIR/.env.example" "$ENVF"
     if [ -t 0 ]; then
-        echo; say "Which provider? (deepseek | anthropic | openai | minimax | kimi | groq | grok | openrouter | ollama)"
+        echo; say "Which provider? (deepseek | anthropic | openai | glm | minimax | kimi | groq | grok | openrouter | ollama)"
         read -r -p "  provider [deepseek]: " prov; prov="${prov:-deepseek}"
         read -r -p "  API key (leave empty to fill .env later): " key
         sed -i.bak "s/^LAMPSON_PROVIDER=.*/LAMPSON_PROVIDER=$prov/" "$ENVF"

@@ -380,6 +380,10 @@ export task start_ws(w)
     require file.read("web.syn")
     require file.read("chat.syn")
     require file.read(".env")
+    -- encender levanta la pausa manual
+    when contains(w, "paused") and w["paused"] == true
+        set w["paused"] to false
+        put(w)
     let d be prepare(w)
     let h be home()
     let sep be when is_win() then "\\" otherwise "/"
@@ -396,12 +400,20 @@ export task health(w)
     require net("127.0.0.1")
     require time
     try
-        let r be http_get("http://127.0.0.1:" + text(w["port"]) + "/w/" + w["slug"] + "/api/health", {"timeout": 2})
+        let r be http("GET", "http://127.0.0.1:" + text(w["port"]) + "/w/" + w["slug"] + "/api/health", {}, {}, "", 1.5)
         when r["ok"]
             give json_decode(body of r)
         give nothing
     recover err
         give nothing
+
+-- salud de TODOS a la vez. En Windows con el firewall en modo stealth, conectar a un puerto cerrado de 127.0.0.1
+-- no se rechaza al instante: el SYN queda sin respuesta ~2 s. Secuencial era 2 s × workspaces (6 s con tres
+-- apagados); en paralelo es 2 s en total, y el resultado se comparte en el blackboard para que la lista sea inmediata.
+export task health_all(list)
+    require net("127.0.0.1")
+    require time
+    give parallel_map(health, list, 8)
 
 -- esperar hasta que responda (arranque)
 export task wait_ready(w, secs)
@@ -413,6 +425,25 @@ export task wait_ready(w, secs)
             give true
         sleep(0.4)
     give false
+
+-- «■ apagar»: marca la pausa manual en el registro y para el proceso; el supervisor no lo vuelve a levantar
+export task pause_ws(w)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require net("127.0.0.1")
+    require file(".lampson")
+    require file(".lampson/*")
+    set w["paused"] to true
+    put(w)
+    stop_ws(w)
+    -- esperar a que deje de responder (matar tarda unos segundos) y dejar la caché al día
+    let deadline be now() + 6
+    while now() < deadline and health(w) != nothing
+        sleep(0.4)
+    summary()
+    give true
 
 export task stop_ws(w)
     require exec
@@ -490,6 +521,11 @@ export task should_live(w, hc)
     require file.read(".lampson/*")
     require env("LAMPSON_*")
     require time
+    -- apagado a mano («■ apagar» en el hub): gana sobre la política y sobre las tareas programadas hasta que
+    -- alguien lo encienda (botón ▶, o `lampson` en esa carpeta). Antes el tick lo revivía a los 15 s y el botón
+    -- parecía no hacer nada.
+    when contains(w, "paused") and w["paused"] == true
+        give false
     let pol be when contains(w, "policy") then w["policy"] otherwise "auto"
     when pol == "always"
         give true
@@ -528,8 +564,11 @@ export task tick()
         restart_hub_later()
     let started be []
     let stopped be []
-    each w in all()
-        let hc be health(w)
+    let list be all()
+    let hcs be health_all(list)
+    each e in enumerate(list)
+        let w be e["item"]
+        let hc be hcs[e["index"]]
         let want be should_live(w, hc)
         when want and hc == nothing
             start_ws(w)
@@ -537,6 +576,7 @@ export task tick()
         otherwise when not want and hc != nothing
             stop_ws(w)
             set stopped to append(stopped, w["slug"])
+    summary()
     give {"started": started, "stopped": stopped}
 
 -- resumen para la UI del hub
@@ -549,10 +589,34 @@ export task summary()
     require file(".lampson")
     require file(".lampson/*")
     let out be []
-    each w in all()
-        let hc be health(w)
-        set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "port": w["port"], "policy": when contains(w, "policy") then w["policy"] otherwise "auto", "created": w["created"], "last_used": when hc != nothing and contains(hc, "last_used") and hc["last_used"] != nothing then hc["last_used"] otherwise w["last_used"], "alive": hc != nothing, "schedules_on": when hc != nothing and contains(hc, "schedules_on") then hc["schedules_on"] otherwise schedules_on_disk(w), "url": "/w/" + w["slug"]})
+    let list be all()
+    let hcs be health_all(list)
+    each e in enumerate(list)
+        let w be e["item"]
+        let hc be hcs[e["index"]]
+        set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "port": w["port"], "policy": when contains(w, "policy") then w["policy"] otherwise "auto", "created": w["created"], "last_used": when hc != nothing and contains(hc, "last_used") and hc["last_used"] != nothing then hc["last_used"] otherwise w["last_used"], "alive": hc != nothing, "paused": contains(w, "paused") and w["paused"] == true, "schedules_on": when hc != nothing and contains(hc, "schedules_on") then hc["schedules_on"] otherwise schedules_on_disk(w), "url": "/w/" + w["slug"]})
+    share out as "hub:summary"
+    share now() as "hub:summary_at"
     give out
+
+-- la lista que ve la UI: la última calculada (tick cada 15 s, y cada start/stop la refresca) si tiene menos de
+-- max_age segundos; si no, se calcula ahora. GET /api/workspaces?fresh=1 fuerza el cálculo.
+export task summary_cached(max_age)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require net("127.0.0.1")
+    require file(".lampson")
+    require file(".lampson/*")
+    try
+        observe "hub:summary_at" as at
+        observe "hub:summary" as cached
+        when at != nothing and cached != nothing and now() - at < max_age
+            give cached
+    recover err
+        give summary()
+    give summary()
 
 -- ---------- explorador de carpetas ----------
 -- diálogo nativo del SO (PC con escritorio). Devuelve la ruta elegida, "" si canceló, nothing si no hay diálogo.

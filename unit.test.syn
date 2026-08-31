@@ -146,6 +146,7 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert_eq(provider.normalize_model("deepseek", " DeepSeek-V4-Pro "), "deepseek-v4-pro")
     assert_eq(provider.normalize_model("openai", "GPT-4o"), "gpt-4o")
     assert_eq(provider.normalize_model("minimax", "MiniMax-M3"), "MiniMax-M3")
+    assert_eq(provider.normalize_model("glm", "GLM-5.3-Flash"), "glm-5.3-flash")
     assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-v4-flash")
     assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
     assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))

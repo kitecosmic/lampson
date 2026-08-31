@@ -4,8 +4,9 @@ let wsList = [], wsIdle = 4;
 // abierto por el puerto de un proceso (:808N) las URLs de otros workspaces tienen que ir al hub (:8080), no a este proceso
 const HUB_BASE = (location.port && location.port !== '8080') ? location.protocol + '//' + location.hostname + ':8080' : '';
 function wsUrl(w) { return HUB_BASE + w.url; }
-async function fetchWorkspaces() {
-  try { const r = await (await fetch('/api/workspaces')).json(); wsList = r.workspaces || []; wsIdle = r.idle_hours; return true; } catch (e) { wsList = []; return false; }
+// fresh=true: saltear la caché del hub (después de encender/apagar)
+async function fetchWorkspaces(fresh) {
+  try { const r = await (await fetch('/api/workspaces' + (fresh ? '?fresh=1' : ''))).json(); wsList = r.workspaces || []; wsIdle = r.idle_hours; return true; } catch (e) { wsList = []; return false; }
 }
 async function paintWorkspacePill() {
   const pill = $('#wsPill'); if (!pill) return;
@@ -22,12 +23,12 @@ function openWorkspaces(selectSlug) {
     browse: {
       placeholder: 'buscar workspace…', listWidth: '300px', key: w => w.slug,
       load: async (q) => { await fetchWorkspaces(); const list = wsList.filter(w => !q || (w.name + ' ' + w.path).toLowerCase().includes(q.toLowerCase())); return q ? list : [...list, WS_NEW]; },
-      render: (w) => w === WS_NEW ? `<span class="dot">+</span><div><div class="nm" style="color:var(--accent);font-weight:400">nuevo workspace…</div><div class="meta">elegí una carpeta</div></div>` : `<span class="dot">${w.alive ? '●' : '○'}</span><div><div class="nm">${esc(w.name)}${w.slug === WS_SLUG ? ' <span class="meta">(este)</span>' : ''}</div><div class="meta">${esc(w.path)}</div></div>`,
+      render: (w) => w === WS_NEW ? `<span class="dot">+</span><div><div class="nm" style="color:var(--accent);font-weight:400">nuevo workspace…</div><div class="meta">elegí una carpeta</div></div>` : `<span class="dot ${w.alive ? 'on' : 'off'}">${w.alive ? '●' : '○'}</span><div><div class="nm">${esc(w.name)}${w.slug === WS_SLUG ? ' <span class="meta">(este)</span>' : ''}</div><div class="meta">${esc(w.path)}</div></div>`,
       count: (rows) => { const n = rows.filter(r => r !== WS_NEW).length, a = rows.filter(r => r !== WS_NEW && r.alive).length; return `${n} workspace${n === 1 ? '' : 's'} · ${a} vivo${a === 1 ? '' : 's'}`; },
       emptyHtml: 'nada coincide', emptyDetail: 'Todavía no hay workspaces. Creá uno con «nuevo workspace…» o abrí <code>lampson</code> en la carpeta de un proyecto.',
-      detail: (w) => w === WS_NEW ? wsNewForm() : `<div class="dhead"><span class="nm">${esc(w.name)}</span><span class="meta">${w.alive ? '● vivo' : '○ apagado'} · ${esc(w.policy)}</span></div>
+      detail: (w) => w === WS_NEW ? wsNewForm() : `<div class="dhead"><span class="nm">${esc(w.name)}</span><span class="meta"><b class="st ${w.alive ? 'on' : 'off'}">${w.alive ? '● vivo' : (w.paused ? '○ apagado a mano' : '○ apagado')}</b> · ${esc(w.policy)}</span></div>
         <div class="dcap">${esc(w.path)}</div>
-        <div class="ddesc">${w.schedules_on ? `${w.schedules_on} tarea${w.schedules_on === 1 ? '' : 's'} programada${w.schedules_on === 1 ? '' : 's'} encendida${w.schedules_on === 1 ? '' : 's'} (lo mantienen vivo). ` : ''}Último uso: ${esc(fmtWhen(w.last_used))}.</div>
+        <div class="ddesc">${w.schedules_on ? `${w.schedules_on} tarea${w.schedules_on === 1 ? '' : 's'} programada${w.schedules_on === 1 ? '' : 's'} encendida${w.schedules_on === 1 ? '' : 's'} ${w.alive ? '(lo mantienen vivo)' : (w.paused ? '— en pausa hasta que lo enciendas' : '')}. ` : ''}${!w.alive && w.paused ? 'Lo apagaste a mano: no se enciende solo hasta ▶ encender o abrir <code>lampson</code> en la carpeta. ' : ''}Último uso: ${esc(fmtWhen(w.last_used))}.</div>
         <div class="dacts"><button class="primary" data-open>${w.slug === WS_SLUG ? 'Ya estás acá' : 'Abrir'}</button>${w.alive ? '<button data-stop>■ apagar</button>' : '<button data-start>▶ encender</button>'}</div>
         <div class="dform" style="margin-top:14px"><label>vida <select name="policy"><option value="auto" ${w.policy === 'auto' ? 'selected' : ''}>auto — vivo mientras se use (${wsIdle === 0 ? 'nunca se apaga' : 'se apaga tras ' + wsIdle + ' h sin uso'}) o tenga tareas</option><option value="always" ${w.policy === 'always' ? 'selected' : ''}>siempre vivo</option><option value="off" ${w.policy === 'off' ? 'selected' : ''}>apagado — solo cuando lo abrís</option></select></label><span class="ds">las horas de inactividad se cambian en ⚙ → General</span></div>
         <div class="dfoot"><span>/w/${esc(w.slug)} · :${w.port} (solo loopback)</span><span class="del">quitar del registro</span></div><div class="derr"></div>`,
@@ -35,8 +36,11 @@ function openWorkspaces(selectSlug) {
         const err = (m) => { const e = box.querySelector('.derr'); if (e) e.textContent = m || ''; };
         if (w === WS_NEW) { wsNewWire(box, err); return; }
         box.querySelector('[data-open]').onclick = () => { if (w.slug !== WS_SLUG) location.href = wsUrl(w); else Panel.close(); };
-        const st = box.querySelector('[data-start]'); if (st) st.onclick = async () => { err('arrancando…'); const r = await api('/api/workspaces/start', { slug: w.slug }); err(r.data.ok ? '' : 'no respondió a tiempo'); Panel.refresh(); };
-        const sp = box.querySelector('[data-stop]'); if (sp) sp.onclick = async () => { await api('/api/workspaces/stop', { slug: w.slug }); setTimeout(() => Panel.refresh(), 800); };
+        // esperar a que el hub vea el estado nuevo (matar/arrancar un proceso tarda unos segundos): sin esto el refresco
+        // a los 0,8 s todavía mostraba «vivo» y el botón parecía no hacer nada
+        const waitFor = async (alive, secs) => { const t0 = Date.now(); while (Date.now() - t0 < secs * 1000) { await fetchWorkspaces(true); const x = wsList.find(y => y.slug === w.slug); if (x && x.alive === alive) return true; await new Promise(r => setTimeout(r, 700)); } return false; };
+        const st = box.querySelector('[data-start]'); if (st) st.onclick = async () => { st.disabled = true; st.textContent = '⟳ encendiendo…'; err(''); const r = await api('/api/workspaces/start', { slug: w.slug }); const ok = r.data.ok || await waitFor(true, 6); err(ok ? '' : 'no respondió a tiempo · mirá .lampson/ws/' + w.slug + '/.lampson/web.log'); Panel.refresh(); };
+        const sp = box.querySelector('[data-stop]'); if (sp) sp.onclick = async () => { sp.disabled = true; sp.textContent = '⟳ apagando…'; err(''); await api('/api/workspaces/stop', { slug: w.slug }); const ok = await waitFor(false, 10); if (ok && w.slug === WS_SLUG) { location.href = HUB_BASE + '/'; return; } err(ok ? '' : 'sigue respondiendo · probá de nuevo'); Panel.refresh(); };
         box.querySelector('[name="policy"]').onchange = async (ev) => { const r = await api('/api/workspaces/policy', { slug: w.slug, policy: ev.target.value }); if (!r.ok) err(r.data.error || 'error'); };
         const del = box.querySelector('.dfoot .del');
         del.onclick = () => inlineConfirm(del, `¿quitar ${w.name} del registro?`, async () => { const r = await api('/api/workspaces/remove', { slug: w.slug }); if (!r.ok) { err(r.data.error || 'error'); return; } if (w.slug === WS_SLUG) location.href = HUB_BASE + '/'; else Panel.refresh(); });

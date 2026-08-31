@@ -57,13 +57,21 @@ serve on 8080
     -- la UI de un workspace: el mismo index.html; el frontend deduce /w/<slug> de la URL (BASE en js/core.js).
     -- Sin barra final: el runtime normaliza "/w/x/" → "/w/x" (301), así que la ruta canónica es esta
     route "GET /w/:slug"
+        -- entrar a un workspace apagado lo enciende (y levanta la pausa manual): si alguien abre la URL es para usarlo
+        let w be ws.get(params.slug)
+        when w != nothing and ws.health(w) == nothing
+            ws.start_ws(w)
+            ws.wait_ready(w, 8)
+            ws.summary()
         give html(read_file("public/index.html"))
 
     route "GET /api/hub" requires auth
         give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home()}
 
     route "GET /api/workspaces" requires auth
-        give {"workspaces": ws.summary(), "idle_hours": ws.idle_hours()}
+        -- la caché del blackboard (tick + acciones) salvo ?fresh=1: la UI lo pide tras encender/apagar
+        let fresh be contains(query, "fresh")
+        give {"workspaces": when fresh then ws.summary() otherwise ws.summary_cached(20), "idle_hours": ws.idle_hours()}
 
     -- registrar una carpeta como workspace (y arrancarla)
     route "POST /api/workspaces" requires auth
@@ -73,6 +81,7 @@ serve on 8080
             let w be ws.ensure(text(b["path"]))
             ws.start_ws(w)
             ws.wait_ready(w, 8)
+            ws.summary()
             give {"ok": true, "workspace": w, "url": "/w/" + w["slug"] + "/"}
         recover err
             give fail(400, text(err))
@@ -84,7 +93,9 @@ serve on 8080
         when w == nothing
             give not_found("no such workspace")
         ws.start_ws(w)
-        give {"ok": ws.wait_ready(w, 8)}
+        let ok be ws.wait_ready(w, 8)
+        ws.summary()
+        give {"ok": ok}
 
     route "POST /api/workspaces/stop" requires auth
         expect body {slug: text}
@@ -92,13 +103,15 @@ serve on 8080
         let w be ws.get(text(b["slug"]))
         when w == nothing
             give not_found("no such workspace")
-        give {"ok": ws.stop_ws(w)}
+        give {"ok": ws.pause_ws(w)}
 
     route "POST /api/workspaces/remove" requires auth
         expect body {slug: text}
         let b be json of request
         try
-            give {"ok": true, "result": ws.remove(text(b["slug"]))}
+            let res be ws.remove(text(b["slug"]))
+            ws.summary()
+            give {"ok": true, "result": res}
         recover err
             give fail(400, text(err))
 
@@ -113,6 +126,7 @@ serve on 8080
             give fail(400, "policy must be auto | always | off")
         set w["policy"] to text(b["policy"])
         ws.put(w)
+        ws.summary()
         give {"ok": true}
 
     -- diálogo nativo del SO (PC); nothing → la UI usa el explorador propio

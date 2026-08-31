@@ -54,3 +54,10 @@
 .empty .try { cursor:pointer; color:var(--accent); }
 .empty .try:hover { text-decoration:underline; text-underline-offset:.18em; }
 @media (max-width:1400px) { .empty .grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+
+/* workspace apagado (events.js): un aviso que se vea, no una línea más del log */
+.msg.wsoff{border:1px solid var(--rubric);border-left-width:4px;background:var(--paper-2);padding:12px 16px;border-radius:var(--r);font:400 14.5px/1.55 var(--serif);color:var(--ink);opacity:1}
+.msg.wsoff a{font-family:var(--mono);font-size:13px;margin-left:.2em;color:var(--accent);text-decoration:none}
+.msg.wsoff a:hover{text-decoration:underline}
+.msg.wsoff .wsst{color:var(--ink-3);font-family:var(--mono);font-size:12px;margin-left:.6em}
+.msg.wson{border-left:4px solid var(--ok, #8fc28f);padding-left:12px}

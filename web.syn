@@ -89,7 +89,8 @@ task as_text(x)
 
 task boot(profile, mode, ask_fn, pname, model)
     let cfg be provider.config_for(pname, model)
-    let p be when contains(agents.PROFILES, profile) then profile otherwise "build"
+    -- worker es interno de delegate: por la API tampoco se elige como perfil de sesión
+    let p be when contains(agents.names(), profile) then profile otherwise "build"
     let opts be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_fn)
     set opts to loop.with_steps(opts, agents.steps_for(p))
     set opts to loop.with_inbox(opts, agents.parent_inbox, "")

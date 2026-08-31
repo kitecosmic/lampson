@@ -19,7 +19,7 @@
   --ink:#e9e8df; --ink-2:#9b9c90; --ink-3:#848678;
   --rule:#2b2c27; --rule-2:#3c3d36;
   --accent:#8fb4dc; --accent-bg:#1b2836;
-  --rubric:#d98670; --str:#a8bd84; --amber:#d9b26f;
+  --rubric:#d98670; --str:#a8bd84; --amber:#d9b26f; --ok:#8fc28f;
   --sel:#33465b; --term-blue:#4f86d1;
   --serif:"Plex Serif",Georgia,"Times New Roman",serif;
   --mono:"Plex Mono",ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
@@ -30,7 +30,7 @@
   --ink:#1a1b18; --ink-2:#56584f; --ink-3:#6a6c61;
   --rule:#e4e3da; --rule-2:#cfcec2;
   --accent:#21578c; --accent-bg:#e9eef4;
-  --rubric:#99372a; --str:#4a6b3f; --amber:#8a6a1f;
+  --rubric:#99372a; --str:#4a6b3f; --amber:#8a6a1f; --ok:#3d7a3d;
   --sel:#cfe0f0; --term-blue:#21578c;
 }
 

@@ -58,6 +58,10 @@
 .panel .li:hover { background:var(--paper-2); }
 .panel .li.sel { background:var(--paper-2); box-shadow:inset 2px 0 0 var(--accent); }
 .panel .li .dot { color:var(--ink-3); margin-top:1px; }
+.panel .li .dot.on { color:var(--ok); }
+.panel .li .dot.off { color:var(--rubric); }
+.panel .st.on { color:var(--ok); font-weight:600; }
+.panel .st.off { color:var(--rubric); font-weight:600; }
 .panel .li.on .dot { color:var(--accent); }
 .panel .li.bad .dot { color:var(--rubric); }
 .panel .li.new .nm { color:var(--accent); font-weight:400; }

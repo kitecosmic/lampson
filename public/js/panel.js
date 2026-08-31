@@ -71,6 +71,8 @@ const Panel = (() => {
     if (!cur || cur.layout !== 'browse') return;
     const spec = cur, q = query(), my = ++seq;
     const keep = pendingKey != null ? pendingKey : (rows[sel] && spec.browse.key ? spec.browse.key(rows[sel]) : null); pendingKey = null;
+    // mientras carga, decirlo (la lista de workspaces puede tardar si el hub tiene que sondear procesos)
+    if (!rows.length) { const it = box().querySelector('.bitems'); if (it) it.innerHTML = '<div class="bempty">cargando…</div>'; }
     let list; try { list = await spec.browse.load(q); } catch (e) { list = []; }
     if (cur !== spec || my !== seq) return;
     rows = list || [];

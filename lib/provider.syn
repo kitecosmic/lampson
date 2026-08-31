@@ -36,7 +36,9 @@ export let PRESETS be {
     "openrouter": {"wire": "openai",    "base_url": "https://openrouter.ai/api/v1",      "model": "deepseek/deepseek-chat"},
     "ollama":     {"wire": "openai",    "base_url": "http://127.0.0.1:11434/v1",         "model": "qwen2.5-coder"},
     "anthropic":  {"wire": "anthropic", "base_url": "https://api.anthropic.com/v1",      "model": "claude-sonnet-4-6"},
-    "minimax":    {"wire": "anthropic", "base_url": "https://api.minimax.io/anthropic/v1", "model": "MiniMax-M3"}
+    "minimax":    {"wire": "anthropic", "base_url": "https://api.minimax.io/anthropic/v1", "model": "MiniMax-M3"},
+    -- Z.ai (Zhipu): API compatible con OpenAI. Coding Plan: LAMPSON_BASE_URL=https://api.z.ai/api/coding/paas/v4
+    "glm":        {"wire": "openai",    "base_url": "https://api.z.ai/api/paas/v4",       "model": "glm-5.3"}
 }
 
 -- Keys: una por proveedor en .env como LAMPSON_API_KEY_<PROVIDER> (LAMPSON_API_KEY_DEEPSEEK, _ANTHROPIC…);
@@ -95,7 +97,7 @@ export task providers()
 -- Nombres de modelo: DeepSeek, OpenAI, Anthropic, Groq, Kimi, Grok y OpenRouter publican ids en minúsculas
 -- y la API rechaza otra capitalización ("deepseek-v4-pro" sí, "DeepSeek-V4-Pro" → 400 invalid_request_error,
 -- visto 2026-08-27 con un nombre tipeado en /setup). MiniMax ("MiniMax-M3") y Ollama (tags) se dejan tal cual.
-let LOWERCASE_MODELS be ["deepseek", "openai", "anthropic", "groq", "kimi", "grok", "openrouter"]
+let LOWERCASE_MODELS be ["deepseek", "openai", "anthropic", "groq", "kimi", "grok", "openrouter", "glm"]
 
 export task normalize_model(name, model)
     let m be trim(text(model))
@@ -255,6 +257,9 @@ export task supports_vision(cfg)
         give contains(m, "vision") or starts_with(m, "grok-4")
     when p == "kimi"
         give contains(m, "vision") or contains(m, "vl")
+    -- GLM: los modelos con visión llevan sufijo v (glm-4.5v, glm-4.6v)
+    when p == "glm"
+        give contains(m, "vision") or ends_with(m, "v") or contains(m, "v-")
     give false
 
 -- Modelo sin visión: la imagen se reemplaza por una nota que el modelo puede explicarle al usuario
