@@ -1,6 +1,6 @@
 /* panel: EL componente modal de la app (js/panel.js). Un cascarón (overlay, cabecera, ✕/Esc/clic afuera) y
    tres layouts: browse (buscador + lista + detalle), tabs (pestañas con formularios) y form (un formulario).
-   Cada vista (sesiones, lámparas, configuración, programar…) solo aporta su contenido; nada de esto se repite. */
+   Cada vista (sesiones, plugins, configuración, programar…) solo aporta su contenido; nada de esto se repite. */
 .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:50; }
 .panel { background:var(--paper); border:1px solid var(--rule-2); border-radius:var(--r); box-shadow:0 10px 30px rgba(0,0,0,.35); display:flex; flex-direction:column; min-height:0; max-height:92vh; }
 .panel.lg { width:min(1100px, 94vw); height:min(760px, 90vh); padding:14px 18px 12px; }
@@ -94,11 +94,11 @@
 .panel .dfoot .del.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
 .panel .dfoot .del.ask .no { cursor:pointer; }
 .panel .none { color:var(--ink-3); font:400 13px/1.6 var(--serif); max-width:520px; }
-/* switch encendido/apagado (lámparas) */
+/* switch encendido/apagado (plugins) */
 .panel label.sw { display:inline-flex; align-items:center; margin:0 0 0 auto; gap:6px; cursor:pointer; user-select:none; font:400 11.5px/1 var(--mono); text-transform:none; letter-spacing:0; color:var(--ink-3); }
 .panel label.sw input { flex:none; width:16px; height:16px; padding:0; margin:0; accent-color:var(--accent); }
 .panel label.sw.on { color:var(--accent); }
-/* formulario generado desde un JSON Schema (tools de una lámpara) */
+/* formulario generado desde un JSON Schema (tools de un plugin) */
 .panel .tool { border:1px solid var(--rule); border-radius:var(--r); padding:10px 12px; margin-bottom:10px; }
 .panel .tool .th { display:grid; grid-template-columns:auto 1fr auto; gap:8px 10px; align-items:baseline; }
 .panel .tool .th code { font-weight:600; color:var(--ink); }

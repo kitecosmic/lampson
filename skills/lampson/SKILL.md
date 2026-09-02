@@ -43,7 +43,7 @@ description: How this harness works — tools, workspace mount, permissions, age
 ## Scheduled tasks (`schedule` tool)
 - When the user says "every day at 9", "each 6 hours", "on Mondays", "periodically", "send me", propose
   `schedule(action=add, name, at, kind, …)`: `at` = `every 6h` | `daily 09:00` | `mon,wed 08:30` |
-  `weekdays 09:00`; one-time: `today 15:14` | `tomorrow 09:00` | `once 2026-08-29 15:14` | `in 2h` (it turns itself off after running) — the USER'S LOCAL time: write the hour as they say it, never convert to UTC (the tool result shows the next run with its offset). Tasks belong to the current workspace. `kind=lamp` (a lamp that is ON: lamp + tool + args), `kind=bash` (one
+  `weekdays 09:00`; one-time: `today 15:14` | `tomorrow 09:00` | `once 2026-08-29 15:14` | `in 2h` (it turns itself off after running) — the USER'S LOCAL time: write the hour as they say it, never convert to UTC (the tool result shows the next run with its offset). Tasks belong to the current workspace. `kind=plugin` (a plugin that is ON: plugin + tool + args), `kind=bash` (one
   command that finishes on its own), `kind=prompt` (an unattended agent run: write a self-contained prompt —
   what to do, how to verify, what to report — and pick `agent` build/review/plan/explore).
 - `permission` is the envelope of a `prompt` run with nobody watching: `strict` (dangerous → denied),
@@ -95,6 +95,10 @@ the terminal button and run `npm run dev`), then tell me the URL".
 ## Project memory (persistent notes)
 - `memory(write, name, content)` saves a Markdown note about THIS project in Lampson's `memory/<project>/`
   folder (outside the repo). The system prompt lists your notes; `memory(read, name)` loads one.
+- That folder is OUTSIDE the workspace and outside the reach of read/ls/grep/bash (they are confined to the
+  project): the `memory` tool is the only door. Never look for it with `ls`, never write notes with bash, and
+  never store notes inside the repo (no `.lampson/notes/`). If the tool says the folder is unreachable, tell
+  the user to run `lampson` again in the project (it repairs the link) — do not improvise.
 - Save what you would otherwise rediscover: how to run/test, env quirks, decisions, where things live,
   root causes of bugs. Update notes instead of contradicting them. The user can read and edit them.
 
@@ -124,15 +128,18 @@ the terminal button and run `npm run dev`), then tell me the URL".
   (`workspace/.agents/skills`, `workspace/.claude/skills`, and the global `~/.agents/skills` / `~/.claude/skills`
   mounted as `.lampson/skills-global` / `.lampson/skills-claude`). Frontmatter `name:` + `description:`.
   `skill(action=install, source=owner/repo, name=x, scope=global|project)` installs one (always asks the user).
-- **Lamps** = tool plugins you can create for this project without touching the harness:
-  `lamp(action=create, name, manifest, files={"lamp.syn": "…"})` writes `workspace/.lampson/lamps/<name>/`,
+- **Plugins** = tools you can create for this project without touching the harness (they were called
+  "lamps" until 0.2.6 — the user may still say "lámpara"; a `.lampson/lamps/` folder still works):
+  `plugin(action=create, name, manifest, files={"plugin.syn": "…"})` writes `workspace/.lampson/plugins/<name>/`,
   validates the manifest and runs `synsema check` on a syn entry (it does not run or enable anything —
-  like dsh's cordis_define). Then `lamp(action=enable, name)` — the user must approve (a lamp is off until
+  like dsh's cordis_define). Then `plugin(action=enable, name)` — the user must approve (a plugin is off until
   a human turns it on). Build one when a task needs a reusable project-specific tool. Manifest:
-  `{"name", "description", "kind": "syn"|"exec", "entry": "lamp.syn" (syn) | "command": "python lamp.py" (exec),
-  "caps": "file.read=workspace/*" (syn, optional extra ceiling over stdout,time,env=LAMP_*), "timeout": 60,
-  "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": bool}]}`. Lamp names: letters,
-  digits, `-` (no `_`). Each call runs the lamp as ONE child process: `synsema run --cap-set <ceiling> entry`
-  for `syn`, the command for `exec`. Inside, read `LAMP_TOOL` and `LAMP_ARGS` (JSON) from env
-  (`require env("LAMP_*")` in a .syn) and print the result to stdout. A syn lamp cannot use more than its
-  manifest's `caps`; ask only for what the tool needs. Once on, its tools are `lamp_<name>_<tool>`.
+  `{"name", "description", "kind": "syn"|"exec", "entry": "plugin.syn" (syn) | "command": "python plugin.py" (exec),
+  "caps": "file.read=workspace/*" (syn, optional extra ceiling over stdout,time,env=PLUGIN_*), "timeout": 60,
+  "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": bool}]}`. Plugin names: letters,
+  digits, `-` (no `_`). Each call runs the plugin as ONE child process: `synsema run --cap-set <ceiling> entry`
+  for `syn`, the command for `exec`. Inside, read `PLUGIN_TOOL` and `PLUGIN_ARGS` (JSON) from env
+  (`require env("PLUGIN_*")` in a .syn) and print the result to stdout. A syn plugin cannot use more than its
+  manifest's `caps`; ask only for what the tool needs. Once on, its tools are `plugin_<name>_<tool>`.
+  Not the same thing as a **lamp** from lamps.sh (a portable, ceiling-enforced capability unit for any MCP
+  agent): if the user wants one of those, it is `lamp add <ref>` + `lamp mcp` as an MCP server, not a plugin.

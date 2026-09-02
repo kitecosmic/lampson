@@ -22,8 +22,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
-require file.read("lamps")
-require file.read("lamps/*")
+require file.read("plugins")
+require file.read("plugins/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -49,7 +49,7 @@ use "./lib/diff.syn" as diff
 use "./lib/line.syn" as ed
 use "./lib/ui.syn" as ui
 use "./lib/mcp.syn" as mcp
-use "./lib/lamps.syn" as lamps
+use "./lib/plugins.syn" as plugins
 use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
 use "./lib/schedule.syn" as schedule
@@ -348,9 +348,9 @@ let COMMANDS be [
     ["/agents", "", "subagentes lanzados con delegate: estado, pasos y log de cada uno"],
     ["/todo", "", "lista de tareas del agente en esta sesión (la mantiene con la tool todo)"],
     ["/mcp", "[add <nombre> <comando…> [--project] | remove <nombre>]", "servers MCP: listar, conectar o quitar (global: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json)"],
-    ["/lamps", "[on <nombre> | off <nombre> | run <lámpara> <tool> [json] | remove <nombre>]", "lámparas (plugins de tools): listar, encender o apagar (global: lampson/lamps/ · proyecto: .lampson/lamps/)"],
+    ["/plugins", "[on <nombre> | off <nombre> | run <plugin> <tool> [json] | remove <nombre>]", "plugins (tools propias, en cualquier lenguaje): listar, encender o apagar (global: lampson/plugins/ · proyecto: .lampson/plugins/)"],
     ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
-    ["/schedule", "[add <json> | run <id> | on <id> | off <id> | remove <id> | log <id>]", "tareas programadas (cada 6h, todos los días a las 9…): lámpara, comando o corrida del agente; corren mientras lampson esté abierto (o con lampson --daemon start, sin nada abierto)"],
+    ["/schedule", "[add <json> | run <id> | on <id> | off <id> | remove <id> | log <id>]", "tareas programadas (cada 6h, todos los días a las 9…): plugin, comando o corrida del agente; corren mientras lampson esté abierto (o con lampson --daemon start, sin nada abierto)"],
     ["/approve", "<id> [yes|no]", "responder una aprobación pendiente de una tarea programada que corre en background (sin yes|no la pregunta con el menú ↑↓)"],
     ["/out", "[n]", "resultado completo de la última tool del turno (n = contar hacia atrás: /out 2 es la anteúltima)"],
     ["/verbose", "", "alternar: mostrar SIEMPRE el output completo de cada tool (queda guardado en config.json)"],
@@ -393,10 +393,10 @@ task complete_args(cmd, head, last)
         give []
     when cmd == "/memory"
         give apply((m) => m["name"], memo.list())
-    when cmd == "/lamps"
+    when cmd == "/plugins"
         when first
             give ["on", "off", "run", "remove"]
-        give apply((l) => l["name"], lamps.summary())
+        give apply((l) => l["name"], plugins.summary())
     when cmd == "/mcp"
         when first
             give ["add", "remove"]
@@ -565,21 +565,21 @@ task banner(ws, cfg, profile, mode, sid)
     print("  workspace   " + ws)
     print("  agente      " + profile + "        permisos  " + mode + "        modelo  " + cfg["model"])
     print("  sesión      " + sid + "        " + git.summary())
-    -- extensiones en una línea (detalle con /lamps, /mcp, /lsp): encendidas/total
-    let ls be lamps.summary()
-    let lamps_on be length(where(ls, (l) => l["enabled"]))
+    -- extensiones en una línea (detalle con /plugins, /mcp, /lsp): encendidas/total
+    let ls be plugins.summary()
+    let plugins_on be length(where(ls, (l) => l["enabled"]))
     let ms be mcp.summary()
     let mcp_on be length(where(ms, (m) => m["status"] == "ready"))
     let ss be lsp.summary()
     let ext be []
     when length(ls) > 0
-        set ext to append(ext, (when lamps_on > 0 then green("lamps " + text(lamps_on) + "/" + text(length(ls))) otherwise dim("lamps 0/" + text(length(ls)))))
+        set ext to append(ext, (when plugins_on > 0 then green("plugins " + text(plugins_on) + "/" + text(length(ls))) otherwise dim("plugins 0/" + text(length(ls)))))
     when length(ms) > 0
         set ext to append(ext, (when mcp_on == length(ms) then green("mcp " + text(mcp_on) + "/" + text(length(ms))) otherwise red("mcp " + text(mcp_on) + "/" + text(length(ms)))))
     when length(ss) > 0
         set ext to append(ext, dim("lsp " + text(length(ss))))
     when length(ext) > 0
-        print("  extras      " + join(ext, dim("  ·  ")) + dim("   (/lamps /mcp /lsp)"))
+        print("  extras      " + join(ext, dim("  ·  ")) + dim("   (/plugins /mcp /lsp)"))
     let upd be update.line()
     when upd != ""
         print("  " + yellow("⬆ " + upd) + dim("  (o /update acá)"))
@@ -815,8 +815,8 @@ agent Sched
     require file("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("memory")
     require file("memory/*")
     require file(".lampson")
@@ -902,13 +902,13 @@ let system_msg be system_for(profile)
 -- servers MCP (globales en .lampson/mcp.json, del proyecto en workspace/.lampson/mcp.json): arrancan antes
 -- de armar el catálogo de tools; hasta 8 s de espera a que estén listos
 let mcp_servers be mcp.start_all(8)
--- mcp / lsp / lámparas van resumidos en el banner ("extras"); acá solo se avisa lo que está ROTO
+-- mcp / lsp / plugins van resumidos en el banner ("extras"); acá solo se avisa lo que está ROTO
 each ms in mcp.summary()
     when ms["status"] != "ready"
         print("  " + red("○ mcp " + ms["name"] + " " + ms["status"]) + dim(when ms["error"] != nothing then " · " + text(ms["error"]) otherwise ""))
-each l in lamps.summary()
+each l in plugins.summary()
     when l["error"] != nothing
-        print("  " + red("○ lamp " + l["name"] + " rota") + dim(" · " + text(l["error"])))
+        print("  " + red("○ plugin " + l["name"] + " roto") + dim(" · " + text(l["error"])))
 let opts be opts_for(profile, lower(env("LAMPSON_PERMISSION", "ask")))
 
 -- marca de corrida (blackboard): session.save la estampa en meta.run; reanudar una sesión guardada por
@@ -1181,7 +1181,7 @@ while running
                 let sjson be trim(slice(srest, 3, length(srest)))
                 when sjson == ""
                     print("  uso: /schedule add {\"name\": \"…\", \"when\": \"daily 09:00\", \"action\": {\"type\": \"bash\", \"command\": \"npm test\"}, \"permission\": \"ask\"}")
-                    print("  " + dim("when: every 6h · daily 09:00 · mon,wed 08:30 · weekdays 09:00   action.type: lamp {lamp, tool, args} · bash {command} · prompt {prompt, agent}"))
+                    print("  " + dim("when: every 6h · daily 09:00 · mon,wed 08:30 · weekdays 09:00   action.type: plugin {plugin, tool, args} · bash {command} · prompt {prompt, agent}"))
                     print("  " + dim("o pedíselo al agente en lenguaje natural: «todos los días a las 9 revisá los tests y avisame»"))
                 otherwise
                     try
@@ -1249,13 +1249,17 @@ while running
                     print("  " + (when yes then green("✓ permitido ") otherwise red("✗ denegado ")) + atoks[0])
                 otherwise
                     print("  " + red("no hay una aprobación pendiente con id " + atoks[0]))
-        otherwise when input == "/lamps" or starts_with(input, "/lamps ")
-            let lrest be trim(slice(input, 6, length(input)))
+        otherwise when input == "/plugins" or starts_with(input, "/plugins ") or input == "/lamps" or starts_with(input, "/lamps ")
+            -- /lamps = el nombre viejo (hasta 2026-09): sigue andando, con aviso
+            let is_old be starts_with(input, "/lamps")
+            when is_old
+                print("  " + dim("/lamps ahora es /plugins (las lámparas de lampson pasaron a llamarse plugins)"))
+            let lrest be trim(slice(input, when is_old then 6 otherwise 8, length(input)))
             when starts_with(lrest, "run ")
-                -- /lamps run <lámpara> <tool> [json de args]  → la corre el usuario, sin el modelo
+                -- /plugins run <plugin> <tool> [json de args]  → la corre el usuario, sin el modelo
                 let rt be where(split(trim(slice(lrest, 4, length(lrest))), " "), (x) => x != "")
                 when length(rt) < 2
-                    print("  uso: /lamps run <lámpara> <tool> [{\"arg\": \"valor\"}]")
+                    print("  uso: /plugins run <plugin> <tool> [{\"arg\": \"valor\"}]")
                 otherwise
                     let rargs be {}
                     when length(rt) > 2
@@ -1264,30 +1268,31 @@ while running
                         recover err
                             print("  " + red("args: JSON inválido"))
                     try
-                        print(lamps.call(lamps.tool_name(rt[0], rt[1]), rargs))
+                        print(plugins.call(plugins.tool_name(rt[0], rt[1]), rargs))
                     recover err
                         print("  " + red(text(err)))
             otherwise when starts_with(lrest, "remove ")
                 try
-                    print("  " + lamps.remove(trim(slice(lrest, 7, length(lrest)))))
+                    print("  " + plugins.remove(trim(slice(lrest, 7, length(lrest)))))
                 recover err
                     print("  " + red(text(err)))
                 set opts to opts_for(profile, mode)
             otherwise when starts_with(lrest, "on ") or starts_with(lrest, "off ")
                 let lon be starts_with(lrest, "on ")
                 try
-                    print("  " + lamps.set_enabled(trim(slice(lrest, when lon then 3 otherwise 4, length(lrest))), lon))
+                    print("  " + plugins.set_enabled(trim(slice(lrest, when lon then 3 otherwise 4, length(lrest))), lon))
                 recover err
                     print("  " + red(text(err)))
                 set opts to opts_for(profile, mode)
             otherwise
-                let ls be lamps.summary()
+                let ls be plugins.summary()
                 when length(ls) == 0
-                    print("  sin lámparas. Una lámpara es una carpeta con lamp.json: " + dim("lampson\\lamps\\<nombre>\\ (global) · .lampson\\lamps\\<nombre>\\ del repo (proyecto)"))
-                    print("  " + dim("el agente también puede crearlas (write en .lampson/lamps/) y pedirte encenderlas"))
+                    print("  sin plugins. Un plugin es una carpeta con plugin.json: " + dim("lampson\\plugins\\<nombre>\\ (global) · .lampson\\plugins\\<nombre>\\ del repo (proyecto)"))
+                    print("  " + dim("el agente también puede crearlos (write en .lampson/plugins/) y pedirte encenderlos"))
                 each l in ls
-                    print("  " + (when l["enabled"] then green("● ") otherwise dim("○ ")) + pad(l["name"], 14) + dim(pad(l["scope"], 8) + pad(l["kind"], 5)) + (when l["error"] != nothing then red("rota: " + text(l["error"])) otherwise dim(text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["kind"] == "syn" then "  techo: " + l["caps"] otherwise "  $ " + l["command"]))))
-                print("  " + dim("encender/apagar: /lamps on <nombre> · /lamps off <nombre> · correr una vos: /lamps run <lámpara> <tool> [json]"))
+                    print("  " + (when l["enabled"] then green("● ") otherwise dim("○ ")) + pad(l["name"], 14) + dim(pad(l["scope"], 8) + pad(l["kind"], 5)) + (when l["error"] != nothing then red("roto: " + text(l["error"])) otherwise dim(text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["kind"] == "syn" then "  techo: " + l["caps"] otherwise "  $ " + l["command"]))) + (when l["legacy"] then yellow("  carpeta vieja .lampson/lamps/ → renombrala a .lampson/plugins/") otherwise ""))
+                print("  " + dim("encender/apagar: /plugins on <nombre> · /plugins off <nombre> · correr uno vos: /plugins run <plugin> <tool> [json]"))
+                print("  " + dim("¿herramientas con techo real, versionadas y para cualquier agente? eso son las lámparas de lamps.sh: lamp add <ref> y entran por /mcp add lamps lamp mcp"))
         otherwise when input == "/mcp" or starts_with(input, "/mcp ")
             let mrest be trim(slice(input, 4, length(input)))
             when starts_with(mrest, "add ")

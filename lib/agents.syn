@@ -32,7 +32,7 @@ use "./loop.syn" as loop
 use "./provider.syn" as provider
 use "./prompt.syn" as prompt
 use "./mcp.syn" as mcp
-use "./lamps.syn" as lamps
+use "./plugins.syn" as plugins
 
 export let DIR be ".lampson/agents"
 let MAX_TASKS be 6
@@ -40,7 +40,7 @@ let PARALLEL be 4
 
 export let PROFILES be {
     "build": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "bash", "process", "memory", "todo", "skill", "mcp", "lamp", "schedule", "delegate"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "bash", "process", "memory", "todo", "skill", "mcp", "plugin", "schedule", "delegate"],
         "steps": 40,
         "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context; several independent questions can go in one delegate call (they run in parallel)."
     },
@@ -105,8 +105,8 @@ export task registry_for(name)
         set reg["delegate"] to delegate
     each m in mcp.names(mcp_readonly_only(name))
         set reg[m] to "mcp"
-    each m in lamps.names(mcp_readonly_only(name))
-        set reg[m] to "lamp"
+    each m in plugins.names(mcp_readonly_only(name))
+        set reg[m] to "plugin"
     give reg
 
 export task catalog_for(name)
@@ -119,7 +119,7 @@ export task catalog_for(name)
     let cat be tools.catalog_subset(p["tools"])
     when contains(p["tools"], "delegate")
         set cat to append(cat, DELEGATE_SPEC)
-    give cat + mcp.catalog(mcp_readonly_only(name)) + lamps.catalog(mcp_readonly_only(name))
+    give cat + mcp.catalog(mcp_readonly_only(name)) + plugins.catalog(mcp_readonly_only(name))
 
 -- Info de entorno para el system prompt (compartida por chat.syn / web.syn / delegate)
 export task env_info(cfg)
@@ -128,7 +128,7 @@ export task env_info(cfg)
     require time
     let sc be tools.shell_config()
     -- desde dónde habla el usuario (blackboard "lampson:ui", lo comparte el entry): el modelo NO debe decirle
-    -- "/lamps" a alguien que está en la web (2026-08-28)
+    -- "/plugins" a alguien que está en la web (2026-08-28)
     observe "lampson:ui" as ui
     give {
         "ui": when ui == nothing then "terminal" otherwise text(ui["kind"]),

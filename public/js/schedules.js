@@ -2,10 +2,10 @@
 // (tareas a la izquierda; a la derecha: qué hace, corridas, log, traza en vivo mientras corre, ▶ / ⏻ / quitar;
 // «+ programar» es una fila más cuyo detalle es el formulario). Corren en cualquier lampson abierto (web o
 // terminal, tick cada 30 s) o con `lampson --daemon start` con todo cerrado.
-let schedData = [], schedLamps = [], schedTick = 30, schedMountOk = true, schedLiveTimer = null;
+let schedData = [], schedPlugins = [], schedTick = 30, schedMountOk = true, schedLiveTimer = null;
 async function fetchSched() {
   let r; try { r = await (await fetch(BASE + '/api/schedules')).json(); } catch (e) { return schedData; }
-  schedData = r.tasks || []; schedLamps = r.lamps || []; schedTick = r.tick || 30; schedMountOk = r.mount_ok !== false;
+  schedData = r.tasks || []; schedPlugins = r.plugins || []; schedTick = r.tick || 30; schedMountOk = r.mount_ok !== false;
   return schedData;
 }
 async function loadSched() {
@@ -28,7 +28,7 @@ async function loadSched() {
     box.appendChild(d);
   }
   const addRow = document.createElement('div'); addRow.className = 'p'; addRow.innerHTML = `<span class="nm" style="color:var(--accent)">+ programar una tarea…</span>`;
-  addRow.title = 'una lámpara, un comando o el agente con instrucciones · también se lo podés pedir al agente en el chat';
+  addRow.title = 'un plugin, un comando o el agente con instrucciones · también se lo podés pedir al agente en el chat';
   addRow.onclick = () => openSched('__new');
   box.appendChild(addRow);
   if (Panel.is('schedules')) Panel.refresh();
@@ -42,7 +42,7 @@ function openSched(selectId) {
     browse: {
       placeholder: 'buscar tarea…', listWidth: '300px', key: t => t.id,
       load: async (q) => { const all = await fetchSched(); const list = all.filter(t => !q || (t.name + ' ' + t.plan + ' ' + t.action_text).toLowerCase().includes(q.toLowerCase())); return q ? list : [...list, SCHED_NEW]; },
-      render: (t) => t === SCHED_NEW ? `<span class="dot">+</span><div><div class="nm" style="color:var(--accent);font-weight:400">programar una tarea…</div><div class="meta">lámpara, comando o el agente</div></div>` : `<span class="dot">${schedStatusDot(t)}</span><div><div class="nm">${esc(t.name)}</div><div class="meta">${esc(t.plan)} · ${t.running ? 'corriendo' : (t.enabled ? 'próxima ' + esc(fmtWhen(t.next_run)) : 'apagada')}</div></div>`,
+      render: (t) => t === SCHED_NEW ? `<span class="dot">+</span><div><div class="nm" style="color:var(--accent);font-weight:400">programar una tarea…</div><div class="meta">plugin, comando o el agente</div></div>` : `<span class="dot">${schedStatusDot(t)}</span><div><div class="nm">${esc(t.name)}</div><div class="meta">${esc(t.plan)} · ${t.running ? 'corriendo' : (t.enabled ? 'próxima ' + esc(fmtWhen(t.next_run)) : 'apagada')}</div></div>`,
       count: (rows) => { const n = rows.filter(r => r !== SCHED_NEW).length; return `${n} tarea${n === 1 ? '' : 's'}`; },
       emptyHtml: 'nada coincide',
       detail: async (t) => {
@@ -78,12 +78,12 @@ function openSched(selectId) {
   });
 }
 function schedForm() {
-  const lampOpts = schedLamps.filter(l => l.enabled).flatMap(l => (l.tools || []).map(tl => `<option value="${esc(l.name + '/' + tl)}">${esc(l.name)} · ${esc(tl)}</option>`)).join('') || '<option value="">ninguna lámpara encendida</option>';
+  const pluginOpts = schedPlugins.filter(l => l.enabled).flatMap(l => (l.tools || []).map(tl => `<option value="${esc(l.name + '/' + tl)}">${esc(l.name)} · ${esc(tl)}</option>`)).join('') || '<option value="">ningún plugin encendido</option>';
   return `<div class="dhead"><span class="nm serif">Programar una tarea</span></div><div class="dform">
     <p class="lead">Corre sola, a la hora que digas, mientras lampson esté abierto (esta web o la terminal); con todo cerrado, <code>lampson --daemon start</code>. También podés pedírsela al agente en el chat: <i>«todos los días a las 9 corré los tests y avisame»</i>.</p>
     <label>nombre <input name="name" spellcheck="false" autocomplete="off" placeholder="tests nocturnos"></label>
     <label>cuándo <input name="when" spellcheck="false" autocomplete="off" placeholder="daily 09:00 · every 6h · mon,wed 08:30 · today 15:14 · once 2026-09-01 10:00 · in 2h"></label>
-    <label>qué corre <select name="kind"><option value="prompt">el agente, con estas instrucciones</option><option value="bash">un comando de shell</option><option value="lamp">una tool de una lámpara encendida</option></select></label>
+    <label>qué corre <select name="kind"><option value="prompt">el agente, con estas instrucciones</option><option value="bash">un comando de shell</option><option value="plugin">una tool de un plugin encendido</option></select></label>
     <div data-kind="prompt">
       <label class="col">instrucciones <textarea name="prompt" rows="4" spellcheck="false" placeholder="Corré la suite de tests. Si algo falla, buscá la causa y proponé el fix en el informe (no lo apliques). Terminá con un resumen corto."></textarea></label>
       <label>perfil <select name="agent"><option value="build">build — puede editar y correr comandos</option><option value="review">review — corre tests, no edita</option><option value="plan">plan — solo lee y propone</option><option value="explore">explore — solo busca</option></select></label>
@@ -91,8 +91,8 @@ function schedForm() {
       <p class="lead">Sobre de permisos de una corrida sin nadie mirando. En «preguntar», la aprobación aparece acá y, con URL pública + webhook (⚙), como link en tu canal; sin respuesta en 2 h se deniega. Lo destructivo del sistema se bloquea siempre.</p>
     </div>
     <div data-kind="bash" style="display:none"><label>comando <input name="command" spellcheck="false" autocomplete="off" placeholder="npm test"></label></div>
-    <div data-kind="lamp" style="display:none">
-      <label>lámpara · tool <select name="lamptool">${lampOpts}</select></label>
+    <div data-kind="plugin" style="display:none">
+      <label>plugin · tool <select name="plugintool">${pluginOpts}</select></label>
       <label>args (JSON) <input name="args" spellcheck="false" autocomplete="off" placeholder='{"who": "cron"}'></label>
     </div>
     <label>avisar a <input name="notify" spellcheck="false" autocomplete="off" placeholder="opcional: URL de webhook que recibe el resultado (JSON)"></label>
@@ -106,7 +106,7 @@ function schedFormWire(box, err) {
     const k = f('kind').value; let action;
     if (k === 'prompt') action = { type: 'prompt', prompt: f('prompt').value.trim(), agent: f('agent').value };
     else if (k === 'bash') action = { type: 'bash', command: f('command').value.trim() };
-    else { const v = f('lamptool').value; if (!v) { err('encendé una lámpara primero'); return; } const [lamp, tool] = v.split('/'); let args = {}; if (f('args').value.trim()) { try { args = JSON.parse(f('args').value); } catch (e) { err('args: JSON inválido'); return; } } action = { type: 'lamp', lamp, tool, args }; }
+    else { const v = f('plugintool').value; if (!v) { err('encendé un plugin primero'); return; } const [plugin, tool] = v.split('/'); let args = {}; if (f('args').value.trim()) { try { args = JSON.parse(f('args').value); } catch (e) { err('args: JSON inválido'); return; } } action = { type: 'plugin', plugin, tool, args }; }
     const body = { name: f('name').value.trim(), when: f('when').value.trim(), action, permission: f('permission').value, notify: f('notify').value.trim() };
     if (!body.when) { err('falta cuándo'); return; }
     err('programando…');

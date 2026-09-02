@@ -1,0 +1,19 @@
+-- plugins/example-hello/plugin.syn — el plugin de ejemplo
+--
+-- Lampson lo corre así por cada llamada: synsema run --cap-set stdout,time,env=PLUGIN_*,env=LAMP_* plugin.syn
+-- El techo (--cap-set) sale del manifiesto (plugin.json → "caps") que el humano aprobó al encenderlo;
+-- pedir más acá (p. ej. `require net`) falla con "above the host ceiling".
+-- Entrada por env: PLUGIN_TOOL (qué tool), PLUGIN_ARGS (sus args en JSON), PLUGIN_DIR, PLUGIN_WORKSPACE.
+-- Salida: lo que imprimas por stdout vuelve al modelo como resultado de la tool.
+intent: "example plugin for lampson: greet"
+
+require env("PLUGIN_*")
+
+let tool be env("PLUGIN_TOOL", "")
+let args be json_decode(env("PLUGIN_ARGS", "{}"))
+
+when tool == "greet"
+    let who be when contains(args, "who") then text(args["who"]) otherwise "world"
+    print("hello, " + who + "! (from the example-hello plugin, running under a capability ceiling)")
+otherwise
+    print("ERROR: unknown tool '" + tool + "'")

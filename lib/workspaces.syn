@@ -3,7 +3,7 @@
 -- Por qué así (ver ../SPEC-WORKSPACES.md): en Synsema las capabilities de archivo Y los `use "./lib/…"` se resuelven
 -- relativos al CWD del proceso, y `proxy to` es estático (se evalúa al arrancar y anexa el path entero). Entonces:
 --   * cada workspace tiene su propio directorio  .lampson/ws/<slug>/  que ES el cwd de su proceso:
---       workspace → junction al proyecto        lib public skills lamps memory → junctions a la instalación
+--       workspace → junction al proyecto        lib public skills plugins memory → junctions a la instalación
 --       web.syn chat.syn → copias (refrescadas al arrancar)        .lampson/ → estado propio (sesiones, tareas…)
 --       .lampson/global → junction a <home>/.lampson (config.json con keys, mcp/lsp globales, skills-*)
 --     con eso `file("workspace/*")`, `use "./lib/x.syn"` y todo el código de siempre funcionan SIN cambios.
@@ -26,7 +26,7 @@ export let HUB_FILE be "hub.syn"
 export let HUB_TEMPLATE be "hub.tpl.syn"
 -- rango alto para no chocar con lo que usan las apps (3000, 5173, 8000, 8080-8090…): solo el hub queda en 8080
 let FIRST_PORT be 47101
-let LINKS be ["lib", "public", "skills", "lamps", "memory"]
+let LINKS be ["lib", "public", "skills", "plugins", "memory"]
 let COPIES be ["web.syn", "chat.syn"]
 
 task is_win()
@@ -182,6 +182,31 @@ task unlink(where_)
 task is_link_dir(p)
     give file_exists(p)
 
+-- crea una carpeta de la instalación (ruta absoluta: fuera del alcance de write_file, así que por exec)
+task ensure_dir(p)
+    when is_win()
+        -- argumentos separados, como mklink: una línea entera con comillas dentro de `cmd /c` se rompe al citarla.
+        -- mkdir de cmd crea los intermedios y falla (sin daño) si ya existe.
+        run("cmd", ["/c", "mkdir", replace_text(p, "/", "\\")], 10)
+    otherwise
+        run("mkdir", ["-p", p], 10)
+    give true
+
+-- un link a la instalación (lib, public, skills, plugins, memory): se crea si falta y se REHACE si quedó colgante.
+-- file_exists da false tanto si no hay nada como si el link apunta a un destino que no existe (npm no trae
+-- memory/ ni plugins/; un `ln -s` a una carpeta inexistente nace roto y después memory(write) muere con
+-- "No such file or directory" — visto en un VPS el 2026-09-02). Por eso: destino primero, link después, y si
+-- sigue sin resolverse es un error del workspace, no un silencio.
+export task ensure_link(where_, target)
+    when file_exists(where_)
+        give true
+    unlink(where_)
+    ensure_dir(target)
+    link(where_, target)
+    when not file_exists(where_)
+        raise("could not link " + where_ + " → " + target + " (the workspace needs it: memory, plugins and the code live there)")
+    give true
+
 -- crea/repara .lampson/ws/<slug>: junctions al proyecto y a la instalación, copias de los entries
 export task prepare(w)
     require exec
@@ -209,16 +234,14 @@ export task prepare(w)
         when not link(ws_link, w["path"])
             raise("could not link " + ws_link + " → " + w["path"])
     each n in LINKS
-        when not file_exists(d + "/" + n)
-            link(d + "/" + n, h + sep + n)
-    when not file_exists(d + "/.lampson/global")
-        link(d + "/.lampson/global", h + sep + ".lampson")
+        ensure_link(d + "/" + n, h + sep + n)
+    ensure_link(d + "/.lampson/global", h + sep + ".lampson")
     each f in COPIES
         write_file(d + "/" + f, read_file(f))
     give d
 
 -- estado guardado ANTES de los workspaces (en <home>/.lampson, separado por slug en cada registro): sesiones y trazas
--- del proyecto, sus tareas programadas y el encendido de lámparas se mueven a <ws>/.lampson la primera vez
+-- del proyecto, sus tareas programadas y el encendido de plugins se mueven a <ws>/.lampson la primera vez
 task migrate(w, d)
     let slug be w["slug"]
     let moved be 0
@@ -248,8 +271,10 @@ task migrate(w, d)
     recover err
         set moved to moved
     try
-        when file_exists(".lampson/lamps.json")
-            write_file(d + "/.lampson/lamps.json", read_file(".lampson/lamps.json"))
+        when file_exists(".lampson/plugins.json")
+            write_file(d + "/.lampson/plugins.json", read_file(".lampson/plugins.json"))
+        otherwise when file_exists(".lampson/lamps.json")
+            write_file(d + "/.lampson/plugins.json", read_file(".lampson/lamps.json"))
     recover err
         set moved to moved
     give moved

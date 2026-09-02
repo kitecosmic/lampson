@@ -60,15 +60,15 @@ It can only touch the folder you opened it in — not your home directory, not t
 a setting: it's how the language it's written in works. Reading and editing just happen; deleting, installing,
 `git reset`, `sudo` stop and wait for your *yes*; truly destructive commands are refused in every mode.
 
-## Lamps
+## Plugins
 
-A **lamp** is a small folder that gives Lampson a new tool: query your database, call your company's API,
+A **plugin** is a small folder that gives Lampson a new tool: query your database, call your company's API,
 deploy, send a message. Any language. **Off by default** — you turn each one on, and only then can the agent
 use it.
 
 ```
-~/lampson/lamps/postgres/
-  lamp.json          ← what it's called, what it does, which tools it offers
+~/lampson/plugins/postgres/
+  plugin.json        ← what it's called, what it does, which tools it offers
   query.py           ← the code
 ```
 
@@ -79,12 +79,17 @@ use it.
             "parameters": {"type": "object", "properties": {"sql": {"type": "string"}}}, "readonly": true}]}
 ```
 
-The script gets the call in environment variables (`LAMP_TOOL`, `LAMP_ARGS` as JSON) and prints the result.
-Turn it on with `/lamps on postgres` or the **lámparas** pill in the web UI. Keep lamps global (every project)
-or inside a project (`.lampson/lamps/` — commit it and your team has it). The agent can *write* a lamp for you;
+The script gets the call in environment variables (`PLUGIN_TOOL`, `PLUGIN_ARGS` as JSON) and prints the result.
+Turn it on with `/plugins on postgres` or the **plugins** pill in the web UI. Keep plugins global (every project)
+or inside a project (`.lampson/plugins/` — commit it and your team has it). The agent can *write* a plugin for you;
 turning it on is always yours.
 
-→ [How lamps work](https://lampson.org/docs/lamps) · the example lamp ships in `lamps/example-hello/`.
+→ [How plugins work](https://lampson.org/docs/plugins) · the example ships in `plugins/example-hello/`.
+
+Plugins are yours and local: any language, no sandbox unless you write them in Synsema. For tools with an
+**enforced capability ceiling**, versioned and shared with any agent (Claude Code, Cursor, Lampson…), use
+[lamps.sh](https://lamps.sh): `lamp add <ref>`, then `lamp mcp` as an MCP server in Lampson. (Until 0.2.6
+plugins were called *lamps*; old `.lampson/lamps/` folders and `LAMP_*` variables still work for now.)
 
 ## Also in the box
 
@@ -94,7 +99,7 @@ memory it reads back next session · sessions with a readable trace of every ste
 
 ## Learn more
 
-- **[lampson.org/docs](https://lampson.org/docs)** — quickstart, permissions, providers, lamps, schedules…
+- **[lampson.org/docs](https://lampson.org/docs)** — quickstart, permissions, providers, plugins, schedules…
 - **[guide.md](guide.md)** — the long version: how it runs, architecture, every knob, runtime notes.
 
 ## License

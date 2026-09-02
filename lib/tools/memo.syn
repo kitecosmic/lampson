@@ -7,9 +7,22 @@
 -- El system prompt lleva SOLO el índice (nombre + primera línea de cada nota); el contenido entra al
 -- contexto cuando el agente llama `memory(read)`. Son archivos: el humano los lee/edita a mano y la
 -- UI web los muestra.
+--
+-- Cómo llega el proceso hasta ahí: el cwd del workspace es .lampson/ws/<slug>/, y `memory` es un link
+-- (junction/symlink) a <home>/memory. La capability file("memory/*") es léxica sobre ese link, así que ESTA
+-- tool es la única puerta: read/ls/grep/bash están confinadas a workspace/ y no ven la carpeta. Si el link
+-- está roto (destino inexistente), write_file falla con "No such file or directory": `available()` lo
+-- detecta, el prompt lo dice, y los errores de escritura explican qué hacer (correr `lampson` de nuevo
+-- repara los links — workspaces.ensure_link) en vez de dejar que el modelo improvise notas con bash.
 use "./common.syn" as c
 
 export let ROOT be "memory"
+let HOW_TO_FIX be "The memory folder is a link to Lampson's install (outside the project) and it is not reachable from this workspace — probably a broken link. Ask the user to run `lampson` again in this project (it repairs the links). Do NOT write notes with bash or inside the repo instead."
+
+-- ¿se puede llegar a la carpeta de memoria? (false = link roto o inexistente)
+export task available()
+    require file.read("memory")
+    give file_exists(ROOT)
 
 task valid_name(name)
     when name == nothing or name == ""
@@ -75,8 +88,15 @@ export task note_write(name, content)
     require file("memory/*")
     when not valid_name(name)
         raise("invalid note name '" + text(name) + "' (letters, digits, - or _)")
-    write_file(path(name), content)
+    save(name, content)
     give "saved memory/" + slug() + "/" + name + ".md (" + text(length(content)) + " chars)"
+
+-- escribe una nota; un fallo del sistema de archivos se explica (link roto) en vez de salir crudo
+task save(name, content)
+    try
+        write_file(path(name), content)
+    recover err
+        raise("cannot write " + path(name) + ": " + text(err) + ". " + HOW_TO_FIX)
 
 export task note_append(name, content)
     require env("LAMPSON_*")
@@ -90,7 +110,7 @@ export task note_append(name, content)
     recover err
         set prev to ""
     let joined be when prev == "" then content otherwise prev + "\n\n" + content
-    write_file(path(name), joined)
+    save(name, joined)
     give "appended to " + name + ".md (" + text(length(joined)) + " chars total)"
 
 export task note_clear(name)
@@ -99,7 +119,7 @@ export task note_clear(name)
     require file("memory/*")
     when not valid_name(name)
         raise("invalid note name")
-    write_file(path(name), "")
+    save(name, "")
     give "cleared " + name + ".md (the file stays empty; the user can delete it)"
 
 -- sección del system prompt
@@ -107,8 +127,10 @@ export task prompt_section()
     require env("LAMPSON_*")
     require file.read("memory")
     require file.read("memory/*")
+    let head be "\n\n# Project memory (your own notes about THIS project, in memory/" + slug() + "/ — a folder OUTSIDE the project, reachable ONLY through the memory tool: read/ls/grep/bash are confined to the workspace and will not find it. Read with memory(read), keep notes current with memory(write|append).)"
+    when not available()
+        give head + "\n(UNAVAILABLE right now: the memory folder is not reachable from this workspace — a broken link in Lampson's install. Do not look for it with ls/bash and do not write notes inside the repo; tell the user to run `lampson` again in this project to repair it.)"
     let items be list()
-    let head be "\n\n# Project memory (your own notes about THIS project, in memory/" + slug() + "/ — read with memory(read), keep them current with memory(write|append))"
     when length(items) == 0
         give head + "\n(empty — when you discover something non-obvious about this project: how to run/test it, gotchas, decisions, where things live — save it with memory(write). Keep notes short and factual.)"
     let lines be [head]
@@ -139,7 +161,7 @@ export task tool(action, name, content)
 
 export let SPEC be {
     "name": "memory",
-    "description": "Your persistent notes about THIS project, kept across sessions (Markdown files in Lampson's memory folder, never inside the repo). Use `write` to save non-obvious facts you discovered and will need again: how to run/build/test, environment quirks, architecture decisions, where things live, bugs and their causes, what the user prefers. `append` adds to an existing note, `read` loads one, `list` shows them, `delete` clears one. The system prompt shows the index of notes — read the relevant ones before repeating an investigation. Keep notes short, factual and current: update a note instead of writing a contradictory one.",
+    "description": "Your persistent notes about THIS project, kept across sessions (Markdown files in Lampson's memory folder: OUTSIDE the project and outside the reach of your other tools — read/ls/grep/bash are confined to the workspace, so this tool is the ONLY way to those notes; never keep notes with bash or inside the repo). Use `write` to save non-obvious facts you discovered and will need again: how to run/build/test, environment quirks, architecture decisions, where things live, bugs and their causes, what the user prefers. `append` adds to an existing note, `read` loads one, `list` shows them, `delete` clears one. The system prompt shows the index of notes — read the relevant ones before repeating an investigation. Keep notes short, factual and current: update a note instead of writing a contradictory one.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "read", "write", "append", "delete"]},
         "name": {"type": "string", "description": "Note id: letters, digits, - or _ (e.g. how-to-run, db-schema, gotchas)"},

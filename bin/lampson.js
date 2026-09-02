@@ -2,7 +2,7 @@
 // bin/lampson.js — entry point of the npm package (`npm i -g lampson`).
 //
 // The code ships inside node_modules, but Lampson keeps STATE next to its code: the mounted `workspace`
-// junction, `.lampson/` (config, sessions, traces, spill), `memory/` and global `lamps/`. Living inside
+// junction, `.lampson/` (config, sessions, traces, spill), `memory/` and global `plugins/`. Living inside
 // node_modules would lose all of that on every `npm i -g lampson@latest`. So this launcher keeps a stable
 // home (LAMPSON_HOME, default ~/lampson), syncs the package's code files into it when the version changes,
 // and runs the same launcher the git install uses (lampson.ps1 / lampson.sh). Everything else — synsema on
@@ -45,6 +45,9 @@ function sync() {
   try { installed = fs.readFileSync(marker, 'utf8').trim(); } catch (e) { /* first run */ }
   if (installed === pkg.version && fs.existsSync(path.join(home, 'chat.syn'))) return 'ok';
   fs.mkdirSync(home, { recursive: true });
+  // the folders every workspace links to (lib/workspaces.syn LINKS): if `memory/` does not exist when the
+  // link is made, the link is born dangling and memory(write) fails with "No such file or directory"
+  for (const d of ['memory', 'plugins']) fs.mkdirSync(path.join(home, d), { recursive: true });
   for (const item of CODE) {
     const src = path.join(pkgDir, item);
     if (!fs.existsSync(src)) continue;
@@ -52,11 +55,14 @@ function sync() {
     if (fs.statSync(src).isDirectory()) { fs.rmSync(dst, { recursive: true, force: true }); copyDir(src, dst); }
     else copyFile(src, dst);
   }
-  // global lamps are user content: seed the example once, never overwrite what the user put there
-  const lampsSrc = path.join(pkgDir, 'lamps'), lampsDst = path.join(home, 'lamps');
-  if (fs.existsSync(lampsSrc)) {
-    for (const e of fs.readdirSync(lampsSrc, { withFileTypes: true })) {
-      if (e.isDirectory() && !fs.existsSync(path.join(lampsDst, e.name))) copyDir(path.join(lampsSrc, e.name), path.join(lampsDst, e.name));
+  // global plugins are user content: seed the example once, never overwrite what the user put there.
+  // Until 2026-08 the folder was `lamps/` (they were "lamps"): an existing one is renamed once, same content.
+  const legacyDst = path.join(home, 'lamps'), pluginsDst = path.join(home, 'plugins');
+  if (fs.existsSync(legacyDst) && !fs.existsSync(pluginsDst)) { fs.renameSync(legacyDst, pluginsDst); console.log('lampson: renamed ' + legacyDst + ' -> ' + pluginsDst + ' (lamps are now called plugins)'); }
+  const pluginsSrc = path.join(pkgDir, 'plugins');
+  if (fs.existsSync(pluginsSrc)) {
+    for (const e of fs.readdirSync(pluginsSrc, { withFileTypes: true })) {
+      if (e.isDirectory() && !fs.existsSync(path.join(pluginsDst, e.name))) copyDir(path.join(pluginsSrc, e.name), path.join(pluginsDst, e.name));
     }
   }
   fs.writeFileSync(marker, pkg.version + '\n');
@@ -68,7 +74,7 @@ if (args.some(a => /^--?(version|v)$/i.test(a))) { console.log('lampson ' + pkg.
 
 let state;
 try { state = sync(); } catch (e) { console.error('lampson: could not prepare ' + home + ': ' + e.message); process.exit(1); }
-if (state === 'installed') console.log('lampson ' + pkg.version + ' → ' + home + ' (your config, sessions and lamps live there)');
+if (state === 'installed') console.log('lampson ' + pkg.version + ' → ' + home + ' (your config, sessions and plugins live there)');
 if (state === 'updated') console.log('lampson updated to ' + pkg.version + ' in ' + home);
 
 // --update under npm: the code comes from the registry, not from git

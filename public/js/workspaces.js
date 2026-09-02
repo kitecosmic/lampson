@@ -50,7 +50,7 @@ function openWorkspaces(selectSlug) {
 }
 function wsNewForm() {
   return `<div class="dhead"><span class="nm serif">Nuevo workspace</span></div><div class="dform">
-    <p class="lead">Un workspace es una carpeta de tu disco: el agente solo puede tocar lo que hay adentro. Corre en su propio proceso, con sus sesiones, tareas programadas, MCP y lámparas.</p>
+    <p class="lead">Un workspace es una carpeta de tu disco: el agente solo puede tocar lo que hay adentro. Corre en su propio proceso, con sus sesiones, tareas programadas, MCP y plugins.</p>
     <div class="pickrow"><button class="primary" data-pick>Elegir carpeta…</button><span class="ds">se abre el diálogo de carpetas de tu sistema · <a href="#" data-browse>o explorá desde acá</a></span></div>
     <div class="chosen" data-chosen style="display:none"><span class="lk">carpeta</span><code data-chosen-path></code><span class="del" data-clear title="elegir otra">✕</span></div>
     <div data-browser class="wsbrowser" style="display:none">

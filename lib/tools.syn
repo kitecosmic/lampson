@@ -25,7 +25,7 @@ use "./tools/memo.syn" as t_memo
 use "./tools/todo.syn" as t_todo
 use "./skills.syn" as skills
 use "./mcp.syn" as mcp
-use "./lamps.syn" as lamps
+use "./plugins.syn" as plugins
 use "./lsp.syn" as lsp
 use "./schedule.syn" as schedule
 
@@ -86,40 +86,40 @@ let MCP_SPEC be {
     }, "required": ["action"]}
 }
 
--- la task de la tool lamp (lamps.syn vive un nivel arriba de tools/, como mcp). enable/disable piden humano
+-- la task de la tool plugin (plugins.syn vive un nivel arriba de tools/, como mcp). enable/disable piden humano
 -- SIEMPRE (permission.syn): encender = autorizar código a correr con las capacidades de su manifiesto.
-task lamp_tool(action, name, manifest, files)
+task plugin_tool(action, name, manifest, files)
     require exec
     require time
     require env("LAMPSON_*")
     require file(".lampson")
     require file(".lampson/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("workspace")
     require file("workspace/*")
     when action == "create"
-        give lamps.create(name, manifest, files)
+        give plugins.create(name, manifest, files)
     when action == "enable"
-        give lamps.set_enabled(name, true)
+        give plugins.set_enabled(name, true)
     when action == "disable"
-        give lamps.set_enabled(name, false)
-    let sm be lamps.summary()
+        give plugins.set_enabled(name, false)
+    let sm be plugins.summary()
     when length(sm) == 0
-        give "no lamps found. A lamp is a folder with a lamp.json manifest: " + lamps.GLOBAL_DIR + "/<name>/ (global) or " + lamps.PROJECT_DIR + "/<name>/ (this project; you can create it with write). See the lampson skill for the manifest format."
+        give "no plugins found. A plugin is a folder with a plugin.json manifest: " + plugins.GLOBAL_DIR + "/<name>/ (global) or " + plugins.PROJECT_DIR + "/<name>/ (this project; you can create it with write). See the lampson skill for the manifest format."
     let lines be []
     each l in sm
-        set lines to append(lines, l["name"] + " (" + l["scope"] + ", " + l["kind"] + ", " + (when l["enabled"] then "ON" otherwise "off") + "): " + (when l["error"] != nothing then "BROKEN — " + text(l["error"]) otherwise text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["description"] != "" then " — " + l["description"] otherwise "")))
+        set lines to append(lines, l["name"] + " (" + l["scope"] + ", " + l["kind"] + ", " + (when l["enabled"] then "ON" otherwise "off") + "): " + (when l["error"] != nothing then "BROKEN — " + text(l["error"]) otherwise text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["description"] != "" then " — " + l["description"] otherwise "")) + (when l["legacy"] then " [" + plugins.LEGACY_HINT + "]" otherwise ""))
     give join(lines, "\n")
 
-let LAMP_SPEC be {
-    "name": "lamp",
-    "description": "Lamps are tool plugins you can build for this project: a folder with a lamp.json manifest plus code — a Synsema program (kind=syn) run under a capability ceiling, or any executable (kind=exec). Consider one when a task needs a reusable custom tool (a project-specific query, generator, checker) that plain bash would repeat clumsily. action=list (default): every lamp found, on/off, its tools. action=create: write a PROJECT lamp (name + manifest + files) — it validates the manifest and runs `synsema check` on a syn entry, but does NOT run or enable it. action=enable / disable: turn one on or off — ALWAYS asks the user (enabling authorizes its code to run with the manifest's capabilities). An enabled lamp's tools appear in your catalog as lamp_<lamp>_<tool> from the NEXT turn. Manifest: {\"description\", \"kind\": \"syn\"|\"exec\", \"entry\": \"lamp.syn\" (syn) | \"command\": \"python lamp.py\" (exec), \"caps\": \"file.read=workspace/*\" (syn, optional extra ceiling over stdout,time,env=LAMP_*), \"timeout\": 60, \"tools\": [{\"name\", \"description\", \"parameters\": JSON Schema, \"readonly\": bool}]}. Inside the code read LAMP_TOOL and LAMP_ARGS (JSON) from env and print the result to stdout (a .syn needs `require env(\"LAMP_*\")`). Lamp names: letters, digits, - (no _).",
+let PLUGIN_SPEC be {
+    "name": "plugin",
+    "description": "Plugins are tools you can build for this project (they were called 'lamps' until 0.2.6; the user may still say lamp/lámpara): a folder with a plugin.json manifest plus code — a Synsema program (kind=syn) run under a capability ceiling, or any executable (kind=exec, any language, no ceiling). Consider one when a task needs a reusable custom tool (a project-specific query, generator, checker) that plain bash would repeat clumsily. action=list (default): every plugin found, on/off, its tools. action=create: write a PROJECT plugin (name + manifest + files) — it validates the manifest and runs `synsema check` on a syn entry, but does NOT run or enable it. action=enable / disable: turn one on or off — ALWAYS asks the user (enabling authorizes its code to run with the manifest's capabilities). An enabled plugin's tools appear in your catalog as plugin_<plugin>_<tool> from the NEXT turn. Manifest: {\"description\", \"kind\": \"syn\"|\"exec\", \"entry\": \"plugin.syn\" (syn) | \"command\": \"python plugin.py\" (exec), \"caps\": \"file.read=workspace/*\" (syn, optional extra ceiling over stdout,time,env=PLUGIN_*), \"timeout\": 60, \"tools\": [{\"name\", \"description\", \"parameters\": JSON Schema, \"readonly\": bool}]}. Inside the code read PLUGIN_TOOL and PLUGIN_ARGS (JSON) from env and print the result to stdout (a .syn needs `require env(\"PLUGIN_*\")`). Plugin names: letters, digits, - (no _). Not the same as a lamp from lamps.sh (a portable, ceiling-enforced capability unit for any MCP agent): those are installed with `lamp add` and reach you as MCP tools via `lamp mcp`.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "create", "enable", "disable"], "description": "Default: list"},
-        "name": {"type": "string", "description": "create/enable/disable: lamp name"},
-        "manifest": {"type": "object", "description": "create only: the lamp.json content (name is filled in)"},
-        "files": {"type": "object", "description": "create only: {\"lamp.syn\": \"<code>\", …} — files written into the lamp folder", "additionalProperties": {"type": "string"}}
+        "name": {"type": "string", "description": "create/enable/disable: plugin name"},
+        "manifest": {"type": "object", "description": "create only: the plugin.json content (name is filled in)"},
+        "files": {"type": "object", "description": "create only: {\"plugin.syn\": \"<code>\", …} — files written into the plugin folder", "additionalProperties": {"type": "string"}}
     }, "required": ["action"]}
 }
 
@@ -158,8 +158,8 @@ let LSP_SPEC be {
 
 -- la tool schedule (lib/schedule.syn): tareas programadas. add/remove/enable/run piden humano SIEMPRE (permission.syn):
 -- crear una tarea = autorizar de una vez todo lo que va a hacer sin nadie mirando. Las corridas las hace el daemon
--- (web.syn); desde acá solo se corren en el acto las lamp/bash (una prompt anidaría un loop dentro del turno).
-task schedule_tool(action, id, name, at, kind, lamp, tool, args, command, prompt, agent, permission, approval_timeout, notify)
+-- (web.syn); desde acá solo se corren en el acto las plugin/bash (una prompt anidaría un loop dentro del turno).
+task schedule_tool(action, id, name, at, kind, plugin, tool, args, command, prompt, agent, permission, approval_timeout, notify)
     require exec
     require time
     require net
@@ -167,15 +167,15 @@ task schedule_tool(action, id, name, at, kind, lamp, tool, args, command, prompt
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("workspace")
     require file("workspace/*")
     let act be when action == nothing then "list" otherwise action
     when act == "add"
         let a be {"type": kind}
-        when kind == "lamp"
-            set a to {"type": "lamp", "lamp": lamp, "tool": tool, "args": when args == nothing then {} otherwise args}
+        when kind == "plugin"
+            set a to {"type": "plugin", "plugin": plugin, "tool": tool, "args": when args == nothing then {} otherwise args}
         otherwise when kind == "bash"
             set a to {"type": "bash", "command": command}
         otherwise when kind == "prompt"
@@ -227,16 +227,16 @@ task daemon_note()
 
 let SCHEDULE_SPEC be {
     "name": "schedule",
-    "description": "Scheduled tasks: run something on a schedule with nobody watching — a lamp tool, a fixed shell command, or a full agent run from a prompt (kind=prompt: the agent works unattended with the chosen profile and writes a report; its session appears as ⏰ <name>). `at` formats — recurring: 'every 6h' | 'every 30m' | 'daily 09:00' | 'mon,wed 08:30' | 'weekdays 09:00'; ONE-TIME (runs once, then turns itself off): 'today 15:14' | 'tomorrow 09:00' | 'once 2026-08-29 15:14' | 'in 2h'. Times are the USER'S LOCAL time (the machine's timezone): write the hour exactly as the user says it — NEVER convert to UTC. Tasks belong to the current workspace. permission = what a prompt run may do without asking: strict (dangerous actions denied), ask (default: a dangerous action sends the user an approval link/notification and waits up to approval_timeout seconds, denied if unanswered), yolo (allowed). notify = optional webhook URL that receives the result as JSON (for 'search and send me' tasks). action=add ALWAYS asks the user (it authorizes future unattended runs); remove/enable/disable/run also ask; list and log do not. The tasks are executed by Lampson's resident process (`lampson --daemon start` or the open web UI) — say so if the list shows no scheduler running. Use it when the user says 'every day at', 'each N hours', 'on Mondays', 'periodically', 'remind me', 'send me'.",
+    "description": "Scheduled tasks: run something on a schedule with nobody watching — a plugin tool, a fixed shell command, or a full agent run from a prompt (kind=prompt: the agent works unattended with the chosen profile and writes a report; its session appears as ⏰ <name>). `at` formats — recurring: 'every 6h' | 'every 30m' | 'daily 09:00' | 'mon,wed 08:30' | 'weekdays 09:00'; ONE-TIME (runs once, then turns itself off): 'today 15:14' | 'tomorrow 09:00' | 'once 2026-08-29 15:14' | 'in 2h'. Times are the USER'S LOCAL time (the machine's timezone): write the hour exactly as the user says it — NEVER convert to UTC. Tasks belong to the current workspace. permission = what a prompt run may do without asking: strict (dangerous actions denied), ask (default: a dangerous action sends the user an approval link/notification and waits up to approval_timeout seconds, denied if unanswered), yolo (allowed). notify = optional webhook URL that receives the result as JSON (for 'search and send me' tasks). action=add ALWAYS asks the user (it authorizes future unattended runs); remove/enable/disable/run also ask; list and log do not. The tasks are executed by Lampson's resident process (`lampson --daemon start` or the open web UI) — say so if the list shows no scheduler running. Use it when the user says 'every day at', 'each N hours', 'on Mondays', 'periodically', 'remind me', 'send me'.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["list", "add", "remove", "enable", "disable", "run", "log"], "description": "Default: list"},
         "id": {"type": "string", "description": "remove/enable/disable/run/log: the task id (from list)"},
         "name": {"type": "string", "description": "add: short human name"},
         "at": {"type": "string", "description": "add: the schedule — 'every 6h' | 'daily 09:00' | 'mon,wed 08:30' | 'weekdays 09:00'"},
-        "kind": {"type": "string", "enum": ["lamp", "bash", "prompt"], "description": "add: what runs"},
-        "lamp": {"type": "string", "description": "add kind=lamp: lamp name (must be ON)"},
-        "tool": {"type": "string", "description": "add kind=lamp: tool of that lamp"},
-        "args": {"type": "object", "description": "add kind=lamp: arguments for the tool"},
+        "kind": {"type": "string", "enum": ["plugin", "bash", "prompt"], "description": "add: what runs"},
+        "plugin": {"type": "string", "description": "add kind=plugin: plugin name (must be ON)"},
+        "tool": {"type": "string", "description": "add kind=plugin: tool of that plugin"},
+        "args": {"type": "object", "description": "add kind=plugin: arguments for the tool"},
         "command": {"type": "string", "description": "add kind=bash: the shell command (must finish on its own; no servers)"},
         "prompt": {"type": "string", "description": "add kind=prompt: self-contained instructions for the unattended agent run (what to do, how to verify, what to report)"},
         "agent": {"type": "string", "enum": ["build", "plan", "review", "explore"], "description": "add kind=prompt: profile (default build)"},
@@ -261,12 +261,12 @@ export task registry()
         "todo": t_todo.tool,
         "skill": skill_tool,
         "mcp": mcp_tool,
-        "lamp": lamp_tool,
+        "plugin": plugin_tool,
         "lsp": lsp_tool,
         "schedule": schedule_tool
     }
 
-export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, LAMP_SPEC, SCHEDULE_SPEC]
+export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, PLUGIN_SPEC, SCHEDULE_SPEC]
 
 -- Subconjuntos (para perfiles de agente): registry/catálogo filtrados por nombre.
 export task registry_subset(names)

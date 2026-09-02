@@ -9,8 +9,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
-require file.read("lamps")
-require file.read("lamps/*")
+require file.read("plugins")
+require file.read("plugins/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -33,7 +33,7 @@ use "./lib/md.syn" as md
 use "./lib/diff.syn" as diff
 use "./lib/ui.syn" as ui
 use "./lib/mcp.syn" as mcp
-use "./lib/lamps.syn" as lamps
+use "./lib/plugins.syn" as plugins
 use "./lib/tools/todo.syn" as todo
 use "./lib/prompt.syn" as prompt
 
@@ -442,57 +442,57 @@ test "estimate_tokens y with_mode"
     assert_eq(loop.with_mode(opts, "yolo")["permission_mode"], "yolo")
     assert_eq(opts["max_steps"], 40)
 
--- ---------- lámparas ----------
+-- ---------- plugins ----------
 
-test "lamps: descubrir, encender (humano), catálogo lamp_<lámpara>_<tool>, correr bajo techo, apagar"
-    let ldir be "workspace/.lampson/lamps/hello"
-    write_file(ldir + "/lamp.json", json_encode({"name": "hello", "description": "saluda", "kind": "syn", "entry": "lamp.syn", "timeout": 20, "tools": [{"name": "greet", "description": "greets", "parameters": {"type": "object", "properties": {"who": {"type": "string"}}}, "readonly": true}]}))
-    write_file(ldir + "/lamp.syn", "require env(\"LAMP_*\")\nlet a be json_decode(env(\"LAMP_ARGS\", \"{}\"))\nprint(\"hello \" + text(a[\"who\"]) + \" via \" + env(\"LAMP_TOOL\", \"\"))\n")
+test "plugins: descubrir, encender (humano), catálogo plugin_<plugin>_<tool>, correr bajo techo, apagar"
+    let ldir be "workspace/.lampson/plugins/hello"
+    write_file(ldir + "/plugin.json", json_encode({"name": "hello", "description": "saluda", "kind": "syn", "entry": "plugin.syn", "timeout": 20, "tools": [{"name": "greet", "description": "greets", "parameters": {"type": "object", "properties": {"who": {"type": "string"}}}, "readonly": true}]}))
+    write_file(ldir + "/plugin.syn", "require env(\"PLUGIN_*\")\nlet a be json_decode(env(\"PLUGIN_ARGS\", \"{}\"))\nprint(\"hello \" + text(a[\"who\"]) + \" via \" + env(\"PLUGIN_TOOL\", \"\"))\n")
     -- apagada por defecto: existe pero no entra al catálogo
-    let found be where(lamps.summary(), (l) => l["name"] == "hello")
+    let found be where(plugins.summary(), (l) => l["name"] == "hello")
     assert_eq(length(found), 1)
     assert(not found[0]["enabled"])
-    assert(not contains(lamps.names(false), "lamp_hello_greet"))
+    assert(not contains(plugins.names(false), "plugin_hello_greet"))
     -- encender = permiso humano SIEMPRE para el agente (ask en yolo, deny en strict); list nunca
-    assert_eq(permission.evaluate("lamp", {"action": "enable", "name": "hello"}, "yolo")["decision"], "ask")
-    assert_eq(permission.evaluate("lamp", {"action": "enable", "name": "hello"}, "strict")["decision"], "deny")
-    assert_eq(permission.evaluate("lamp", {"action": "list"}, "strict")["decision"], "allow")
-    assert(contains(lamps.set_enabled("hello", true), "ON"))
-    assert(contains(lamps.names(false), "lamp_hello_greet"))
-    assert(contains(lamps.names(true), "lamp_hello_greet"))
-    -- la tool de la lámpara: ask por defecto, yolo permite, strict deniega
-    assert_eq(permission.evaluate("lamp_hello_greet", {"who": "x"}, "ask")["decision"], "ask")
-    assert_eq(permission.evaluate("lamp_hello_greet", {"who": "x"}, "yolo")["decision"], "allow")
-    assert_eq(permission.evaluate("lamp_hello_greet", {"who": "x"}, "strict")["decision"], "deny")
+    assert_eq(permission.evaluate("plugin", {"action": "enable", "name": "hello"}, "yolo")["decision"], "ask")
+    assert_eq(permission.evaluate("plugin", {"action": "enable", "name": "hello"}, "strict")["decision"], "deny")
+    assert_eq(permission.evaluate("plugin", {"action": "list"}, "strict")["decision"], "allow")
+    assert(contains(plugins.set_enabled("hello", true), "ON"))
+    assert(contains(plugins.names(false), "plugin_hello_greet"))
+    assert(contains(plugins.names(true), "plugin_hello_greet"))
+    -- la tool del plugin: ask por defecto, yolo permite, strict deniega
+    assert_eq(permission.evaluate("plugin_hello_greet", {"who": "x"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("plugin_hello_greet", {"who": "x"}, "yolo")["decision"], "allow")
+    assert_eq(permission.evaluate("plugin_hello_greet", {"who": "x"}, "strict")["decision"], "deny")
     -- corre como proceso hijo bajo `synsema run --cap-set …`, args por env
-    let out be lamps.call("lamp_hello_greet", {"who": "ana"})
-    assert(contains(out, "hello ana via greet"), "salida de la lámpara: " + out)
-    -- una lámpara que pide MÁS de lo que su manifiesto autoriza falla contra el techo, no escala
-    write_file(ldir + "/lamp.syn", "require file.read(\"workspace/*\")\nprint(read_file(\"workspace/.lampson/lamps/hello/lamp.json\"))\n")
-    let denied be lamps.call("lamp_hello_greet", {})
+    let out be plugins.call("plugin_hello_greet", {"who": "ana"})
+    assert(contains(out, "hello ana via greet"), "salida del plugin: " + out)
+    -- un plugin que pide MÁS de lo que su manifiesto autoriza falla contra el techo, no escala
+    write_file(ldir + "/plugin.syn", "require file.read(\"workspace/*\")\nprint(read_file(\"workspace/.lampson/plugins/hello/plugin.json\"))\n")
+    let denied be plugins.call("plugin_hello_greet", {})
     assert(contains(denied, "ERROR") and contains(lower(denied), "ceiling"), "techo: " + denied)
-    -- la tool `lamp` del modelo lista y el registry/catálogo del perfil build las incluye
-    assert(contains(call_tool(REG["lamp"], {"action": "list"}), "hello (project, syn, ON)"))
-    assert_eq(agents.registry_for("build")["lamp_hello_greet"], "lamp")
-    assert(contains(lamps.set_enabled("hello", false), "OFF"))
-    assert(not contains(lamps.names(false), "lamp_hello_greet"))
-    -- el harness crea la lámpara solo (como cordis_define): escribe, valida y chequea, pero NO enciende
-    let cr be call_tool(REG["lamp"], {"action": "create", "name": "made-by-agent", "manifest": {"kind": "syn", "entry": "main.syn", "tools": [{"name": "ping", "description": "pong"}]}, "files": {"main.syn": "require env(\"LAMP_*\")\nprint(\"pong \" + env(\"LAMP_TOOL\", \"\"))\n"}})
+    -- la tool `plugin` del modelo lista y el registry/catálogo del perfil build los incluye
+    assert(contains(call_tool(REG["plugin"], {"action": "list"}), "hello (project, syn, ON)"))
+    assert_eq(agents.registry_for("build")["plugin_hello_greet"], "plugin")
+    assert(contains(plugins.set_enabled("hello", false), "OFF"))
+    assert(not contains(plugins.names(false), "plugin_hello_greet"))
+    -- el harness crea el plugin solo (como cordis_define): escribe, valida y chequea, pero NO enciende
+    let cr be call_tool(REG["plugin"], {"action": "create", "name": "made-by-agent", "manifest": {"kind": "syn", "entry": "main.syn", "tools": [{"name": "ping", "description": "pong"}]}, "files": {"main.syn": "require env(\"PLUGIN_*\")\nprint(\"pong \" + env(\"PLUGIN_TOOL\", \"\"))\n"}})
     assert(contains(cr, "created") and contains(cr, "synsema check OK") and contains(cr, "OFF"), cr)
-    assert_eq(permission.evaluate("lamp", {"action": "create", "name": "made-by-agent"}, "ask")["decision"], "allow")
-    assert(not contains(lamps.names(false), "lamp_made-by-agent_ping"))
-    assert(contains(lamps.set_enabled("made-by-agent", true), "ON"))
-    assert(contains(lamps.call("lamp_made-by-agent_ping", {}), "pong ping"))
-    assert(contains(lamps.set_enabled("made-by-agent", false), "OFF"))
+    assert_eq(permission.evaluate("plugin", {"action": "create", "name": "made-by-agent"}, "ask")["decision"], "allow")
+    assert(not contains(plugins.names(false), "plugin_made-by-agent_ping"))
+    assert(contains(plugins.set_enabled("made-by-agent", true), "ON"))
+    assert(contains(plugins.call("plugin_made-by-agent_ping", {}), "pong ping"))
+    assert(contains(plugins.set_enabled("made-by-agent", false), "OFF"))
     -- código que no compila: creada pero el check falla y lo dice
-    let bad be call_tool(REG["lamp"], {"action": "create", "name": "bad-syntax", "manifest": {"entry": "x.syn", "tools": [{"name": "t"}]}, "files": {"x.syn": "let be be be\n"}})
+    let bad be call_tool(REG["plugin"], {"action": "create", "name": "bad-syntax", "manifest": {"entry": "x.syn", "tools": [{"name": "t"}]}, "files": {"x.syn": "let be be be\n"}})
     assert(contains(bad, "FAILED"), bad)
-    assert_error(() => call_tool(REG["lamp"], {"action": "create", "name": "bad_name", "manifest": {"tools": []}, "files": {}}))
-    -- manifiesto roto: se lista como rota y no se puede encender
-    write_file("workspace/.lampson/lamps/broken/lamp.json", "{\"kind\": \"exec\"}")
-    let br be where(lamps.summary(), (l) => l["name"] == "broken")
+    assert_error(() => call_tool(REG["plugin"], {"action": "create", "name": "bad_name", "manifest": {"tools": []}, "files": {}}))
+    -- manifiesto roto: se lista como roto y no se puede encender
+    write_file("workspace/.lampson/plugins/broken/plugin.json", "{\"kind\": \"exec\"}")
+    let br be where(plugins.summary(), (l) => l["name"] == "broken")
     assert(length(br) == 1 and br[0]["error"] != nothing)
-    assert_error(() => lamps.set_enabled("broken", true))
+    assert_error(() => plugins.set_enabled("broken", true))
 
 test "lsp: tool de solo lectura (allow en strict), describe_call, worker oculto del selector"
     assert_eq(permission.evaluate("lsp", {"op": "symbols", "path": "a.ts"}, "strict")["decision"], "allow")
@@ -512,20 +512,40 @@ test "spill: el modelo puede releer .lampson/spill/<call>.txt con read y grep (v
     assert(contains(call_tool(REG["grep"], {"pattern": "AGUJA", "path": ".lampson/spill/call_test_x.txt"}), ":2:"))
     assert_error(() => call_tool(REG["read"], {"path": ".lampson/spill/../config.json"}))
 
-test "lamps exec: el comando corre desde el workspace y un archivo de la carpeta de la lámpara se resuelve solo"
-    let cr be call_tool(REG["lamp"], {"action": "create", "name": "exec-demo", "manifest": {"kind": "exec", "command": "node hi.js", "tools": [{"name": "hi", "description": "hi"}]}, "files": {"hi.js": "console.log('hi ' + process.env.LAMP_TOOL + ' cwd=' + require('path').basename(process.cwd()) + ' args=' + process.env.LAMP_ARGS)"}})
+test "plugins exec: el comando corre desde el workspace y un archivo de la carpeta del plugin se resuelve solo"
+    let cr be call_tool(REG["plugin"], {"action": "create", "name": "exec-demo", "manifest": {"kind": "exec", "command": "node hi.js", "tools": [{"name": "hi", "description": "hi"}]}, "files": {"hi.js": "console.log('hi ' + process.env.PLUGIN_TOOL + ' cwd=' + require('path').basename(process.cwd()) + ' args=' + process.env.PLUGIN_ARGS)"}})
     assert(contains(cr, "created") and contains(cr, "resolved automatically"), cr)
-    lamps.set_enabled("exec-demo", true)
-    let out be lamps.call("lamp_exec-demo_hi", {"x": 1})
+    plugins.set_enabled("exec-demo", true)
+    let out be plugins.call("plugin_exec-demo_hi", {"x": 1})
     assert(contains(out, "hi hi") and contains(out, "args={\"x\": 1}"), out)
-    lamps.set_enabled("exec-demo", false)
-    -- eliminar: solo lámparas del proyecto; borra la carpeta y la saca del estado
-    assert(contains(lamps.remove("exec-demo"), "deleted"))
-    assert_eq(length(where(lamps.summary(), (l) => l["name"] == "exec-demo")), 0)
-    assert_error(() => lamps.remove("example-hello"))
-    assert_error(() => lamps.remove("exec-demo"))
+    plugins.set_enabled("exec-demo", false)
+    -- eliminar: solo plugins del proyecto; borra la carpeta y la saca del estado
+    assert(contains(plugins.remove("exec-demo"), "deleted"))
+    assert_eq(length(where(plugins.summary(), (l) => l["name"] == "exec-demo")), 0)
+    assert_error(() => plugins.remove("example-hello"))
+    assert_error(() => plugins.remove("exec-demo"))
 
-test "env_info: la UI (web|terminal) llega al prompt para que el modelo no diga /lamps en la web"
+test "plugins compat: una carpeta vieja .lampson/lamps/<n>/lamp.json se descubre (legacy), se enciende y recibe LAMP_*"
+    let old be "workspace/.lampson/lamps/oldie"
+    write_file(old + "/lamp.json", json_encode({"name": "oldie", "kind": "syn", "entry": "lamp.syn", "timeout": 20, "tools": [{"name": "echo", "description": "echo"}]}))
+    write_file(old + "/lamp.syn", "require env(\"LAMP_*\")\nprint(\"old \" + env(\"LAMP_TOOL\", \"\") + \" \" + env(\"LAMP_ARGS\", \"\"))\n")
+    let found be where(plugins.summary(), (l) => l["name"] == "oldie")
+    assert(length(found) == 1 and found[0]["legacy"] == true and found[0]["scope"] == "project", json_encode(found))
+    let on be plugins.set_enabled("oldie", true)
+    assert(contains(on, "ON") and contains(on, "rename"), on)
+    assert(contains(plugins.call("plugin_oldie_echo", {"k": 1}), "old echo {\"k\": 1}"))
+    -- la carpeta nueva con el mismo nombre pisa a la vieja, y deja de ser legacy
+    write_file("workspace/.lampson/plugins/oldie/plugin.json", json_encode({"name": "oldie", "kind": "syn", "entry": "plugin.syn", "tools": [{"name": "echo", "description": "echo"}]}))
+    write_file("workspace/.lampson/plugins/oldie/plugin.syn", "require env(\"PLUGIN_*\")\nprint(\"new \" + env(\"PLUGIN_TOOL\", \"\"))\n")
+    assert(contains(plugins.call("plugin_oldie_echo", {}), "new echo"))
+    let again be where(plugins.summary(), (l) => l["name"] == "oldie")
+    assert(not again[0]["legacy"])
+    plugins.set_enabled("oldie", false)
+    assert(contains(plugins.remove("oldie"), "deleted"))
+    -- una tarea programada guardada con el tipo viejo "lamp" sigue describiéndose y validándose
+    assert_eq(schedule.describe_action({"type": "lamp", "lamp": "oldie", "tool": "echo", "args": {}}), "plugin oldie.echo")
+
+test "env_info: la UI (web|terminal) llega al prompt para que el modelo no diga /plugins en la web"
     share {"kind": "web"} as "lampson:ui"
     let p be prompt.build(agents.env_info(provider.config()), "")
     assert(contains(p, "from the web UI") and contains(p, "Never tell a web user to type a slash command"))
@@ -684,7 +704,7 @@ test "schedule: alta, validación, corrida bash con historial y borrado (.lampso
     assert(contains(bad1, "refused"), bad1)
     let bad2 be ""
     try
-        schedule.add({"when": "daily 09:00", "action": {"type": "lamp", "lamp": "nope", "tool": "x"}})
+        schedule.add({"when": "daily 09:00", "action": {"type": "plugin", "plugin": "nope", "tool": "x"}})
     recover err
         set bad2 to text(err)
     assert(contains(bad2, "not available"), bad2)
@@ -748,3 +768,23 @@ test "workspaces: el slug coincide con memo.slug para la misma ruta y normaliza 
     assert_eq(wsp.slug_of(p), wsp.slug_of("c:/users/alguien/desktop/mi proyecto/"))
     assert(starts_with(wsp.slug_of(p), "mi-proyecto-"), wsp.slug_of(p))
     assert_eq(length(wsp.slug_of(p)), length("mi-proyecto-") + 8)
+
+test "workspaces: ensure_link crea el destino si falta y rehace un link colgante (el memory/ de un install npm)"
+    let base be "workspace/_lampson_test/links"
+    write_file(base + "/.keep", "")
+    let abs be env("LAMPSON_WORKSPACE", "") + "/_lampson_test/links/target"
+    let where_ be base + "/memory"
+    assert(not file_exists(base + "/target"))
+    wsp.ensure_link(where_, abs)
+    assert(file_exists(where_) and file_exists(base + "/target"), "link creado y destino creado antes")
+    -- se escribe a través del link, como hace memory(write)
+    write_file(where_ + "/proj/nota.md", "hola")
+    assert_eq(read_file(base + "/target/proj/nota.md"), "hola")
+    -- destino borrado → link colgante (file_exists = false, como en el VPS) → se rehace y el destino vuelve
+    let sh be env("LAMPSON_SHELL", when env("OS", "") == "Windows_NT" then "C:\\Program Files\\Git\\bin\\bash.exe" otherwise "bash")
+    run(sh, ["-c", "rm -rf '" + base + "/target'"], 30, {"cwd": "."})
+    assert(not file_exists(where_), "colgante")
+    wsp.ensure_link(where_, abs)
+    assert(file_exists(where_) and file_exists(base + "/target"), "link rehecho")
+    write_file(where_ + "/proj/otra.md", "de nuevo")
+    assert_eq(read_file(base + "/target/proj/otra.md"), "de nuevo")

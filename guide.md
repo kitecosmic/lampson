@@ -7,7 +7,7 @@ the short version of these pages also lives at [lampson.org/docs](https://lampso
 ## Everything it does
 
 - **Workspaces, always on**: every project folder is a *workspace* with its own process (sessions, scheduled tasks,
-  MCP, lamps, dev servers), all behind one hub at http://127.0.0.1:8080 — open several at once and switch without
+  MCP, plugins, dev servers), all behind one hub at http://127.0.0.1:8080 — open several at once and switch without
   killing the others. `lampson` (terminal) and `lampson --web` (browser) open the workspace of the current folder;
   `lampson --install` keeps the hub alive across logins.
 - **Any OpenAI- or Anthropic-compatible API** over raw HTTP: DeepSeek, Kimi, Groq, Grok, OpenRouter,
@@ -30,11 +30,13 @@ the short version of these pages also lives at [lampson.org/docs](https://lampso
   file's structure without reading it, `definition`/`references`/`hover` resolve what grep leaves
   ambiguous. Nothing is bundled: `/lsp add typescript|python|rust|go|css|html` (or your own command),
   global or per project; each server starts on its first query.
-- **Lamps** (tool plugins): a folder with a `lamp.json` manifest plus code — a Synsema program that runs
-  under a capability ceiling, or any executable (js, py, sh…). Global in `lampson/lamps/<name>/`, per
-  project in `.lampson/lamps/<name>/` (the agent can write those). **Off by default**: you turn them on
-  from the top bar of the web UI or `/lamps on <name>`; their tools join the catalog as `lamp_<lamp>_<tool>`.
-- **Scheduled tasks**: "every 6h", "daily 09:00", "mon,wed 08:30" — a lamp tool, a fixed shell command, or a
+- **Plugins** (your own tools): a folder with a `plugin.json` manifest plus code — a Synsema program that runs
+  under a capability ceiling, or any executable (js, py, sh…). Global in `lampson/plugins/<name>/`, per
+  project in `.lampson/plugins/<name>/` (the agent can write those). **Off by default**: you turn them on
+  from the top bar of the web UI or `/plugins on <name>`; their tools join the catalog as `plugin_<plugin>_<tool>`.
+  (They were called *lamps* until 0.2.6; old folders and `LAMP_*` variables still work — see below.) For tools
+  with an enforced ceiling shared across agents, see [lamps.sh](https://lamps.sh) and plug `lamp mcp` in as MCP.
+- **Scheduled tasks**: "every 6h", "daily 09:00", "mon,wed 08:30" — a plugin tool, a fixed shell command, or a
   full unattended agent run from a prompt with a permission envelope fixed when you create it (`strict` /
   `ask` / `yolo`). They run inside Lampson's resident process (`lampson --daemon start`, or the open web UI),
   the run's session shows up as `⏰ name`, and a webhook can receive each result (for "search and send me" tasks).
@@ -44,7 +46,9 @@ the short version of these pages also lives at [lampson.org/docs](https://lampso
   no answer in time = denied.
 - **Project memory**: the agent keeps its own notes per project (`memory/<project>/*.md`, outside
   the repo) — how to run it, gotchas, decisions — and rereads them in the next session. You can read
-  and edit them (web panel, `/memory`).
+  and edit them (web panel, `/memory`). The workspace reaches that folder through a `memory` link in its
+  own directory; that link is the only door (the agent's other tools stay inside the project), and if it
+  ever breaks, running `lampson` again in the project repairs it — the UI and the agent's prompt say so.
 - **`!command`**: run something yourself from the chat inside a real pseudo-terminal (prompts, passwords
   and REPLs work); the output lands in the agent's context.
 - **Terminals in the browser**: the web UI opens a real shell (pty, cwd = your project) in the center pane
@@ -74,7 +78,7 @@ lampson            # terminal
 lampson --web      # http://127.0.0.1:8080
 ```
 
-The package keeps your config, sessions, memory and global lamps in `~/lampson` (`LAMPSON_HOME` to change
+The package keeps your config, sessions, memory and global plugins in `~/lampson` (`LAMPSON_HOME` to change
 it) and refreshes the code there whenever you `npm i -g lampson@latest`. On Windows it needs PowerShell
 (pwsh or the built-in one) and Git for Windows (its bash is what the `bash` tool uses).
 
@@ -149,7 +153,7 @@ lampson --install               # Windows: Scheduled Task at logon · Linux: sys
 
 Why processes: in Synsema a tool's file capability is a literal path relative to the process cwd, so a workspace is
 a directory `~/lampson/.lampson/ws/<slug>/` with a junction `workspace` → your project (plus junctions to the
-install's `lib/`, `public/`, `skills/`, `lamps/`, `memory/`), and its own `.lampson/` state. Its process
+install's `lib/`, `public/`, `skills/`, `plugins/`, `memory/`), and its own `.lampson/` state. Its process
 (`synsema serve web.syn --port 808N --bind 127.0.0.1`) only ever sees that folder. The hub (`hub.syn`, generated
 from `hub.tpl.syn`, one proxy route per workspace) is the only listener you use: it serves the UI and forwards
 `/w/<slug>/api/…` — SSE and the WebSocket terminal included (Synsema ≥ 0.6.12). Workspace processes are detached
@@ -176,7 +180,7 @@ from the web sidebar («Programadas» → +), or from the terminal (`/schedule a
 
 | kind | what runs | authorization |
 |---|---|---|
-| `lamp` | a tool of a lamp that is ON | turning the lamp on |
+| `plugin` | a tool of a plugin that is ON | turning the plugin on |
 | `bash` | one fixed command (must finish on its own) | approved once, at creation |
 | `prompt` | a full agent turn with your instructions and a profile (`build` / `review` / `plan` / `explore`) | the permission envelope: `strict` (dangerous → denied), `ask` (dangerous → approval request, denied if unanswered within `approval_timeout`, 2 h by default), `yolo` |
 
@@ -215,7 +219,7 @@ In the REPL, `/` lists every command (`/agent`, `/ask` `/yolo` `/strict`, `/mode
 
 The prompt is a real line editor (Synsema ≥ 0.6.11, falls back to plain `read_line` without a TTY):
 typing `/` opens the command menu (recent ones first, filtered as you type), `Tab` completes the
-command and then its arguments (files for `/image`, sessions, providers, processes, lamps, MCP/LSP
+command and then its arguments (files for `/image`, sessions, providers, processes, plugins, MCP/LSP
 servers, flags), `↑↓` browse history or the menu, `Alt+Enter` inserts a newline, `Ctrl+O` shows the
 last tool result in full, `Ctrl+U`/`Ctrl+W` clear the line/word, `Esc` closes the menu. Approvals are
 an arrow-key menu (`permitir`/`denegar`, or `p`/`d`).
@@ -278,7 +282,7 @@ public/              web UI (no build step, no dependencies; classic scripts ser
   js/core.js         shared state + helpers ($, esc, md, add, api, showPane/showText, inlineConfirm, debounce, empty)
   js/panel.js        THE modal component: one shell, three layouts (browse = search + list + detail, tabs, form)
   js/<view>.js       one file per thing on screen: sessions, chat, tree, terminal, procs, agents, memory, todo,
-                     mcp, lsp, lamps, schedules, approvals, config (+ provider), update, events (SSE), app (boot)
+                     mcp, lsp, plugins, schedules, approvals, config (+ provider), update, events (SSE), app (boot)
 lib/
   provider.syn       config from .env · chat(cfg, messages, catalog) · retry with backoff
   loop.syn           run_turn(): LLM → tool calls → permissions → call_tool → results → repeat; doom-loop guard; compaction
@@ -358,31 +362,39 @@ set of operations — no raw JSON-RPC). Config:
   transiently (`didOpen` → request → `didClose`), positions are 1-based like the editor. Read-only: allowed
   in every mode and profile. Test: `lsp_test.syn` against `tests/mock_lsp.js`.
 
-### Lamps (tool plugins)
+### Plugins (your own tools)
 
-`lib/lamps.syn`. Synsema has no dynamic `use` (on purpose: no supply chain inside the process), so a lamp
+`lib/plugins.syn`. Synsema has no dynamic `use` (on purpose: no supply chain inside the process), so a plugin
 never loads into lampson — every call is **one child process that ends**, the "safe runner" pattern from
-the Synsema sandbox docs. `lamps/<name>/lamp.json`:
+the Synsema sandbox docs. `plugins/<name>/plugin.json`:
 
 ```json
-{"name": "hello", "description": "greets", "kind": "syn", "entry": "lamp.syn",
+{"name": "hello", "description": "greets", "kind": "syn", "entry": "plugin.syn",
  "caps": "file.read=workspace/*", "timeout": 60,
  "tools": [{"name": "greet", "description": "…", "parameters": {"type": "object", "properties": {"who": {"type": "string"}}}, "readonly": true}]}
 ```
 
-- `kind: "syn"` runs `synsema run --cap-set stdout,time,env=LAMP_*[,caps] <entry>`: the ceiling is the
-  manifest you approved when you turned it on; a `require` above it in the lamp's code fails with
+- `kind: "syn"` runs `synsema run --cap-set stdout,time,env=PLUGIN_*[,caps] <entry>`: the ceiling is the
+  manifest you approved when you turned it on; a `require` above it in the plugin's code fails with
   *above the host ceiling* — nothing escalates from inside. `kind: "exec"` runs `"command"` as is (no
   language ceiling — which is why enabling is always a human decision).
-- The tool call travels by env: `LAMP_TOOL`, `LAMP_ARGS` (JSON), `LAMP_DIR`, `LAMP_WORKSPACE`; the lamp
+- The tool call travels by env: `PLUGIN_TOOL`, `PLUGIN_ARGS` (JSON), `PLUGIN_DIR`, `PLUGIN_WORKSPACE`; the plugin
   prints its result to stdout. Exit ≠ 0 or timeout → `ERROR:` for the model.
-- Discovery: `lamps/` (global) and `workspace/.lampson/lamps/` (project; same name overrides). State in
-  `.lampson/lamps.json` — **off by default**. On/off: web top bar, `/lamps on|off <name>`, or the model's
-  `lamp(action=enable)` which always asks. Lamp tools: ask by default, allow in yolo, deny in strict;
-  `readonly` ones also reach `plan`/`review`/`explore`. Example: `lamps/example-hello/`.
-- The agent can build lamps itself: `lamp(action=create, name, manifest, files)` writes a project lamp,
+- Discovery: `plugins/` (global) and `workspace/.lampson/plugins/` (project; same name overrides). State in
+  `.lampson/plugins.json` — **off by default**. On/off: web top bar, `/plugins on|off <name>`, or the model's
+  `plugin(action=enable)` which always asks. Plugin tools: ask by default, allow in yolo, deny in strict;
+  `readonly` ones also reach `plan`/`review`/`explore`. Example: `plugins/example-hello/`.
+- The agent can build plugins itself: `plugin(action=create, name, manifest, files)` writes a project plugin,
   validates the manifest and runs `synsema check` on a syn entry — define-and-validate only, like dsh's
   `cordis_define`; turning it on is still yours (`cordis_run`'s approval, here `enable` → ask).
+- **Renamed from "lamps" (2026-09-01).** The name now belongs to [lamps.sh](https://lamps.sh) — portable
+  capability units with an enforced ceiling, for any MCP agent — and lampson's local, any-language,
+  no-ceiling folders are *plugins*. Compat, for now: `workspace/.lampson/lamps/<name>/` is still discovered
+  (flagged `legacy` in the UI and `/plugins`), a missing `plugin.json` falls back to `lamp.json`,
+  `.lampson/lamps.json` is read when `.lampson/plugins.json` does not exist yet (writes go to the new file),
+  the child also gets `LAMP_TOOL`/`LAMP_ARGS`/`LAMP_DIR`/`LAMP_WORKSPACE` (the base ceiling includes
+  `env=LAMP_*`), scheduled tasks saved with `type: "lamp"` still run, and `/lamps` is an alias of `/plugins`
+  with a hint. The launchers move user folders left in the global `lamps/` to `plugins/` once.
 
 ### Keeping the model aware of what it did
 

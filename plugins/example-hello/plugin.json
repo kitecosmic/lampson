@@ -1,8 +1,8 @@
 {
   "name": "example-hello",
-  "description": "Example lamp: a Synsema program run under a capability ceiling. Copy this folder to make your own.",
+  "description": "Example plugin: a Synsema program run under a capability ceiling. Copy this folder to make your own.",
   "kind": "syn",
-  "entry": "lamp.syn",
+  "entry": "plugin.syn",
   "caps": "",
   "timeout": 20,
   "tools": [

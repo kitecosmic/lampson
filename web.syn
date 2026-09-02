@@ -34,8 +34,8 @@ require file("workspace")
 require file("workspace/*")
 require file.read("skills")
 require file.read("skills/*")
-require file.read("lamps")
-require file.read("lamps/*")
+require file.read("plugins")
+require file.read("plugins/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -57,7 +57,7 @@ use "./lib/update.syn" as update
 use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
-use "./lib/lamps.syn" as lamps
+use "./lib/plugins.syn" as plugins
 use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
 use "./lib/schedule.syn" as schedule
@@ -105,7 +105,7 @@ task lampson_subagent(spec_json)
 -- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
 -- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada
 -- 30 s (cron_every de Synsema: intervalo puro; la hora de reloj la resuelve schedule.syn) corre lo vencido:
--- lámparas, comandos y corridas del agente con su sobre de permisos; una aprobación en una corrida desatendida
+-- plugins, comandos y corridas del agente con su sobre de permisos; una aprobación en una corrida desatendida
 -- sale por lib/approvals.syn (panel «Aprobaciones» de la UI, webhook firmado, link de un solo uso).
 task sched_tick()
     give sched_run.tick()
@@ -261,7 +261,8 @@ serve on 8080
         give git.status()
 
     route "GET /w/:slug/api/memory" requires auth
-        give {"dir": memo.dir(), "notes": memo.list()}
+        -- ok=false: el link memory/ del workspace está roto (la UI lo dice; el agente ya lo sabe por el prompt)
+        give {"dir": memo.dir(), "ok": memo.available(), "notes": memo.list()}
 
     route "GET /w/:slug/api/memory/note" requires auth
         when not contains(query, "name")
@@ -334,34 +335,34 @@ serve on 8080
         recover err
             give fail(400, text(err))
 
-    -- lámparas (plugins de tools): listar y encender/apagar desde la barra superior de la UI
-    route "GET /w/:slug/api/lamps" requires auth
-        give {"lamps": lamps.summary(), "global": lamps.GLOBAL_DIR, "project": lamps.PROJECT_DIR}
+    -- plugins (tools propias): listar y encender/apagar desde la barra superior de la UI
+    route "GET /w/:slug/api/plugins" requires auth
+        give {"plugins": plugins.summary(), "global": plugins.GLOBAL_DIR, "project": plugins.PROJECT_DIR}
 
-    -- el usuario corre una tool de una lámpara encendida él mismo (sin pasar por el modelo)
-    route "POST /w/:slug/api/lamps/run" requires auth
+    -- el usuario corre una tool de un plugin encendido él mismo (sin pasar por el modelo)
+    route "POST /w/:slug/api/plugins/run" requires auth
         expect body {tool: text}
         let b be json of request
         let args be when contains(b, "args") then b["args"] otherwise {}
         try
-            give {"ok": true, "output": lamps.call(text(b["tool"]), args)}
+            give {"ok": true, "output": plugins.call(text(b["tool"]), args)}
         recover err
             give fail(400, text(err))
 
-    route "POST /w/:slug/api/lamps/remove" requires auth
+    route "POST /w/:slug/api/plugins/remove" requires auth
         expect body {name: text}
         let b be json of request
         try
-            give {"ok": true, "result": lamps.remove(text(b["name"])), "lamps": lamps.summary()}
+            give {"ok": true, "result": plugins.remove(text(b["name"])), "plugins": plugins.summary()}
         recover err
             give fail(400, text(err))
 
-    route "POST /w/:slug/api/lamps/toggle" requires auth
+    route "POST /w/:slug/api/plugins/toggle" requires auth
         expect body {name: text}
         let b be json of request
         let on be contains(b, "enabled") and b["enabled"] == true
         try
-            give {"ok": true, "result": lamps.set_enabled(text(b["name"]), on), "lamps": lamps.summary()}
+            give {"ok": true, "result": plugins.set_enabled(text(b["name"]), on), "plugins": plugins.summary()}
         recover err
             give fail(400, text(err))
 
@@ -478,7 +479,7 @@ serve on 8080
     route "GET /w/:slug/api/schedules" requires auth
         let age be schedule.daemon_age()
         -- este proceso tiene su propio tick (cron_every): las tareas corren mientras la web esté abierta
-        give {"tasks": schedule.summary(), "tick": schedule.TICK_SECONDS, "alive": true, "heartbeat_age": age, "mount_ok": schedule.mount_ok(), "workspace": env("LAMPSON_WORKSPACE", ""), "tz": schedule.tz_offset(), "lamps": lamps.summary()}
+        give {"tasks": schedule.summary(), "tick": schedule.TICK_SECONDS, "alive": true, "heartbeat_age": age, "mount_ok": schedule.mount_ok(), "workspace": env("LAMPSON_WORKSPACE", ""), "tz": schedule.tz_offset(), "plugins": plugins.summary()}
 
     route "POST /w/:slug/api/schedules/add" requires auth
         let b be json of request

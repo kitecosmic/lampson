@@ -1,7 +1,7 @@
 -- lib/schedule.syn — tareas programadas: "cada 6 h", "todos los días a las 9", "lunes 8:30"
 --
 -- Qué se programa (action.type):
---   lamp   → una tool de una lámpara ENCENDIDA: {lamp, tool, args}. Encenderla ya fue la autorización.
+--   plugin → una tool de un plugin ENCENDIDO: {plugin, tool, args}. Encenderlo ya fue la autorización.
 --   bash   → un comando fijo desde el workspace: {command, timeout}. Aprobado UNA vez, al crear la tarea.
 --   prompt → una corrida completa del agente con un texto: {prompt, agent}. Sin humano al lado: corre con el
 --            sobre de permisos que se fijó al crearla (permission: strict | ask | yolo). En `ask`, cuando el
@@ -23,7 +23,7 @@
 -- Este módulo no importa agents/loop (ciclo con tools.syn): las corridas `prompt` las hace lib/sched_run.syn.
 
 use "./tools/bash.syn" as t_bash
-use "./lamps.syn" as lamps
+use "./plugins.syn" as plugins
 use "./permission.syn" as permission
 use "./tools/common.syn" as c
 use "./tools/memo.syn" as memo
@@ -380,15 +380,19 @@ task slug(name)
 -- valida y normaliza la acción → {ok, action, error}
 task check_action(action)
     when action == nothing or not contains(action, "type")
-        give {"ok": false, "error": "action needs a type: lamp | bash | prompt"}
+        give {"ok": false, "error": "action needs a type: plugin | bash | prompt"}
     let kind be lower(text(action["type"]))
     when kind == "lamp"
-        when not contains(action, "lamp") or not contains(action, "tool")
-            give {"ok": false, "error": "action lamp needs lamp and tool"}
-        let full be lamps.tool_name(text(action["lamp"]), text(action["tool"]))
-        when not contains(lamps.names(false), full)
-            give {"ok": false, "error": "lamp tool " + full + " is not available (the lamp must exist and be ON)"}
-        give {"ok": true, "action": {"type": "lamp", "lamp": text(action["lamp"]), "tool": text(action["tool"]), "args": when contains(action, "args") then action["args"] otherwise {}}}
+        -- compat: "lamp" era el nombre de "plugin" hasta 2026-09 (tareas guardadas, JSON escrito a mano)
+        set kind to "plugin"
+    when kind == "plugin"
+        let pname be plugin_of(action)
+        when pname == "" or not contains(action, "tool")
+            give {"ok": false, "error": "action plugin needs plugin and tool"}
+        let full be plugins.tool_name(pname, text(action["tool"]))
+        when not contains(plugins.names(false), full)
+            give {"ok": false, "error": "plugin tool " + full + " is not available (the plugin must exist and be ON)"}
+        give {"ok": true, "action": {"type": "plugin", "plugin": pname, "tool": text(action["tool"]), "args": when contains(action, "args") then action["args"] otherwise {}}}
     when kind == "bash"
         when not contains(action, "command") or trim(text(action["command"])) == ""
             give {"ok": false, "error": "action bash needs a command"}
@@ -405,7 +409,7 @@ task check_action(action)
         when not contains(["build", "plan", "review", "explore"], agent)
             give {"ok": false, "error": "agent must be build | plan | review | explore"}
         give {"ok": true, "action": {"type": "prompt", "prompt": text(action["prompt"]), "agent": agent}}
-    give {"ok": false, "error": "unknown action type '" + kind + "' (lamp | bash | prompt)"}
+    give {"ok": false, "error": "unknown action type '" + kind + "' (plugin | bash | prompt)"}
 
 -- crear: spec = {name, when, action, permission?, approval_timeout?, notify?} → la tarea (raise si es inválida)
 export task add(spec)
@@ -415,8 +419,8 @@ export task add(spec)
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("workspace")
     require file("workspace/*")
     when spec == nothing or not contains(spec, "when")
@@ -450,9 +454,20 @@ export task add(spec)
     put(t)
     give t
 
+-- el nombre del plugin de una acción; acepta la clave vieja "lamp" (tareas guardadas antes de 2026-09)
+task plugin_of(action)
+    when contains(action, "plugin")
+        give text(action["plugin"])
+    when contains(action, "lamp")
+        give text(action["lamp"])
+    give ""
+
+task is_plugin_action(a)
+    give a["type"] == "plugin" or a["type"] == "lamp"
+
 task default_name(action)
-    when action["type"] == "lamp"
-        give action["lamp"] + " " + action["tool"]
+    when is_plugin_action(action)
+        give plugin_of(action) + " " + action["tool"]
     when action["type"] == "bash"
         let cmd be action["command"]
         give when length(cmd) > 40 then slice(cmd, 0, 40) + "…" otherwise cmd
@@ -533,7 +548,7 @@ export task heartbeat()
     write_file(HEARTBEAT, text(now()))
     give true
 
--- ---------- corridas: lamp y bash (prompt en sched_run.syn) ----------
+-- ---------- corridas: plugin y bash (prompt en sched_run.syn) ----------
 export task run_simple(t)
     require exec
     require time
@@ -541,13 +556,13 @@ export task run_simple(t)
     require env("OS")
     require file(".lampson")
     require file(".lampson/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("workspace")
     require file("workspace/*")
     let a be t["action"]
-    when a["type"] == "lamp"
-        give lamps.call(lamps.tool_name(a["lamp"], a["tool"]), a["args"])
+    when is_plugin_action(a)
+        give plugins.call(plugins.tool_name(plugin_of(a), a["tool"]), a["args"])
     when a["type"] == "bash"
         let v be permission.evaluate("bash", {"command": a["command"]}, "yolo")
         when v["decision"] == "deny"
@@ -640,8 +655,8 @@ export task log_tail(id, n)
 
 -- descripción de la acción (una línea) para previews y listados
 export task describe_action(a)
-    when a["type"] == "lamp"
-        give "lamp " + a["lamp"] + "." + a["tool"] + (when length(keys(a["args"])) > 0 then " " + one_line(json_encode(a["args"]), 80) otherwise "")
+    when is_plugin_action(a)
+        give "plugin " + plugin_of(a) + "." + a["tool"] + (when length(keys(a["args"])) > 0 then " " + one_line(json_encode(a["args"]), 80) otherwise "")
     when a["type"] == "bash"
         give "$ " + one_line(a["command"], 120)
     give "agent " + a["agent"] + ": " + one_line(a["prompt"], 140)

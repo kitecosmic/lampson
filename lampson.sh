@@ -32,6 +32,13 @@ for pair in "skills-global:$HOME/.agents/skills" "skills-claude:$HOME/.claude/sk
     link="$here/.lampson/${pair%%:*}"; src="${pair#*:}"
     [ -e "$link" ] || { [ -d "$src" ] && ln -s "$src" "$link"; } || true
 done
+# 2026-09: las "lámparas" globales pasaron a llamarse plugins (plugins/). git renombra las del repo; las carpetas
+# que vos pusiste en lamps/ se mueven una vez, y la carpeta vieja se borra solo si quedó vacía.
+if [ -d "$here/lamps" ]; then
+    mkdir -p "$here/plugins"
+    for d in "$here"/lamps/*/; do [ -d "$d" ] || continue; n="$(basename "$d")"; [ -e "$here/plugins/$n" ] || { mv "$d" "$here/plugins/$n" && echo "lampson: lamps/$n → plugins/$n (las lámparas ahora son plugins)"; }; done
+    rmdir "$here/lamps" 2>/dev/null || true
+fi
 cli() { # última línea = JSON
     local out; out="$(cd "$here" && LAMPSON_CMD="$1" LAMPSON_WORKSPACE="${2:-}" synsema run cli.syn)" || { echo "$out" >&2; exit 1; }
     echo "$out" | sed '$d' >&2 || true

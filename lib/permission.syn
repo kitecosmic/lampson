@@ -91,20 +91,20 @@ export task evaluate(name, args, mode)
         when mode == "strict"
             give {"decision": "deny", "reason": "strict mode (adds an LSP server)"}
         give {"decision": "ask", "reason": "configures LSP server '" + (when contains(args, "server") then text(args["server"]) otherwise "?") + "' (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ") — it will run the preset command on the first query"}
-    when starts_with(name, "lamp_")
-        -- tool de una lámpara (código del usuario/agente, un proceso por llamada): como las MCP
+    when starts_with(name, "plugin_")
+        -- tool de un plugin (código del usuario/agente, un proceso por llamada): como las MCP
         when mode == "yolo"
-            give {"decision": "allow", "reason": "yolo mode (lamp tool)"}
+            give {"decision": "allow", "reason": "yolo mode (plugin tool)"}
         when mode == "strict"
-            give {"decision": "deny", "reason": "strict mode (lamp tool)"}
-        give {"decision": "ask", "reason": "lamp tool " + name}
-    when name == "lamp"
-        -- encender una lámpara = autorizar código a correr con las capacidades de su manifiesto: humano SIEMPRE
+            give {"decision": "deny", "reason": "strict mode (plugin tool)"}
+        give {"decision": "ask", "reason": "plugin tool " + name}
+    when name == "plugin"
+        -- encender un plugin = autorizar código a correr con las capacidades de su manifiesto: humano SIEMPRE
         let act be when contains(args, "action") then text(args["action"]) otherwise "list"
         when act == "enable" or act == "disable"
             when mode == "strict"
-                give {"decision": "deny", "reason": "strict mode (" + act + " lamp)"}
-            give {"decision": "ask", "reason": act + "s lamp '" + (when contains(args, "name") then text(args["name"]) otherwise "?") + "'"}
+                give {"decision": "deny", "reason": "strict mode (" + act + " plugin)"}
+            give {"decision": "ask", "reason": act + "s plugin '" + (when contains(args, "name") then text(args["name"]) otherwise "?") + "'"}
         give {"decision": "allow", "reason": "read-only tool"}
     when name == "mcp"
         -- conectar un server MCP = ejecutar un comando de terceros con env propio: humano siempre, incluso en yolo
@@ -115,7 +115,7 @@ export task evaluate(name, args, mode)
             give {"decision": "ask", "reason": act + "s MCP server '" + (when contains(args, "name") then text(args["name"]) otherwise "?") + "'" + (when act == "add" then " → runs: " + (when contains(args, "command") then text(args["command"]) otherwise "?") otherwise "")}
         give {"decision": "allow", "reason": "read-only tool"}
     when name == "schedule"
-        -- programar = autorizar corridas futuras SIN nadie mirando (un comando, una lámpara, o el agente entero
+        -- programar = autorizar corridas futuras SIN nadie mirando (un comando, un plugin, o el agente entero
         -- con un sobre de permisos): humano siempre, incluso en yolo. list/log son lectura.
         let sact be when contains(args, "action") then text(args["action"]) otherwise "list"
         when sact == "list" or sact == "log"
@@ -140,15 +140,15 @@ task one_line(s, max)
     give t
 
 export task describe_call(name, args)
-    when starts_with(name, "mcp_") or starts_with(name, "lamp_")
+    when starts_with(name, "mcp_") or starts_with(name, "plugin_")
         give name + " " + one_line(json_encode(args), 160)
     when name == "lsp" and contains(args, "op") and text(args["op"]) == "add"
         give "lsp add " + (when contains(args, "server") then text(args["server"]) otherwise "?") + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "lsp"
         give "lsp " + (when contains(args, "op") then text(args["op"]) otherwise "?") + " " + (when contains(args, "path") then text(args["path"]) otherwise "?") + (when contains(args, "line") then ":" + text(args["line"]) + (when contains(args, "character") then ":" + text(args["character"]) otherwise "") otherwise "")
-    when name == "lamp"
+    when name == "plugin"
         let lact be when contains(args, "action") then text(args["action"]) otherwise "list"
-        give "lamp " + lact + (when lact != "list" then " " + (when contains(args, "name") then text(args["name"]) otherwise "?") otherwise "") + (when lact == "create" and contains(args, "files") then " [" + join(keys(args["files"]), ", ") + "]" otherwise "")
+        give "plugin " + lact + (when lact != "list" then " " + (when contains(args, "name") then text(args["name"]) otherwise "?") otherwise "") + (when lact == "create" and contains(args, "files") then " [" + join(keys(args["files"]), ", ") + "]" otherwise "")
     when name == "mcp"
         let act be when contains(args, "action") then text(args["action"]) otherwise "list"
         when act == "add"
@@ -160,7 +160,7 @@ export task describe_call(name, args)
         let sact be arg(args, "action", "list")
         when sact == "add"
             let what be arg(args, "kind", "?")
-            let body be when what == "lamp" then "lamp " + arg(args, "lamp", "?") + "." + arg(args, "tool", "?") + (when contains(args, "args") then " " + one_line(json_encode(args["args"]), 80) otherwise "") otherwise (when what == "bash" then "$ " + one_line(arg(args, "command", "?"), 120) otherwise "agent " + arg(args, "agent", "build") + ": " + one_line(arg(args, "prompt", "?"), 160))
+            let body be when what == "plugin" then "plugin " + arg(args, "plugin", "?") + "." + arg(args, "tool", "?") + (when contains(args, "args") then " " + one_line(json_encode(args["args"]), 80) otherwise "") otherwise (when what == "bash" then "$ " + one_line(arg(args, "command", "?"), 120) otherwise "agent " + arg(args, "agent", "build") + ": " + one_line(arg(args, "prompt", "?"), 160))
             give "schedule add «" + arg(args, "name", "?") + "» · " + arg(args, "at", "?") + " · " + body + " · permission " + arg(args, "permission", "ask") + (when contains(args, "notify") then " · notify " + text(args["notify"]) otherwise "")
         give "schedule " + sact + (when contains(args, "id") then " " + text(args["id"]) otherwise "")
     when name == "skill" and is_install(args)

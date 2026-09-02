@@ -4,7 +4,8 @@ async function loadMemory() {
   let r; try { r = await (await fetch(BASE + '/api/memory')).json(); } catch (e) { return; }
   const box = $('#memory'); box.innerHTML = '';
   const notes = r.notes || [];
-  $('#memCount').textContent = notes.length || ''; autoSec('memory', notes.length > 0);
+  $('#memCount').textContent = notes.length || ''; autoSec('memory', notes.length > 0 || r.ok === false);
+  if (r.ok === false) { box.innerHTML = '<div class="m none" title="el enlace memory/ del workspace no resuelve: volvé a correr lampson en este proyecto para repararlo">⚠ carpeta de memoria no accesible — corré <code>lampson</code> de nuevo en este proyecto</div>'; return; }
   if (!notes.length) { box.innerHTML = '<div class="m none">sin notas todavía</div>'; return; }
   for (const n of notes) { const d = document.createElement('div'); d.className = 'm' + (memOpen === n.name ? ' active' : ''); d.title = n.title; d.innerHTML = `<b>${esc(n.name)}</b><span class="t">${esc(n.title)}</span>`; d.onclick = () => openMemory(n.name); box.appendChild(d); }
 }

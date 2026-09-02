@@ -23,7 +23,7 @@
 use "./provider.syn" as provider
 use "./permission.syn" as permission
 use "./mcp.syn" as mcp
-use "./lamps.syn" as lamps
+use "./plugins.syn" as plugins
 use "./tools/todo.syn" as todo
 
 let MAX_ERRORS_PER_TURN be 8
@@ -285,9 +285,9 @@ task execute(tc, opts, on_event)
         -- tools MCP: no son tasks Synsema (args libres); el registry las marca con "mcp"
         when registry[name] == "mcp"
             set out to text(mcp.call(name, args))
-        -- tools de lámparas: un proceso hijo por llamada (lib/lamps.syn)
-        otherwise when registry[name] == "lamp"
-            set out to text(lamps.call(name, args))
+        -- tools de plugins: un proceso hijo por llamada (lib/plugins.syn)
+        otherwise when registry[name] == "plugin"
+            set out to text(plugins.call(name, args))
         otherwise
             set out to text(call_tool(registry[name], args))
     recover err

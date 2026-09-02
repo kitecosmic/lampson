@@ -8,7 +8,7 @@
 #   lampson --agent plan · --yolo|--strict|--ask · --update · --help
 #
 # Cómo funciona (ver SPEC-WORKSPACES.md): .lampson\ws\<slug>\ es el cwd del proceso del workspace, con una junction
-# `workspace` al proyecto y junctions a lib/public/skills/lamps/memory de esta instalación. El registro y los procesos
+# `workspace` al proyecto y junctions a lib/public/skills/plugins/memory de esta instalación. El registro y los procesos
 # los maneja lib/workspaces.syn vía cli.syn; este script solo resuelve la carpeta, llama a cli.syn y abre lo pedido.
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -44,6 +44,16 @@ New-Item -ItemType Directory -Force (Join-Path $here ".lampson") | Out-Null
 foreach ($k in $skillMounts.Keys) {
     $link = Join-Path $here ".lampson\$k"; $src = $skillMounts[$k]
     if (-not (Test-Path -LiteralPath $link) -and (Test-Path -LiteralPath $src -PathType Container)) { New-Item -ItemType Junction -Path $link -Target $src | Out-Null }
+}
+# 2026-09: las "lámparas" globales pasaron a llamarse plugins (plugins\). git renombra las del repo; las carpetas que
+# vos pusiste en lamps\ se mueven una vez, y la carpeta vieja se borra solo si quedó vacía.
+$oldLamps = Join-Path $here "lamps"
+if (Test-Path -LiteralPath $oldLamps -PathType Container) {
+    $newPlugins = Join-Path $here "plugins"; New-Item -ItemType Directory -Force $newPlugins | Out-Null
+    foreach ($d in Get-ChildItem -LiteralPath $oldLamps -Directory -Force) {
+        if (-not (Test-Path -LiteralPath (Join-Path $newPlugins $d.Name))) { Move-Item -LiteralPath $d.FullName -Destination $newPlugins; Write-Host "lampson: lamps\$($d.Name) → plugins\$($d.Name) (las lámparas ahora son plugins)" }
+    }
+    if (-not (Get-ChildItem -LiteralPath $oldLamps -Force)) { Remove-Item -LiteralPath $oldLamps -Force }
 }
 
 function Invoke-Cli([string]$cmd, [string]$ws) {

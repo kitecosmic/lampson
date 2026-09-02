@@ -14,7 +14,7 @@ async function loadCfg() {
   sel.onchange = () => { localStorage.setItem('lampson.agent', sel.value); hint(); }; hint();
   if (!log.children.length) empty();
 }
-loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadLsp(); loadLamps(); loadTodo(); loadSched(); loadApprovals(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) openSession(session); });
+loadCfg().then(() => { loadTree(); loadSessions(); loadProcs(); loadMemory(); loadAgents(); loadMcp(); loadLsp(); loadPlugins(); loadTodo(); loadSched(); loadApprovals(); checkUpdate(); const pq = new URLSearchParams(location.search).get('proc'); if (pq) openProc(pq); else if (session) openSession(session); });
 // respaldos lentos por si el stream de eventos se cae
 setInterval(loadProcs, events ? 60000 : 10000);
 setInterval(() => { loadSched(); if (!events) loadApprovals(); }, events ? 60000 : 15000);

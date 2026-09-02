@@ -1,4 +1,4 @@
--- lib/sched_run.syn — ejecutar UNA tarea programada (lamp | bash | prompt) y dejar registro
+-- lib/sched_run.syn — ejecutar UNA tarea programada (plugin | bash | prompt) y dejar registro
 --
 -- Separado de lib/schedule.syn porque las corridas `prompt` necesitan agents/loop/provider, y schedule.syn es
 -- importado por tools.syn (que agents.syn importa): acá no hay ciclo. Lo usan web.syn (tick del cron y
@@ -23,7 +23,7 @@ use "./session.syn" as session
 use "./trace.syn" as trace
 use "./permission.syn" as permission
 use "./tools.syn" as tools
-use "./lamps.syn" as lamps
+use "./plugins.syn" as plugins
 
 let PROMPT_NOTE be "\n\n# Scheduled run\n- This is an UNATTENDED scheduled run (no user is watching). Do the task, verify, and finish with a short report: what you found or changed, with paths. Do not ask questions - if something is missing, say so in the report.\n- A permission request may take hours to be answered (the user gets a link). Prefer actions that need no approval; if one is denied, do not retry it - report it.\n- ONLY the workspace is accessible: absolute paths, `..`, home folders, other projects and skill folders outside it do NOT exist for your tools (a `File not found` there is final - never retry). Work with what is inside the workspace and what you already know."
 
@@ -67,8 +67,8 @@ export task run(t, ask_fn, on_event)
     require file("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("memory")
     require file("memory/*")
     require file(".lampson")
@@ -94,11 +94,11 @@ export task run(t, ask_fn, on_event)
         let names be where(agents.profile(p)["tools"], (n) => n != "delegate" and n != "mcp" and n != "schedule")
         let reg be tools.registry_subset(names)
         let cat be tools.catalog_subset(names)
-        -- lámparas encendidas también (las de solo lectura si el perfil no edita)
+        -- plugins encendidos también (las de solo lectura si el perfil no edita)
         let ro be not (p == "build")
-        each ln in lamps.names(ro)
-            set reg[ln] to "lamp"
-        set cat to cat + lamps.catalog(ro)
+        each ln in plugins.names(ro)
+            set reg[ln] to "plugin"
+        set cat to cat + plugins.catalog(ro)
         let asker be ask_fn
         when asker == nothing and t["permission"] == "ask"
             set asker to ask_remote
@@ -135,8 +135,8 @@ export task tick()
     require file("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
-    require file.read("lamps")
-    require file.read("lamps/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
     require file("memory")
     require file("memory/*")
     require file(".lampson")
