@@ -1,0 +1,68 @@
+-- tests/mock_http.syn — sitio falso para probar la tool fetch (lib/tools/fetch.syn) sin salir a internet
+--
+--   synsema serve tests/mock_http.syn        (puerto 8766)
+--
+-- Rutas: /page.html (HTML con todo lo que la conversión debe manejar), /alt.html (+ link rel=alternate
+-- a /alt.md), /neg (negocia por Accept), /redir1 → /redir2 → /page.html, /loop, /priv (→ host privado),
+-- /missing (404), /data.json, /bin (PNG), /big.html (~60k), /stamp (cambia en cada request: prueba la
+-- caché), /plain.txt.
+require serve(8766)
+require time
+
+let PAGE be "<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Página &amp; título</title><style>body{margin:0}</style><script>var x = '<p>no</p>';</script><link rel=\"stylesheet\" href=\"/a.css\"></head><body><nav><a href=\"/\">home</a> · <a href=\"/docs\">docs</a></nav><header>cabecera del sitio <a href=\"#main\">Skip to content</a></header><main><h1 id=\"top\">Hola <em>mundo</em> <a href=\"#top\">§</a></h1><p>Primer párrafo con <b>negrita</b>, <a href=\"sub/page2.html\">un link relativo</a> y <a href=\"https://example.com/x\">uno absoluto</a>. Entidades: &lt;tag&gt; &#233; &#xE9; &nbsp;fin &copy;</p><h2>Código</h2><pre><code class=\"language-syn\">let x be 1\n  print(x &amp;&amp; y)\n</code></pre><p>Inline <code>fetch()</code> ok.</p><h3>Lista</h3><ul><li>uno</li><li>dos <i>cursiva</i></li></ul><ol><li>primero</li><li>segundo</li></ol><table><thead><tr><th>col a</th><th>col b</th></tr></thead><tbody><tr><td>1</td><td>x | y</td></tr><tr><td>2</td><td><a href=\"/c\">c</a></td></tr></tbody></table><blockquote><p>cita larga</p></blockquote><img src=\"data:image/png;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\" alt=\"logo\"><img src=\"/x.png\"><hr><p>Fin.</p></main><footer>pie con <a href=\"/legal\">legal</a></footer><script>track()</script></body></html>"
+
+task big()
+    let parts be []
+    let i be 1
+    while i <= 500
+        set parts to append(parts, "<p>Línea " + text(i) + " de un documento largo que no entra entero en el contexto del modelo y por eso se recorta.</p>")
+        set i to i + 1
+    give "<html><head><title>Grande</title></head><body>" + join(parts, "") + "</body></html>"
+
+serve on 8766
+    route "GET /page.html"
+        give html(PAGE)
+
+    route "GET /alt.html"
+        give html("<html><head><title>Alt</title><link rel=\"alternate\" type=\"text/markdown\" href=\"/alt.md\"></head><body><p>versión html</p></body></html>")
+
+    route "GET /alt.md"
+        give respond("# Alt\n\nmarkdown alternativo\n", "text/markdown")
+
+    route "GET /neg"
+        let accept be accept of (headers of request)
+        when accept == nothing
+            set accept to ""
+        when contains(accept, "text/markdown")
+            give respond("# negociado\n\ntexto md\n", "text/markdown")
+        give html("<html><body><h1>negociado</h1><p>texto html</p></body></html>")
+
+    route "GET /redir1"
+        give redirect("/redir2", 302)
+
+    route "GET /redir2"
+        give redirect("http://127.0.0.1:8766/page.html")
+
+    route "GET /loop"
+        give redirect("/loop", 302)
+
+    route "GET /priv"
+        give redirect("http://10.0.0.1/x", 302)
+
+    route "GET /missing"
+        give respond("<html><head><title>404</title></head><body><h1>No está</h1><p>Esta página no existe.</p></body></html>", "text/html", 404)
+
+    route "GET /data.json"
+        give {"a": 1, "b": [1, 2]}
+
+    route "GET /bin"
+        give binary(bytes([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]), "image/png")
+
+    route "GET /big.html"
+        give html(big())
+
+    route "GET /stamp"
+        give html("<html><body><p>stamp " + text(now()) + "</p></body></html>")
+
+    route "GET /plain.txt"
+        give respond("texto plano\n", "text/plain")

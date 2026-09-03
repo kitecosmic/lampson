@@ -1,0 +1,573 @@
+-- lib/tools/fetch.syn — traer una página web o una respuesta HTTP como Markdown/texto, sin ruido
+--
+-- Antes (2026-09-02) el modelo hacía `bash curl <url>` y recibía HTML crudo: head, CSS, nav, scripts —
+-- hasta 10k chars por llamada de puro ruido (synsema.com: 26,8 KB de HTML vs 2,5 KB de Markdown).
+-- Esta tool combina lo mejor de los tres harnesses de referencia:
+--   * opencode webfetch.ts — negociación `Accept` con q-values por formato (markdown/text/html): un sitio
+--     que sirve Markdown (synsema.com) lo entrega directo, sin convertir.
+--   * deepseek web-fetch-http — transporte: redirects MANUALES (http_get no los sigue) hasta 5 saltos,
+--     revalidando cada salto con la política de hosts; tope de bytes; Content-Type clasificado (html /
+--     texto / binario); cabecera "url · HTTP status · tipo · tamaño" y pie explícito al truncar.
+--   * hermes web_tools.py — seguridad y UX: SSRF (metadata de la nube denegada siempre, hosts privados
+--     piden aprobación — ver url.syn y permission.syn), secretos en la URL bloqueados, cabeza 75 % + cola
+--     25 % cortadas en límites de línea, texto COMPLETO en disco con la instrucción exacta para paginar
+--     (read offset/limit), caché por URL con TTL, imágenes base64 fuera del contexto.
+-- Conversión HTML→Markdown propia (sin DOM: regex del runtime, motor Rust sin lookaround): se quita
+-- script/style/nav/aside/footer/svg/iframe, se preservan <pre> como bloques de código, headings, listas
+-- (ol numeradas), tablas, links resueltos contra la URL final, énfasis, código inline; entidades decodificadas.
+-- Además: si la página anuncia `<link rel="alternate" type="text/markdown" href=…>` se trae ESE recurso.
+--
+-- Tamaños: default 10k chars visibles (= SPILL_CAP: el modelo ve la página entera de una vez), tope 30k
+-- (MAX_OUTPUT). loop.spill exime a fetch (como a read) porque trunca mejor por sí sola.
+use "./common.syn" as c
+use "./url.syn" as u
+
+export let DEFAULT_CHARS be 10000
+export let MIN_CHARS be 2000
+export let MAX_CHARS be 30000
+export let MAX_HOPS be 5
+export let MAX_BODY be 2000000
+export let DEFAULT_TTL be 1200
+export let CACHE_DIR be ".lampson/spill"
+let UA be "Mozilla/5.0 (compatible; lampson/agent; +https://lampson.org)"
+let HEX be "0123456789abcdef"
+
+-- ---------- helpers puros ----------
+
+task accept_for(format)
+    when format == "html"
+        give "text/html, application/xhtml+xml;q=0.9, text/plain;q=0.5, */*;q=0.1"
+    when format == "text"
+        give "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1"
+    give "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"
+
+-- las claves de los headers llegan con mayúsculas variables (Location / location)
+task header(h, name)
+    each k in keys(h)
+        when lower(k) == name
+            give text(h[k])
+    give ""
+
+-- "text/html; charset=utf-8" → "text/html"
+export task mime_of(content_type)
+    give trim(lower(split(text(content_type), ";")[0]))
+
+-- html | text | binary
+export task classify(mime)
+    when mime == "text/html" or mime == "application/xhtml+xml"
+        give "html"
+    when mime == ""
+        give "text"
+    when starts_with(mime, "text/")
+        give "text"
+    when mime == "application/json" or mime == "application/xml" or ends_with(mime, "+json") or ends_with(mime, "+xml") or mime == "application/javascript" or mime == "application/x-yaml" or mime == "application/yaml" or mime == "application/toml"
+        give "text"
+    give "binary"
+
+export task fmt_chars(n)
+    when n < 1000
+        give text(floor(n)) + " chars"
+    let k be floor(n / 1000)
+    let d be floor((n - k * 1000) / 100)
+    give text(k) + "." + text(d) + "k chars"
+
+task fmt_age(secs)
+    when secs < 60
+        give text(floor(secs)) + "s"
+    when secs < 3600
+        give text(floor(secs / 60)) + " min"
+    give text(floor(secs / 3600)) + " h"
+
+task hex4(n)
+    let d3 be floor(n / 4096)
+    let r be n - d3 * 4096
+    let d2 be floor(r / 256)
+    set r to r - d2 * 256
+    let d1 be floor(r / 16)
+    let d0 be r - d1 * 16
+    give slice(HEX, d3, d3 + 1) + slice(HEX, d2, d2 + 1) + slice(HEX, d1, d1 + 1) + slice(HEX, d0, d0 + 1)
+
+-- code point → texto (vía el parser JSON del runtime; no hay chr())
+task cp_text(cp)
+    when cp < 32 and cp != 9 and cp != 10 and cp != 13
+        give ""
+    when cp > 1114111 or (cp >= 55296 and cp <= 57343)
+        give ""
+    let esc be ""
+    when cp < 65536
+        set esc to "\\u" + hex4(cp)
+    otherwise
+        let v be cp - 65536
+        let hi be 55296 + floor(v / 1024)
+        let lo be 56320 + (v - floor(v / 1024) * 1024)
+        set esc to "\\u" + hex4(hi) + "\\u" + hex4(lo)
+    let out be ""
+    try
+        set out to json_decode("\"" + esc + "\"")
+    recover e
+        set out to ""
+    give out
+
+let HEX_VAL be {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "a": 10, "b": 11, "c": 12, "d": 13, "e": 14, "f": 15}
+
+task hex_to_int(h)
+    let n be 0
+    let s be lower(h)
+    let i be 0
+    while i < length(s)
+        let ch be slice(s, i, i + 1)
+        when contains(HEX_VAL, ch)
+            set n to n * 16 + HEX_VAL[ch]
+        set i to i + 1
+    give n
+
+let NAMED be {"nbsp": " ", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "copy": "©", "reg": "®", "trade": "™", "mdash": "—", "ndash": "–", "hellip": "…", "laquo": "«", "raquo": "»", "lsquo": "‘", "rsquo": "’", "ldquo": "“", "rdquo": "”", "middot": "·", "bull": "•", "rarr": "→", "larr": "←", "times": "×", "deg": "°", "euro": "€", "pound": "£", "yen": "¥", "cent": "¢", "sect": "§", "para": "¶", "shy": "", "zwnj": "", "zwj": "", "ensp": " ", "emsp": " ", "thinsp": " ", "eacute": "é", "egrave": "è", "aacute": "á", "iacute": "í", "oacute": "ó", "uacute": "ú", "ntilde": "ñ", "ccedil": "ç", "uuml": "ü", "ouml": "ö", "auml": "ä", "szlig": "ß", "agrave": "à", "ecirc": "ê", "acirc": "â", "ocirc": "ô", "iquest": "¿", "iexcl": "¡", "frac12": "½", "frac14": "¼", "plusmn": "±", "micro": "µ", "check": "✓", "hearts": "♥"}
+
+export task decode_entities(s)
+    let out be s
+    -- numéricas: &#233; &#xE9;
+    each m in find_all(out, "&#[0-9]{1,7};|&#[xX][0-9A-Fa-f]{1,6};")
+        let inner be slice(m, 2, length(m) - 1)
+        let cp be when starts_with(lower(inner), "x") then hex_to_int(slice(inner, 1, length(inner))) otherwise floor(number(inner))
+        set out to replace_text(out, m, cp_text(cp))
+    -- con nombre (las comunes; el resto se deja tal cual)
+    each m in find_all(out, "&[A-Za-z][A-Za-z0-9]{1,8};")
+        let name be slice(m, 1, length(m) - 1)
+        when contains(NAMED, name)
+            set out to replace_text(out, m, NAMED[name])
+    give replace_text(out, "&amp;", "&")
+
+task strip_tags(s)
+    give replace_re(s, "(?s)<[^>]*>", "")
+
+-- texto de un fragmento inline (título, texto de un link, celda): sin tags, entidades, espacios colapsados
+task inline_text(s)
+    give trim(replace_re(decode_entities(strip_tags(s)), "\\s+", " "))
+
+export task title_of(html)
+    -- capture con grupos devuelve una LISTA de grupos (verificado): [0] es el título
+    let t be capture(html, "(?is)<title[^>]*>(.*?)</title>")
+    when t == nothing
+        give ""
+    give inline_text(t[0])
+
+-- ---------- HTML → Markdown / texto ----------
+
+-- bloques <pre>: fuera antes de tocar espacios, de vuelta al final (marcadores ASCII improbables)
+task pull_pre(h, plain)
+    let blocks be []
+    let out be h
+    each e in enumerate(find_all(h, "(?is)<pre\\b.*?</pre>"))
+        let blk be e["item"]
+        let langm be capture(blk, "(?i)language-([A-Za-z0-9_+#-]+)")
+        let lang be when langm == nothing then nothing otherwise langm[0]
+        let innerm be capture(blk, "(?is)<pre\\b[^>]*>(.*?)</pre>")
+        let inner be when innerm == nothing then "" otherwise innerm[0]
+        let code be decode_entities(strip_tags(inner))
+        set code to replace_text(code, "\r\n", "\n")
+        -- quitar un salto inicial/final (el HTML suele meterlos), no la indentación
+        when starts_with(code, "\n")
+            set code to slice(code, 1, length(code))
+        while ends_with(code, "\n")
+            set code to slice(code, 0, length(code) - 1)
+        let fenced be when plain then "\n\n" + code + "\n\n" otherwise "\n\n```" + (when lang != nothing then text(lang) otherwise "") + "\n" + code + "\n```\n\n"
+        set blocks to append(blocks, fenced)
+        set out to replace_text(out, blk, "%%LPRE" + text(e["index"]) + "%%")
+    give {"html": out, "blocks": blocks}
+
+task push_pre(s, blocks)
+    let out be s
+    each e in enumerate(blocks)
+        set out to replace_text(out, "%%LPRE" + text(e["index"]) + "%%", e["item"])
+    give out
+
+-- <ol> → "1. …" (find_all + reemplazo literal: replace_re no puede contar)
+task number_lists(h)
+    let out be h
+    each blk in find_all(h, "(?is)<ol\\b[^>]*>.*?</ol>")
+        let parts be split(blk, "<li")
+        let items be []
+        each e in enumerate(parts)
+            when e["index"] > 0
+                -- "<li" + [atributos]> contenido </li>
+                let body be replace_re(e["item"], "(?s)^[^>]*>", "")
+                set body to replace_re(body, "(?is)</li>.*$", "")
+                set items to append(items, text(length(items) + 1) + ". " + trim(body))
+        set out to replace_text(out, blk, "\n\n" + join(items, "\n") + "\n\n")
+    give out
+
+-- <table> → tabla GFM (sin colspan; hermes/deepseek también los ignoran)
+task tables(h)
+    let out be h
+    each blk in find_all(h, "(?is)<table\\b.*?</table>")
+        let rows be []
+        let first_is_head be false
+        each e in enumerate(split(blk, "<tr"))
+            when e["index"] > 0
+                let row be replace_re(e["item"], "(?s)^[^>]*>", "")
+                set row to replace_re(row, "(?is)</tr>.*$", "")
+                let cells be []
+                let row_td be replace_re(row, "(?i)<th\\b", "<td")
+                each ce in enumerate(split(row_td, "<td"))
+                    when ce["index"] > 0
+                        let cell be replace_re(ce["item"], "(?s)^[^>]*>", "")
+                        set cell to replace_re(cell, "(?is)</t[dh]>.*$", "")
+                        set cells to append(cells, replace_text(inline_text(cell), "|", "\\|"))
+                when length(cells) > 0
+                    when length(rows) == 0 and contains(lower(row), "<th")
+                        set first_is_head to true
+                    set rows to append(rows, "| " + join(cells, " | ") + " |")
+        when length(rows) > 0
+            let ncols be length(split(rows[0], " | "))
+            let seps be []
+            let i be 0
+            while i < ncols
+                set seps to append(seps, "---")
+                set i to i + 1
+            let sep be "| " + join(seps, " | ") + " |"
+            let with_sep be [rows[0], sep]
+            each e in enumerate(rows)
+                when e["index"] > 0
+                    set with_sep to append(with_sep, e["item"])
+            set rows to with_sep
+        set out to replace_text(out, blk, "\n\n" + join(rows, "\n") + "\n\n")
+    give out
+
+-- <a href> → [texto](url absoluta); en plain, solo el texto
+task links(h, base, plain)
+    let out be h
+    each a in find_all(h, "(?is)<a\\b[^>]*>.*?</a>")
+        let inner be capture(a, "(?is)<a\\b[^>]*>(.*?)</a>")
+        let txt be when inner == nothing then "" otherwise inline_text(inner[0])
+        let href be capture(a, "(?is)<a\\b[^>]*\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
+        let abs be when href == nothing then nothing otherwise u.resolve(base, href[0])
+        let repl be txt
+        -- anclas internas (#x) sin destino real: "Skip to content", el "§"/"#" de cada heading → fuera
+        when abs == nothing
+            when starts_with(lower(txt), "skip to") or length(txt) <= 3
+                set repl to ""
+        when not plain and abs != nothing and txt != ""
+            set repl to when abs == txt then "<" + abs + ">" otherwise "[" + txt + "](" + abs + ")"
+        set out to replace_text(out, a, repl)
+    give out
+
+-- blockquote: marcadores y luego prefijo "> " línea por línea
+task quote_lines(s)
+    when not contains(s, "%%LBQ%%")
+        give s
+    let out be []
+    let inq be false
+    each l in split(s, "\n")
+        let line be l
+        let opens be length(split(line, "%%LBQ%%")) - 1
+        let closes be length(split(line, "%%/LBQ%%")) - 1
+        set line to replace_text(replace_text(line, "%%LBQ%%", ""), "%%/LBQ%%", "")
+        when inq or opens > 0
+            when trim(line) != ""
+                set line to "> " + trim(line)
+        set out to append(out, line)
+        when opens > closes
+            set inq to true
+        otherwise when closes > opens
+            set inq to false
+    give join(out, "\n")
+
+export task to_markdown(html, base, plain)
+    let h be replace_text(text(html), "\r\n", "\n")
+    set h to replace_re(h, "(?s)<!--.*?-->", "")
+    -- ruido: sin contenido para el modelo (un patrón por tag: el motor Rust no tiene backreferences)
+    -- (header también: en docs/GitHub es el menú del sitio; el título de la página va aparte en `title:`)
+    each tg in ["script", "style", "noscript", "svg", "iframe", "template", "head", "nav", "header", "aside", "footer", "dialog", "select", "button", "canvas", "video", "audio", "object", "embed"]
+        set h to replace_re(h, "(?is)<" + tg + "\\b.*?</" + tg + "\\s*>", "")
+    let pre be pull_pre(h, plain)
+    set h to pre["html"]
+    -- links primero (una celda o un ítem con <a> conserva el link); listas numeradas y tablas antes de
+    -- romper su estructura
+    set h to links(h, base, plain)
+    set h to number_lists(h)
+    set h to tables(h)
+    -- imágenes: alt como marca; sin alt, nada (base64 jamás llega al modelo)
+    set h to replace_re(h, "(?is)<img\\b[^>]*\\salt\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", "[image: \\1]")
+    set h to replace_re(h, "(?is)<img\\b[^>]*>", "")
+    each lvl in ["1", "2", "3", "4", "5", "6"]
+        let hashes be when plain then "" otherwise slice("######", 0, floor(number(lvl))) + " "
+        set h to replace_re(h, "(?is)<h" + lvl + "\\b[^>]*>(.*?)</h" + lvl + ">", "\n\n" + hashes + "\\1\n\n")
+    set h to replace_re(h, "(?i)<br\\s*/?>", "\n")
+    set h to replace_re(h, "(?i)<hr\\b[^>]*>", when plain then "\n\n" otherwise "\n\n---\n\n")
+    set h to replace_re(h, "(?is)<blockquote\\b[^>]*>", "\n\n%%LBQ%%")
+    set h to replace_re(h, "(?i)</blockquote>", "%%/LBQ%%\n\n")
+    set h to replace_re(h, "(?i)<li\\b[^>]*>", "\n- ")
+    set h to replace_re(h, "(?i)</li>", "")
+    set h to replace_re(h, "(?i)</(ul|ol|dl)>", "\n")
+    set h to replace_re(h, "(?i)<(ul|ol|dl)\\b[^>]*>", "\n")
+    set h to replace_re(h, "(?i)<dt\\b[^>]*>", "\n**")
+    set h to replace_re(h, "(?i)</dt>", "**\n")
+    set h to replace_re(h, "(?i)<dd\\b[^>]*>", "\n  ")
+    -- énfasis vacíos decorativos (<i></i> como puntos de una barra) serían asteriscos sueltos
+    set h to replace_re(h, "(?is)<(i|em|b|strong)\\b[^>]*>\\s*</(i|em|b|strong)>", "")
+    when not plain
+        set h to replace_re(h, "(?is)<(b|strong)\\b[^>]*>(.*?)</(b|strong)>", "**\\2**")
+        set h to replace_re(h, "(?is)<(i|em)\\b[^>]*>(.*?)</(i|em)>", "*\\2*")
+        set h to replace_re(h, "(?is)<code\\b[^>]*>(.*?)</code>", "`\\1`")
+    set h to replace_re(h, "(?i)</(p|div|section|article|main|header|figure|figcaption|details|summary|form|fieldset|address|tr|dd)>", "\n\n")
+    set h to replace_re(h, "(?i)<(p|div|section|article|main|header|figure|figcaption|details|summary|form|fieldset|address)\\b[^>]*>", "\n")
+    set h to strip_tags(h)
+    set h to decode_entities(h)
+    -- énfasis vacío que quedó de tags sin texto
+    set h to replace_re(h, "\\*\\*\\s*\\*\\*", "")
+    set h to replace_re(h, "``", "")
+    -- espacios: colapsar (los <pre> están a salvo en sus marcadores)
+    set h to replace_text(h, cp_text(160), " ")
+    set h to replace_re(h, "[ \\t\\f\\v]+", " ")
+    set h to replace_re(h, "(?m)^ +", "")
+    set h to replace_re(h, "(?m) +$", "")
+    set h to replace_re(h, "\\n{3,}", "\n\n")
+    set h to quote_lines(h)
+    set h to push_pre(h, pre["blocks"])
+    set h to replace_re(h, "\\n{3,}", "\n\n")
+    give trim(h)
+
+-- Markdown servido por el sitio: solo sacar imágenes base64 (hermes convert_base64_images_to_links)
+export task clean_markdown(md)
+    let out be replace_re(text(md), "!\\[([^\\]]*)\\]\\(\\s*data:image/[^)]*\\)", "[image: \\1]")
+    set out to replace_re(out, "data:image/[a-z+]+;base64,[A-Za-z0-9+/=]{40,}", "[image]")
+    give trim(replace_text(out, "\r\n", "\n"))
+
+-- href del <link rel="alternate" type="text/markdown">, resuelto; nothing si no hay
+export task markdown_alternate(html, base)
+    each l in find_all(text(html), "(?is)<link\\b[^>]*>")
+        let ll be lower(l)
+        when contains(ll, "alternate") and (contains(ll, "type=\"text/markdown\"") or contains(ll, "type='text/markdown'") or contains(ll, "type=\"text/x-markdown\""))
+            let href be capture(l, "(?is)\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
+            when href != nothing
+                give u.resolve(base, href[0])
+    give nothing
+
+-- ---------- recorte (hermes _truncate_with_footer): cabeza 75 % + cola 25 %, en límites de línea ----------
+export task cut_output(body, max_chars, path)
+    when length(body) <= max_chars
+        give {"text": body, "truncated": false}
+    let head_budget be floor(max_chars * 0.75)
+    let tail_budget be max_chars - head_budget
+    let head be slice(body, 0, head_budget)
+    let tail be slice(body, length(body) - tail_budget, length(body))
+    let hl be split(head, "\n")
+    when length(hl) > 1 and length(hl[length(hl) - 1]) < head_budget / 2
+        set head to join(slice(hl, 0, length(hl) - 1), "\n")
+    let tl be split(tail, "\n")
+    when length(tl) > 1 and length(tl[0]) < tail_budget / 2
+        set tail to join(slice(tl, 1, length(tl)), "\n")
+    let next_line be length(split(head, "\n")) + 1
+    let foot be "\n\n──── [truncated] ────\nShowing " + fmt_chars(length(head)) + " (head) + " + fmt_chars(length(tail)) + " (tail) of " + fmt_chars(length(body)) + ". Full text saved to " + path + " — the omitted middle starts at line " + text(next_line) + ": read path=\"" + path + "\" offset=" + text(next_line) + " limit=200, or grep it. Do not fetch this URL again.\n─────────────────────"
+    give {"text": head + "\n\n[... middle omitted — see footer ...]\n\n" + tail + foot, "truncated": true}
+
+-- ---------- transporte ----------
+
+-- GET con redirects manuales: http_get devuelve el 3xx con Location sin seguirlo (verificado v0.6.14).
+-- Cada salto pasa por la misma política de hosts que la URL original (deepseek revalida; hermes re-chequea
+-- SSRF por hook): un 302 hacia 127.0.0.1 o la metadata de la nube NO se sigue.
+task get_following(url, headers, t)
+    require net
+    let cur be url
+    let hops be 0
+    let done be false
+    let r be nothing
+    let origin0 be ""
+    while not done
+        let p be u.parse(cur)
+        when not p["ok"]
+            give {"ok": false, "status": 0, "error": "redirect to an invalid URL (" + p["error"] + ")", "url": cur, "hops": hops}
+        when hops == 0
+            set origin0 to p["origin"]
+        otherwise
+            -- un salto a un host público siempre vale; a uno privado solo dentro del MISMO origen que el
+            -- usuario ya aprobó (127.0.0.1:3000 → 127.0.0.1:8080 sería otro servicio); metadata jamás
+            let cls be u.host_class(p["host"])
+            when cls == "blocked" or (cls == "private" and p["origin"] != origin0)
+                give {"ok": false, "status": 0, "error": "redirected to a " + cls + " host (" + p["host"] + ") — not followed automatically; if that is intended, fetch " + p["url"] + " directly", "url": url, "hops": hops}
+        set cur to p["url"]
+        set r to nothing
+        try
+            set r to http_get(cur, headers, nothing, t)
+        recover e
+            give {"ok": false, "status": 0, "error": text(e), "url": cur, "hops": hops}
+        when not contains(r, "status")
+            give {"ok": false, "status": 0, "error": "no response", "url": cur, "hops": hops}
+        let st be r["status"]
+        when st == 0
+            give {"ok": false, "status": 0, "error": (when contains(r, "error") then text(r["error"]) otherwise "connection failed"), "url": cur, "hops": hops}
+        let loc be when contains(r, "headers") then header(r["headers"], "location") otherwise ""
+        when (st == 301 or st == 302 or st == 303 or st == 307 or st == 308) and loc != ""
+            set hops to hops + 1
+            when hops > MAX_HOPS
+                give {"ok": false, "status": st, "error": "more than " + text(MAX_HOPS) + " redirects (last: " + loc + ")", "url": cur, "hops": hops}
+            let nxt be u.resolve(cur, loc)
+            when nxt == nothing
+                give {"ok": false, "status": st, "error": "redirect to an unusable Location: " + loc, "url": cur, "hops": hops}
+            set cur to nxt
+        otherwise
+            set done to true
+    let hdrs be when contains(r, "headers") then r["headers"] otherwise {}
+    give {"ok": true, "status": r["status"], "headers": hdrs, "content_type": header(hdrs, "content-type"), "body": (when contains(r, "body") then text(r["body"]) otherwise ""), "url": cur, "hops": hops}
+
+-- ---------- caché en disco (hermes extract cache): misma URL+formato dentro del TTL → sin red ----------
+task cache_paths(url, format)
+    let p be u.parse(url)
+    let host be when p["ok"] then p["host"] otherwise "page"
+    let digest be slice(decode(sha256(text(url) + " " + format), "hex"), 0, 10)
+    let base be CACHE_DIR + "/fetch-" + u.slug(host) + "-" + digest
+    give {"body": base + (when format == "html" then ".html" otherwise (when format == "text" then ".txt" otherwise ".md")), "meta": base + ".json"}
+
+task ttl()
+    require env("LAMPSON_*")
+    let e be env("LAMPSON_FETCH_TTL", "")
+    when e == ""
+        give DEFAULT_TTL
+    give floor(number(e))
+
+task read_cache(paths)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require time
+    let meta be nothing
+    try
+        set meta to json_decode(read_file(paths["meta"]))
+    recover e
+        give nothing
+    when meta == nothing
+        give nothing
+    when not contains(meta, "fetched_at")
+        give nothing
+    let age be now() - meta["fetched_at"]
+    when age > ttl() or age < 0
+        give nothing
+    let body be nothing
+    try
+        set body to read_file(paths["body"])
+    recover e
+        give nothing
+    set meta["body"] to body
+    set meta["age"] to age
+    give meta
+
+task write_cache(paths, meta, body)
+    require file(".lampson")
+    require file(".lampson/*")
+    try
+        write_file(paths["body"], body)
+        write_file(paths["meta"], json_encode(meta))
+    recover e
+        give false
+    give true
+
+-- ---------- la tool ----------
+
+task clamp(v, dflt, lo, hi)
+    when v == nothing
+        give dflt
+    let n be floor(number(text(v)))
+    when n < lo
+        give lo
+    when n > hi
+        give hi
+    give n
+
+export task tool(url, format, max_chars, timeout)
+    require net
+    require time
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    let fmt be when format == nothing then "markdown" otherwise lower(trim(text(format)))
+    when fmt != "markdown" and fmt != "text" and fmt != "html"
+        set fmt to "markdown"
+    let budget be clamp(max_chars, DEFAULT_CHARS, MIN_CHARS, MAX_CHARS)
+    let t be clamp(timeout, 30, 1, 90)
+    let plain be fmt == "text"
+    -- validación (defensa en profundidad: permission.syn ya deniega estas antes de llegar aquí)
+    let why be u.sensitive(url)
+    when why != nothing
+        give "ERROR: refused — the URL carries " + why + ". Secrets never travel in URLs (they end up in logs and third-party servers). Use bash with curl and a header if an authenticated request is really needed."
+    let p be u.parse(url)
+    when not p["ok"]
+        give "ERROR: " + p["error"]
+    when u.host_class(p["host"]) == "blocked"
+        give "ERROR: refused — " + p["host"] + " is a cloud metadata endpoint (instance credentials); never a legitimate target."
+    let paths be cache_paths(p["url"], fmt)
+    -- caché
+    let cached be read_cache(paths)
+    when cached != nothing
+        let cut be cut_output(cached["body"], budget, paths["body"])
+        give text(cached["header"]) + " · cached " + fmt_age(cached["age"]) + " ago (LAMPSON_FETCH_TTL=" + text(ttl()) + "s)" + (when text(cached["title"]) != "" then "\ntitle: " + text(cached["title"]) otherwise "") + "\n\n" + cut["text"]
+    -- red
+    let headers be {"User-Agent": UA, "Accept": accept_for(fmt), "Accept-Language": "en, es;q=0.9, *;q=0.5"}
+    let r be get_following(p["url"], headers, t)
+    when not r["ok"]
+        give "ERROR: fetch " + text(r["url"]) + ": " + text(r["error"]) + (when r["hops"] > 0 then " (after " + text(r["hops"]) + " redirect" + (when r["hops"] == 1 then "" otherwise "s") + ")" otherwise "")
+    let mime be mime_of(r["content_type"])
+    let kind be classify(mime)
+    let body be r["body"]
+    let source_cut be false
+    when length(body) > MAX_BODY
+        set body to slice(body, 0, MAX_BODY)
+        set source_cut to true
+    let status be r["status"]
+    let head be text(r["url"]) + " · HTTP " + text(status) + " · " + (when mime == "" then "no content-type" otherwise mime)
+    -- GitHub renderiza el README dentro de mucho cromo: el archivo crudo es 10× más barato
+    let hint be ""
+    when p["host"] == "github.com" or p["host"] == "www.github.com"
+        let segs be split(p["path"], "/")
+        when length(segs) >= 3 and status == 200
+            when length(segs) == 3 or (length(segs) == 4 and segs[3] == "")
+                set hint to "\ntip: the README and any file are cheaper raw: https://raw.githubusercontent.com/" + segs[1] + "/" + segs[2] + "/HEAD/README.md (or /HEAD/<path>)"
+            otherwise when length(segs) >= 6 and segs[3] == "blob"
+                set hint to "\ntip: raw file: https://raw.githubusercontent.com/" + segs[1] + "/" + segs[2] + "/" + join(slice(segs, 4, length(segs)), "/")
+    when kind == "binary"
+        give head + " · binary, " + fmt_chars(length(body)) + " — fetch cannot render " + mime + ". For a download use bash: curl -sSL -o <file> <url> (then a converter for PDFs); for an image ask the user to paste it."
+    let title be ""
+    let out be ""
+    let note be ""
+    when kind == "html" and fmt != "html"
+        set title to title_of(body)
+        -- el sitio ofrece Markdown en otra URL → esa vale más que cualquier conversión
+        let alt be markdown_alternate(body, r["url"])
+        let got_alt be false
+        when alt != nothing
+            let ap be u.parse(alt)
+            -- (`and` no cortocircuita: indexar un map sin la clave explota → whens anidados)
+            when ap["ok"]
+                when ap["origin"] == p["origin"]
+                    let ar be get_following(alt, {"User-Agent": UA, "Accept": "text/markdown, text/plain;q=0.9, */*;q=0.1"}, t)
+                    when ar["ok"]
+                        when ar["status"] == 200 and classify(mime_of(ar["content_type"])) == "text"
+                            set out to clean_markdown(ar["body"])
+                            set note to " → markdown alternate " + text(ar["url"])
+                            set got_alt to true
+        when not got_alt
+            set out to to_markdown(body, r["url"], plain)
+            set note to when plain then " → text" otherwise " → markdown"
+    otherwise when kind == "html"
+        set out to trim(body)
+    otherwise
+        -- texto/markdown/json servido tal cual (solo sin imágenes base64)
+        set out to clean_markdown(body)
+    when out == ""
+        set out to "(empty body)"
+    -- errores HTTP: el cuerpo suele explicar (404 de docs, 403 de Cloudflare) pero no vale 10k chars
+    let limit be when status >= 400 then MIN_CHARS otherwise budget
+    set head to head + note + " · " + fmt_chars(length(out)) + (when r["hops"] > 0 then " · " + text(r["hops"]) + " redirect" + (when r["hops"] == 1 then "" otherwise "s") otherwise "") + (when source_cut then " · source cut at 2 MB" otherwise "")
+    -- a disco siempre: paginar con read/grep y caché
+    write_cache(paths, {"url": p["url"], "final_url": r["url"], "status": status, "mime": mime, "title": title, "format": fmt, "header": head, "fetched_at": now(), "chars": length(out)}, out)
+    let cut be cut_output(out, limit, paths["body"])
+    give head + (when title != "" then "\ntitle: " + title otherwise "") + hint + "\n\n" + cut["text"]
+
+export let SPEC be {
+    "name": "fetch",
+    "description": "Fetch a web page or HTTP API response and return it as Markdown (default), plain text or raw HTML — scripts, styles, navigation and footers stripped, entities decoded, links made absolute, code blocks and tables kept. Use it instead of bash+curl whenever you will READ the result (docs, READMEs, issues, changelogs, API JSON): it asks the server for Markdown first and returns about a tenth of the characters of raw HTML. Follows up to 5 redirects. Pages longer than max_chars come back as head+tail with the full text saved to a file you can page with read (offset/limit) or grep — never fetch the same URL twice in a turn; repeats within 20 minutes are served from that file anyway. Binary content (images, PDF, archives) is reported, not returned. Private/loopback hosts (localhost, 10.x, 192.168.x, *.internal) ask the user first — fine for checking your own dev server; cloud metadata endpoints are always refused. Cite the URL when you use its content.",
+    "parameters": {"type": "object", "properties": {
+        "url": {"type": "string", "description": "Absolute http(s) URL"},
+        "format": {"type": "string", "enum": ["markdown", "text", "html"], "description": "markdown (default): HTML converted to Markdown, or the site's own Markdown when it offers one; text: plain text, no links or markup; html: the raw HTML (to see structure, selectors, meta tags)"},
+        "max_chars": {"type": "integer", "description": "Characters returned inline (default 10000, 2000-30000). Longer pages are head+tail truncated and saved whole to a file named in the footer."},
+        "timeout": {"type": "integer", "description": "Seconds (default 30, max 90)"}
+    }, "required": ["url"]}
+}

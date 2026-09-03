@@ -36,6 +36,7 @@ use "./lib/mcp.syn" as mcp
 use "./lib/plugins.syn" as plugins
 use "./lib/tools/todo.syn" as todo
 use "./lib/prompt.syn" as prompt
+use "./lib/fs.syn" as fs
 
 let REG be tools.registry()
 
@@ -788,3 +789,40 @@ test "workspaces: ensure_link crea el destino si falta y rehace un link colgante
     assert(file_exists(where_) and file_exists(base + "/target"), "link rehecho")
     write_file(where_ + "/proj/otra.md", "de nuevo")
     assert_eq(read_file(base + "/target/proj/otra.md"), "de nuevo")
+
+-- ---------- fs (explorador web): crear, renombrar, mover, copiar, borrar ----------
+test "fs: mkdir/create/rename/move/copy/delete dentro del workspace, sin pisar nada"
+    let D be T + "/fsx"
+    assert_eq(fs.mkdir(T, "fsx")["path"], D)
+    assert_eq(fs.create(D, "a.txt", "hola")["path"], D + "/a.txt")
+    assert_eq(read_file("workspace/" + D + "/a.txt"), "hola")
+    assert_error(() => fs.create(D, "a.txt", "otra"))
+    assert_error(() => fs.create(D, "x/y.txt", ""))
+    assert_error(() => fs.create(D, "..", ""))
+    assert_error(() => fs.mkdir(D, "con:dos"))
+    assert_eq(fs.rename(D + "/a.txt", "b.txt")["path"], D + "/b.txt")
+    assert(not file_exists("workspace/" + D + "/a.txt") and file_exists("workspace/" + D + "/b.txt"), "renombrado")
+    assert_eq(fs.rename(D + "/b.txt", "B.txt")["path"], D + "/B.txt")
+    assert(file_exists("workspace/" + D + "/B.txt"), "solo mayúsculas (FS case-insensitive)")
+    assert_eq(fs.mkdir(D, "sub")["path"], D + "/sub")
+    assert_error(() => fs.rename(D + "/B.txt", "sub"))
+    assert_eq(fs.move(D + "/B.txt", D + "/sub")["path"], D + "/sub/B.txt")
+    assert(file_exists("workspace/" + D + "/sub/B.txt"), "movido")
+    assert_error(() => fs.move(D + "/sub", D + "/sub"))
+    assert_error(() => fs.move(D + "/sub/B.txt", D + "/nope"))
+    assert_eq(fs.copy(D + "/sub/B.txt", nothing)["path"], D + "/sub/B copy.txt")
+    assert_eq(fs.copy(D + "/sub/B.txt", nothing)["path"], D + "/sub/B copy 2.txt")
+    assert_eq(fs.copy(D + "/sub", nothing)["path"], D + "/sub copy")
+    assert(file_exists("workspace/" + D + "/sub copy/B.txt"), "carpeta copiada con contenido")
+    assert_eq(fs.copy(D + "/sub/B.txt", D)["path"], D + "/B.txt")
+    assert_eq(fs.copy(D + "/sub/B.txt", D)["path"], D + "/B copy.txt")
+    assert_error(() => fs.copy(D + "/sub", D + "/sub"))
+    assert_eq(fs.remove(D + "/sub copy")["path"], D + "/sub copy")
+    assert(not file_exists("workspace/" + D + "/sub copy"), "borrado")
+    assert_error(() => fs.remove("."))
+    assert_error(() => fs.rename(".", "x"))
+    assert_error(() => fs.remove("../fuera"))
+    assert_error(() => fs.remove(D + "/no-existe"))
+    assert_error(() => fs.apply({"op": "zap", "path": D}))
+    assert_eq(fs.apply({"op": "delete", "path": D})["path"], D)
+    assert(not file_exists("workspace/" + D), "limpio")

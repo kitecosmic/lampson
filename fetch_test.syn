@@ -1,0 +1,198 @@
+-- fetch_test.syn — tool fetch (lib/tools/fetch.syn + url.syn + permission) contra tests/mock_http.syn (:8766).
+-- Corre con `synsema run` (arranca el mock con proc_spawn). Lo lanza tests/run.ps1 / run.sh.
+-- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
+require net
+require time
+require exec
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_*")
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file.read("plugins")
+require file.read("plugins/*")
+require file("memory")
+require file("memory/*")
+require file(".lampson")
+require file(".lampson/*")
+use "./lib/tools.syn" as tools
+use "./lib/tools/url.syn" as url
+use "./lib/tools/fetch.syn" as fetch
+use "./lib/permission.syn" as permission
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+task first_line(s)
+    give split(text(s), "\n")[0]
+
+-- ---------- puro: url.syn ----------
+print("url.syn")
+let p1 be url.parse("HTTPS://Docs.Synsema.com:8443/en/0.6.x/10-syntax?x=1&y=2#frag")
+check(p1["ok"] and p1["host"] == "docs.synsema.com" and p1["port"] == "8443" and p1["path"] == "/en/0.6.x/10-syntax" and p1["query"] == "x=1&y=2" and p1["origin"] == "https://docs.synsema.com:8443" and p1["dir"] == "/en/0.6.x/", "parse completo: " + json_encode(p1))
+check(url.parse("https:// docs.synsema.com/x")["ok"], "espacio tras el esquema se repara")
+check(not url.parse("ftp://x/y")["ok"] and not url.parse("docs.synsema.com/x")["ok"] and not url.parse("http://u:p@x/")["ok"] and not url.parse("")["ok"], "esquema/relativa/credenciales/vacía → error")
+check(url.parse("http://[::1]:8080/a")["host"] == "::1" and url.parse("http://[::1]:8080/a")["port"] == "8080", "IPv6 con puerto")
+check(url.host_class("docs.synsema.com") == "public" and url.host_class("8.8.8.8") == "public", "público")
+each h in ["localhost", "api.localhost", "127.0.0.1", "127.9.9.9", "10.0.0.1", "192.168.1.5", "172.16.0.1", "172.31.255.255", "100.64.0.1", "0.0.0.0", "::1", "fd12::1", "fe80::1", "::ffff:10.0.0.1", "db.internal", "printer.local", "2130706433", "0x7f000001", "0177.0.0.1"]
+    check(url.host_class(h) == "private", "privado: " + h)
+each h in ["169.254.169.254", "169.254.170.2", "metadata.google.internal", "::ffff:169.254.169.254", "100.100.100.200"]
+    check(url.host_class(h) == "blocked", "metadata bloqueada: " + h)
+check(url.host_class("172.32.0.1") == "public" and url.host_class("100.128.0.1") == "public", "bordes de rangos privados")
+check(url.sensitive("https://api.openai.com/v1?key=sk-abcdefghijklmnopqrstuvwxyz1234567890") != nothing, "sk- key en URL")
+check(url.sensitive("https://x.com/?api_key=abc") != nothing and url.sensitive("https://x.com/?token=abc") != nothing and url.sensitive("https://x.com/?access%5Ftoken=abc") != nothing, "params sensibles (incluso codificados)")
+check(url.sensitive("https://x.com/task-manager-app-v2-something-long") == nothing and url.sensitive("https://x.com/?token=") == nothing and url.sensitive("https://x.com/?q=code") == nothing, "sin falsos positivos: slug con 'sk-', param vacío, 'code'")
+check(url.sensitive("https://x.com/?t=ghp_abcdefghijklmnopqrstuvwxyz0123") != nothing and url.sensitive("https://x.com/?t=AKIAIOSFODNN7EXAMPLE") != nothing, "ghp_/AKIA")
+let base be "https://docs.synsema.com/en/0.6.x/10-syntax?v=1"
+check(url.resolve(base, "11-types") == "https://docs.synsema.com/en/0.6.x/11-types", "relativo: " + text(url.resolve(base, "11-types")))
+check(url.resolve(base, "../20-caps#x") == "https://docs.synsema.com/en/20-caps#x", "../ con fragmento: " + text(url.resolve(base, "../20-caps#x")))
+check(url.resolve(base, "/es/") == "https://docs.synsema.com/es/", "absoluto de raíz")
+check(url.resolve(base, "//cdn.x.com/a.js") == "https://cdn.x.com/a.js", "protocol-relative")
+check(url.resolve(base, "https://other.com/z") == "https://other.com/z", "absoluto se respeta")
+check(url.resolve(base, "#top") == nothing and url.resolve(base, "javascript:void(0)") == nothing and url.resolve(base, "mailto:a@b.c") == nothing, "no navegables → nothing")
+check(url.resolve(base, "?page=2") == "https://docs.synsema.com/en/0.6.x/10-syntax?page=2", "solo query")
+check(url.slug("Docs.Synsema.com:8443") == "docs.synsema.com-8443", "slug")
+
+-- ---------- puro: conversión ----------
+print("fetch.syn (puro)")
+check(fetch.decode_entities("&lt;a&gt; &amp;amp; &#65;&#x42; &eacute; &nbsp;x &unknown;") == "<a> &amp; AB é  x &unknown;", "entidades: " + fetch.decode_entities("&lt;a&gt; &amp;amp; &#65;&#x42; &eacute; &nbsp;x &unknown;"))
+check(fetch.decode_entities("&#128512;") == json_decode("\"\\ud83d\\ude00\""), "code point fuera del BMP (par sustituto)")
+check(fetch.classify("text/html") == "html" and fetch.classify("text/markdown") == "text" and fetch.classify("application/json") == "text" and fetch.classify("application/ld+json") == "text" and fetch.classify("image/png") == "binary" and fetch.classify("application/pdf") == "binary" and fetch.classify("") == "text", "classify")
+check(fetch.mime_of("Text/HTML; charset=UTF-8") == "text/html", "mime_of")
+check(fetch.fmt_chars(999) == "999 chars" and fetch.fmt_chars(12345) == "12.3k chars" and fetch.fmt_chars(1000) == "1.0k chars", "fmt_chars")
+let md be fetch.to_markdown("<p>a <b>b</b> <a href=\"/x\">y</a></p><h2>T</h2><ul><li>i</li></ul>", "https://h.com/d/p", false)
+check(md == "a **b** [y](https://h.com/x)\n\n## T\n\n- i", "markdown mínimo: " + json_encode(md))
+let tx be fetch.to_markdown("<p>a <b>b</b> <a href=\"/x\">y</a></p><h2>T</h2>", "https://h.com/d/p", true)
+check(tx == "a b y\n\nT", "texto plano: " + json_encode(tx))
+let cut be fetch.cut_output("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n", 20, "f.md")
+check(cut["truncated"] and contains(cut["text"], "[truncated]") and contains(cut["text"], "read path=\"f.md\" offset=") and starts_with(cut["text"], "l1\nl2\n") and ends_with(cut["text"], "─────────────────────"), "cut_output: " + json_encode(cut["text"]))
+check(not fetch.cut_output("corto", 20, "f.md")["truncated"], "sin recorte cuando entra")
+check(fetch.markdown_alternate("<head><link rel=\"alternate\" type=\"text/markdown\" href=\"/p.md\"><link rel=\"alternate\" hreflang=\"es\" href=\"/es\"></head>", "https://h.com/p") == "https://h.com/p.md", "link rel=alternate markdown (no hreflang)")
+check(fetch.markdown_alternate("<head><link rel=\"alternate\" hreflang=\"es\" href=\"/es\"></head>", "https://h.com/p") == nothing, "sin alternate markdown → nothing")
+check(fetch.clean_markdown("![logo](data:image/png;base64,AAAA) y ![ok](https://x/y.png)") == "[image: logo] y ![ok](https://x/y.png)", "base64 fuera, links de imagen reales quedan")
+
+-- ---------- mock http ----------
+print("mock http en :8766")
+let mock be proc_spawn("synsema", ["serve", "tests/mock_http.syn"], {"stderr": "merge"})
+let up be false
+let tries be 0
+while not up and tries < 40
+    sleep(0.25)
+    set tries to tries + 1
+    try
+        let r be http_get("http://127.0.0.1:8766/plain.txt")
+        set up to r["status"] > 0
+    recover err
+        set up to false
+check(up, "mock http arriba")
+
+let REG be tools.registry()
+let F be REG["fetch"]
+let B be "http://127.0.0.1:8766"
+-- la caché de una corrida anterior (20 min) serviría la conversión VIEJA: cada corrida usa URLs únicas
+let RUN be "?run=" + text(floor(now()))
+let STAMP be B + "/stamp" + RUN
+
+print("tool fetch")
+let r1 be call_tool(F, {"url": B + "/page.html" + RUN, "max_chars": 2000})
+check(starts_with(r1, B + "/page.html" + RUN + " · HTTP 200 · text/html → markdown · "), "cabecera: " + first_line(r1))
+check(contains(r1, "\ntitle: Página & título\n"), "título decodificado")
+check(contains(r1, "# Hola *mundo*"), "h1 con énfasis")
+check(not contains(r1, "home") and not contains(r1, "legal") and not contains(r1, "track()") and not contains(r1, "margin:0") and not contains(r1, "a.css"), "nav/footer/script/style/head fuera")
+check(not contains(r1, "cabecera del sitio") and not contains(r1, "Skip to content") and not contains(r1, "§"), "header, skip-link y ancla § fuera")
+check(contains(r1, "[un link relativo](" + B + "/sub/page2.html)"), "link relativo resuelto contra la URL final")
+check(contains(r1, "[uno absoluto](https://example.com/x)"), "link absoluto intacto")
+check(contains(r1, "Entidades: <tag> é é fin ©"), "entidades y nbsp: " + json_encode(capture(r1, "(Entidades:[^\n]*)")))
+check(contains(r1, "```syn\nlet x be 1\n  print(x && y)\n```"), "pre → bloque con lenguaje, indentación y entidades")
+check(contains(r1, "Inline `fetch()` ok."), "code inline")
+check(contains(r1, "- uno\n- dos *cursiva*"), "ul")
+check(contains(r1, "1. primero\n2. segundo"), "ol numerada")
+check(contains(r1, "| col a | col b |\n| --- | --- |\n| 1 | x \\| y |\n| 2 | [c](" + B + "/c) |"), "tabla GFM con pipes escapados y link")
+check(contains(r1, "> cita larga"), "blockquote")
+check(contains(r1, "[image: logo]") and not contains(r1, "base64") and not contains(r1, "x.png"), "img: alt como marca, sin base64 ni img sin alt")
+check(contains(r1, "\n---\n") and contains(r1, "**negrita**"), "hr y negrita")
+check(length(r1) < 1200, "página de prueba en menos de 1200 chars (html: " + text(length(r1)) + ")")
+
+-- caché
+let s1 be call_tool(F, {"url": STAMP})
+let s2 be call_tool(F, {"url": STAMP})
+check(not contains(s1, "· cached ") and contains(s2, "· cached "), "segunda llamada en el TTL viene de la caché")
+check(split(s1, "\n\n")[1] == split(s2, "\n\n")[1], "mismo cuerpo (mismo stamp): " + split(s2, "\n\n")[1])
+
+-- formatos
+let r3 be call_tool(F, {"url": B + "/page.html" + RUN, "format": "text"})
+check(contains(first_line(r3), "→ text") and not contains(r3, "# Hola") and contains(r3, "Hola mundo") and not contains(r3, "](http") and not contains(r3, "**"), "text: sin markdown ni links")
+let r4 be call_tool(F, {"url": B + "/page.html" + RUN, "format": "html"})
+check(contains(r4, "<title>Página &amp; título</title>") and contains(first_line(r4), "text/html · "), "html crudo")
+
+-- alternate y negociación
+let r5 be call_tool(F, {"url": B + "/alt.html" + RUN})
+check(contains(first_line(r5), "→ markdown alternate " + B + "/alt.md") and contains(r5, "markdown alternativo"), "link rel=alternate text/markdown seguido: " + first_line(r5))
+let r6 be call_tool(F, {"url": B + "/neg" + RUN})
+check(contains(first_line(r6), "text/markdown") and contains(r6, "# negociado") and not contains(r6, "→ markdown"), "Accept: text/markdown → el sitio sirve md directo: " + first_line(r6))
+let r6b be call_tool(F, {"url": B + "/neg" + RUN, "format": "html"})
+check(contains(r6b, "<h1>negociado</h1>"), "format=html pide html")
+
+-- redirects
+let r7 be call_tool(F, {"url": B + "/redir1" + RUN})
+check(starts_with(r7, B + "/page.html · HTTP 200") and contains(first_line(r7), "· 2 redirects"), "2 saltos (mismo origen) y URL final en la cabecera: " + first_line(r7))
+let r8 be call_tool(F, {"url": B + "/loop" + RUN})
+check(starts_with(r8, "ERROR: fetch") and contains(r8, "more than 5 redirects"), "bucle → error: " + first_line(r8))
+let r9 be call_tool(F, {"url": B + "/priv" + RUN})
+check(starts_with(r9, "ERROR: fetch") and contains(r9, "private host (10.0.0.1)"), "redirect a otro host privado no se sigue: " + first_line(r9))
+
+-- estados y tipos
+let r10 be call_tool(F, {"url": B + "/missing" + RUN})
+check(starts_with(r10, B + "/missing" + RUN + " · HTTP 404") and contains(r10, "# No está"), "404: status en cabecera, cuerpo convertido, sin prefijo ERROR")
+let r11 be call_tool(F, {"url": B + "/data.json" + RUN})
+check(contains(first_line(r11), "application/json") and (contains(r11, "\"a\":1") or contains(r11, "\"a\": 1")), "json tal cual: " + first_line(r11))
+let r12 be call_tool(F, {"url": B + "/bin" + RUN})
+check(contains(first_line(r12), "image/png · binary") and contains(r12, "curl -sSL -o"), "binario: reportado sin cuerpo")
+let r12b be call_tool(F, {"url": B + "/plain.txt" + RUN})
+check(contains(r12b, "texto plano"), "text/plain tal cual")
+
+-- página grande: cabeza+cola, archivo completo, paginable con read
+let r13 be call_tool(F, {"url": B + "/big.html" + RUN, "max_chars": 4000})
+check(contains(r13, "──── [truncated] ────") and contains(r13, "Full text saved to .lampson/spill/fetch-127.0.0.1-"), "truncado con pie: " + text(length(r13)))
+check(contains(r13, "Línea 1 de") and contains(r13, "Línea 500 de"), "cabeza y cola presentes")
+let pm be capture(r13, "saved to (\\S+) —")
+let path be when pm == nothing then "" otherwise pm[0]
+let full be call_tool(REG["read"], {"path": path, "offset": 1, "limit": 3})
+check(contains(full, "Línea 1 de"), "el archivo completo se lee con read: " + first_line(full))
+check(length(r13) < 4000 + 900, "salida acotada: " + text(length(r13)))
+let r13b be call_tool(F, {"url": B + "/big.html" + RUN, "max_chars": 4000})
+check(contains(r13b, "· cached ") and contains(r13b, "[truncated]"), "la grande cacheada se recorta igual")
+let r13c be call_tool(F, {"url": B + "/big.html" + RUN, "max_chars": 99999})
+check(length(r13c) < 30000 + 900 and contains(r13c, "[truncated]"), "max_chars se acota a 30000: " + text(length(r13c)))
+
+-- validaciones
+check(starts_with(call_tool(F, {"url": "ftp://x/y"}), "ERROR: unsupported scheme"), "esquema no http")
+check(contains(call_tool(F, {"url": "http://user:pw@x/"}), "credentials"), "credenciales en URL")
+check(contains(call_tool(F, {"url": "https://api.x.com/v1?api_key=abc"}), "refused — the URL carries a credential-like"), "api_key en query → refused")
+check(contains(call_tool(F, {"url": "http://169.254.169.254/latest/meta-data/"}), "cloud metadata"), "metadata → refused")
+check(starts_with(call_tool(F, {"url": "http://127.0.0.1:9/"}), "ERROR: fetch http://127.0.0.1:9/"), "conexión rechazada → ERROR con la URL")
+check(starts_with(call_tool(F, {"url": "no-es-url"}), "ERROR: not an absolute"), "url relativa → ERROR")
+
+-- permisos (permission.syn usa url.syn)
+print("permission.syn")
+check(permission.evaluate("fetch", {"url": "https://docs.synsema.com/"}, "ask")["decision"] == "allow", "público: allow")
+check(permission.evaluate("fetch", {"url": "http://localhost:3000/"}, "ask")["decision"] == "ask", "loopback: ask")
+check(permission.evaluate("fetch", {"url": "http://localhost:3000/"}, "yolo")["decision"] == "allow", "loopback en yolo: allow")
+check(permission.evaluate("fetch", {"url": "http://192.168.1.5/"}, "strict")["decision"] == "deny", "privado en strict: deny")
+check(permission.evaluate("fetch", {"url": "http://169.254.169.254/"}, "yolo")["decision"] == "deny", "metadata: deny incluso en yolo")
+check(permission.evaluate("fetch", {"url": "https://x.com/?token=abc"}, "yolo")["decision"] == "deny", "token en URL: deny incluso en yolo")
+check(permission.evaluate("fetch", {"url": "nada"}, "ask")["decision"] == "allow", "URL inválida: allow (la tool explica)")
+check(permission.describe_call("fetch", {"url": "https://x.com/a", "format": "text"}) == "fetch https://x.com/a (text)" and permission.describe_call("fetch", {"url": "https://x.com/a"}) == "fetch https://x.com/a", "describe_call")
+check(contains(tools.catalog_subset(["fetch"])[0]["description"], "Markdown"), "en el catálogo")
+
+proc_close(mock)
+when length(failures) > 0
+    raise(text(length(failures)) + " fallos en fetch_test")
+print("fetch_test: todo OK")

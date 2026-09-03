@@ -47,7 +47,7 @@ let REPEAT_HARD be 8
 -- seguidas sin ninguna acción (edit/write/bash/process/delegate/mcp). Visto 2026-08-28 con deepseek-v4-pro:
 -- 39 read/ls/find seguidos, 0 ediciones, 419k tokens, dos veces, con las reglas de prompt ignoradas.
 -- A la mitad del tope el resultado lleva un aviso; al tope, read/ls/find/grep se rechazan hasta que actúe.
-let READ_ONLY_TOOLS be ["read", "ls", "find", "grep"]
+let READ_ONLY_TOOLS be ["read", "ls", "find", "grep", "fetch"]
 let ACTION_TOOLS be ["edit", "write", "bash", "process", "delegate"]
 
 export task explore_cap()
@@ -67,7 +67,7 @@ export task explore_verdict(streak, name, cap)
     when n >= cap
         give {"streak": n, "note": "", "refuse": true}
     when n == floor(cap / 2)
-        give {"streak": n, "note": "\n\n[harness] " + text(n) + " read-only calls in a row without changing anything. You likely know enough: edit/write now, or run the relevant command. After " + text(cap) + " read-only calls in a row, read/ls/find/grep are refused until you act. If the codebase is genuinely too big, delegate ONE focused question to an `explore` sub-agent instead of reading everything yourself.", "refuse": false}
+        give {"streak": n, "note": "\n\n[harness] " + text(n) + " read-only calls in a row without changing anything. You likely know enough: edit/write now, or run the relevant command. After " + text(cap) + " read-only calls in a row, read/ls/find/grep/fetch are refused until you act. If the codebase is genuinely too big, delegate ONE focused question to an `explore` sub-agent instead of reading everything yourself.", "refuse": false}
     give {"streak": n, "note": "", "refuse": false}
 
 -- JSON canónico (claves ordenadas en profundidad): reordenar propiedades no engaña al detector
@@ -98,7 +98,8 @@ task safe_id(id, step)
 export task spill(name, id, out)
     require file(".lampson")
     require file(".lampson/*")
-    when name == "read" or length(out) <= SPILL_CAP
+    -- read y fetch se recortan solas (fetch: cabeza+cola con el texto completo ya en .lampson/spill)
+    when name == "read" or name == "fetch" or length(out) <= SPILL_CAP
         give out
     -- el informe de los subagentes es el entregable: no se manda a disco (hasta 60k)
     when name == "delegate" and length(out) <= SPILL_CAP * 6
@@ -394,7 +395,7 @@ export task run_turn(cfg, messages, opts, on_event)
                 set out to "ERROR: you already called " + tc["name"] + " with these exact arguments " + text(repeats) + " times in a row. The result will not change; try a different approach or report the problem."
                 emit(on_event, "tool_denied", {"call": tc, "reason": "repeated call (" + text(repeats) + "x)"}, tag)
             otherwise when ex["refuse"]
-                set out to "ERROR: exploration cap reached — " + text(explore_streak) + " read-only calls in a row (read/ls/find/grep) without a single change. Reading more will not help. Do one of: (1) edit/write the files you already read; (2) run a command (bash/process) that moves the task; (3) delegate ONE focused question to an `explore` sub-agent; (4) tell the user what you need. read/ls/find/grep are refused until you do."
+                set out to "ERROR: exploration cap reached — " + text(explore_streak) + " read-only calls in a row (read/ls/find/grep) without a single change. Reading more will not help. Do one of: (1) edit/write the files you already read; (2) run a command (bash/process) that moves the task; (3) delegate ONE focused question to an `explore` sub-agent; (4) tell the user what you need. read/ls/find/grep/fetch are refused until you do."
                 emit(on_event, "tool_denied", {"call": tc, "reason": "exploration cap (" + text(explore_streak) + " read-only calls without acting)"}, tag)
             otherwise when contains(READ_ONLY_TOOLS, tc["name"]) and reads_total >= turn_cap
                 set out to "ERROR: this turn already made " + text(reads_total) + " read-only calls (limit " + text(turn_cap) + "). Everything you read is in your context. Act on it now (edit/write/run), delegate ONE focused question to an `explore` sub-agent, or report to the user."

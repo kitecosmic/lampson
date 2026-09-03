@@ -19,6 +19,7 @@ use "./tools/ls.syn" as t_ls
 use "./tools/find.syn" as t_find
 use "./tools/grep.syn" as t_grep
 use "./tools/bash.syn" as t_bash
+use "./tools/fetch.syn" as t_fetch
 use "./tools/skill.syn" as t_skill
 use "./tools/process.syn" as t_process
 use "./tools/memo.syn" as t_memo
@@ -256,6 +257,7 @@ export task registry()
         "find": t_find.tool,
         "grep": t_grep.tool,
         "bash": t_bash.tool,
+        "fetch": t_fetch.tool,
         "process": t_process.tool,
         "memory": t_memo.tool,
         "todo": t_todo.tool,
@@ -266,7 +268,7 @@ export task registry()
         "schedule": schedule_tool
     }
 
-export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, PLUGIN_SPEC, SCHEDULE_SPEC]
+export let CATALOG be [t_read.SPEC, t_write.SPEC, t_edit.SPEC, t_ls.SPEC, t_find.SPEC, t_grep.SPEC, LSP_SPEC, t_fetch.SPEC, t_bash.SPEC, t_process.SPEC, t_memo.SPEC, t_todo.SPEC, t_skill.SPEC, MCP_SPEC, PLUGIN_SPEC, SCHEDULE_SPEC]
 
 -- Subconjuntos (para perfiles de agente): registry/catálogo filtrados por nombre.
 export task registry_subset(names)

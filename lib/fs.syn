@@ -1,0 +1,226 @@
+-- lib/fs.syn — operaciones de archivos del explorador web: crear, renombrar, mover, copiar, borrar
+--
+-- El runtime tiene write_file/list_dir/file_info pero NO rename/delete/copy/mkdir (v0.6.14), así que mover,
+-- copiar y borrar corren por el shell POSIX (Git Bash en Windows), igual que plugins.remove. Todo path viene
+-- del navegador y pasa por common.ws(): relativo al workspace, sin `..` ni absolutos (raise instructivo).
+-- Reglas al estilo VS Code: nunca pisar un destino existente; duplicar = "<nombre> copy<.ext>", luego
+-- "<nombre> copy 2<.ext>"…; una carpeta no se mueve/copia dentro de sí misma; la raíz no se toca.
+use "./tools/common.syn" as c
+
+task sh_quote(s)
+    give "'" + replace_text(s, "'", "'\\''") + "'"
+
+-- shell POSIX aunque LAMPSON_SHELL apunte a cmd: mv/cp/rm/mkdir son de Git Bash
+task shell()
+    require env("LAMPSON_*")
+    require env("OS")
+    let is_win be env("OS", "") == "Windows_NT"
+    let sh be env("LAMPSON_SHELL", when is_win then "C:\\Program Files\\Git\\bin\\bash.exe" otherwise "bash")
+    when is_win and not c.ends_with(lower(sh), "bash.exe")
+        set sh to "C:\\Program Files\\Git\\bin\\bash.exe"
+    give sh
+
+-- corre un comando con cwd = workspace; error legible si falla
+task sh(cmd)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    let r be run(shell(), ["-c", cmd], 30, {"cwd": c.ROOT})
+    when r["exit_code"] != 0
+        let err be trim(text(r["stderr"]))
+        raise(when err == "" then "command failed: " + cmd otherwise err)
+    give true
+
+-- path del navegador → {rel (como lo ve el modelo, "." = raíz), real ("workspace/…"), info}
+task target(path)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let real be c.ws(path)
+    give {"rel": c.unws(real), "real": real, "info": file_info(real)}
+
+task parent_of(rel)
+    when not contains(rel, "/")
+        give "."
+    let parts be split(rel, "/")
+    give join(slice(parts, 0, length(parts) - 1), "/")
+
+task base_of(rel)
+    let parts be split(rel, "/")
+    give parts[length(parts) - 1]
+
+task join_rel(dir, name)
+    give when dir == "." or dir == "" then name otherwise dir + "/" + name
+
+task check_name(name)
+    let n be trim(text(name))
+    when n == "" or n == "." or n == ".." or contains(n, "/") or contains(n, "\\")
+        raise("invalid name \"" + text(name) + "\": one path segment, without / or \\")
+    when length(find_all(n, "[<>:\"|?*]")) > 0
+        raise("invalid name \"" + n + "\": < > : \" | ? * are not allowed in file names")
+    give n
+
+task must_exist(t)
+    when not t["info"]["exists"]
+        raise("\"" + t["rel"] + "\" does not exist")
+
+task must_not_exist(rel)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    when file_exists(c.ROOT + "/" + rel)
+        raise("\"" + rel + "\" already exists")
+
+-- ¿`path` es `dir` o está dentro de `dir`?
+task inside(dir, path)
+    when dir == "."
+        give true
+    give path == dir or starts_with(path, dir + "/")
+
+task must_be_dir(rel, info)
+    when not info["exists"]
+        raise("\"" + rel + "\" does not exist")
+    when not info["is_dir"]
+        raise("\"" + rel + "\" is not a folder")
+
+export task mkdir(dir, name)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(dir)
+    let rel be join_rel(t["rel"], check_name(name))
+    must_not_exist(rel)
+    sh("mkdir -p " + sh_quote(rel))
+    give {"path": rel, "is_dir": true}
+
+export task create(dir, name, content)
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(dir)
+    let rel be join_rel(t["rel"], check_name(name))
+    must_not_exist(rel)
+    write_file(c.ROOT + "/" + rel, when content == nothing then "" otherwise text(content))
+    give {"path": rel, "is_dir": false}
+
+export task rename(path, name)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(path)
+    must_exist(t)
+    when t["rel"] == "."
+        raise("the workspace root cannot be renamed")
+    let rel be join_rel(parent_of(t["rel"]), check_name(name))
+    when rel == t["rel"]
+        give {"path": rel, "is_dir": t["info"]["is_dir"]}
+    -- solo cambian mayúsculas: en un FS case-insensitive el destino "existe" → pasar por un temporal
+    when lower(rel) == lower(t["rel"])
+        let tmp be rel + ".lampson-rename-tmp"
+        sh("mv " + sh_quote(t["rel"]) + " " + sh_quote(tmp) + " && mv " + sh_quote(tmp) + " " + sh_quote(rel))
+        give {"path": rel, "is_dir": t["info"]["is_dir"]}
+    must_not_exist(rel)
+    sh("mv " + sh_quote(t["rel"]) + " " + sh_quote(rel))
+    give {"path": rel, "is_dir": t["info"]["is_dir"]}
+
+export task move(path, to_dir)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(path)
+    must_exist(t)
+    when t["rel"] == "."
+        raise("the workspace root cannot be moved")
+    let d be target(to_dir)
+    must_be_dir(d["rel"], d["info"])
+    when t["info"]["is_dir"] and inside(t["rel"], d["rel"])
+        raise("cannot move a folder into itself")
+    let rel be join_rel(d["rel"], base_of(t["rel"]))
+    when rel == t["rel"]
+        give {"path": rel, "is_dir": t["info"]["is_dir"]}
+    must_not_exist(rel)
+    sh("mv " + sh_quote(t["rel"]) + " " + sh_quote(rel))
+    give {"path": rel, "is_dir": t["info"]["is_dir"]}
+
+-- "b.ts" en `dir` → "b copy.ts", "b copy 2.ts"…; carpetas y dotfiles: "sub copy", ".env copy"
+task copy_name(dir, base)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let stem be base
+    let ext be ""
+    let parts be split(base, ".")
+    when length(parts) > 1 and parts[0] != ""
+        set ext to "." + parts[length(parts) - 1]
+        set stem to slice(base, 0, length(base) - length(ext))
+    let n be 1
+    let cand be stem + " copy" + ext
+    while file_exists(c.ROOT + "/" + join_rel(dir, cand)) and n < 100
+        set n to n + 1
+        set cand to stem + " copy " + text(n) + ext
+    give cand
+
+-- to_dir = nothing → duplicar al lado; otra carpeta → copiar ahí (mismo nombre, o "copy" si ya hay uno)
+export task copy(path, to_dir)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(path)
+    must_exist(t)
+    when t["rel"] == "."
+        raise("the workspace root cannot be copied")
+    let dir be when to_dir == nothing then parent_of(t["rel"]) otherwise target(to_dir)["rel"]
+    must_be_dir(dir, file_info(c.ws(dir)))
+    when t["info"]["is_dir"] and inside(t["rel"], dir)
+        raise("cannot copy a folder into itself")
+    let base be base_of(t["rel"])
+    let rel be join_rel(dir, base)
+    when rel == t["rel"] or file_exists(c.ROOT + "/" + rel)
+        set rel to join_rel(dir, copy_name(dir, base))
+    sh("cp -r " + sh_quote(t["rel"]) + " " + sh_quote(rel))
+    give {"path": rel, "is_dir": t["info"]["is_dir"]}
+
+export task remove(path)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(path)
+    must_exist(t)
+    when t["rel"] == "."
+        raise("the workspace root cannot be deleted")
+    when t["rel"] == ".git" or t["rel"] == ".lampson"
+        raise("\"" + t["rel"] + "\" is not deleted from the explorer")
+    sh("rm -rf " + sh_quote(t["rel"]))
+    give {"path": t["rel"], "is_dir": t["info"]["is_dir"]}
+
+-- POST /api/fs: {op, path, name?, to?, content?} → {path, is_dir}
+export task apply(b)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    require file("workspace")
+    require file("workspace/*")
+    let op be when contains(b, "op") then lower(text(b["op"])) otherwise ""
+    let path be when contains(b, "path") then text(b["path"]) otherwise "."
+    let name be when contains(b, "name") then b["name"] otherwise nothing
+    -- (`to` es palabra reservada: `set x to`)
+    let dest be when contains(b, "to") then text(b["to"]) otherwise nothing
+    when op == "mkdir"
+        give mkdir(path, name)
+    when op == "create"
+        give create(path, name, when contains(b, "content") then b["content"] otherwise "")
+    when op == "rename"
+        give rename(path, name)
+    when op == "move"
+        give move(path, when dest == nothing then "." otherwise dest)
+    when op == "copy"
+        give copy(path, dest)
+    when op == "delete"
+        give remove(path)
+    raise("unknown op '" + op + "' (mkdir, create, rename, move, copy, delete)")

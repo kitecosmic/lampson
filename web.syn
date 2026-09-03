@@ -50,6 +50,7 @@ use "./lib/loop.syn" as loop
 use "./lib/session.syn" as session
 use "./lib/agents.syn" as agents
 use "./lib/tree.syn" as tree
+use "./lib/fs.syn" as fs
 use "./lib/git.syn" as git
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/memo.syn" as memo
@@ -193,7 +194,10 @@ serve on 8080
         give {"result": session.delete(text(b["id"]))}
 
     route "GET /w/:slug/api/tree" requires auth
-        give tree.tree(6)
+        let t be tree.tree(6)
+        -- ruta real del proyecto (lampson.ps1/.sh exportan LAMPSON_WORKSPACE): «copiar ruta absoluta» en el explorador
+        set t["root"] to env("LAMPSON_WORKSPACE", "")
+        give t
 
     -- Terminales del navegador. El pty NO vive en este handler: vive en un agente supervisor
     -- (lib/term.syn), y este socket es un puente por el bus. Así la shell sobrevive a un F5 —
@@ -439,6 +443,16 @@ serve on 8080
         when not contains(query, "path")
             give fail(400, "path required")
         give tree.file_content(query.path)
+
+    -- explorador: nuevo archivo/carpeta, renombrar, mover, copiar/duplicar, borrar (lib/fs.syn; solo dentro
+    -- del workspace, nunca pisa un destino). {op, path, name?, to?, content?} → {ok, result: {path, is_dir}}
+    route "POST /w/:slug/api/fs" requires auth
+        expect body {op: text, path: text}
+        let b be json of request
+        try
+            give {"ok": true, "result": fs.apply(b)}
+        recover err
+            give fail(400, text(err))
 
     -- configuración general (rueda de la UI): zona horaria, URL pública, webhook… → .lampson/config.json
     route "GET /w/:slug/api/settings/values" requires auth

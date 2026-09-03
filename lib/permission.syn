@@ -9,6 +9,8 @@
 --
 -- Modos (LAMPSON_PERMISSION): "ask" (default) | "yolo" (dangerous → allow) | "strict" (dangerous → deny)
 
+use "./tools/url.syn" as u
+
 -- Tier 1: nunca. Coincidencia por substring, case-insensitive.
 -- (el comando se evalúa con un espacio final añadido, así "rm -rf / " matchea la raíz pero NO "rm -rf /tmp/x")
 export let HARDLINE be [
@@ -69,6 +71,27 @@ export task evaluate(name, args, mode)
                 give {"decision": "deny", "reason": "strict mode (dangerous: " + danger + ")"}
             give {"decision": "ask", "reason": "dangerous pattern: " + danger}
         give {"decision": "allow", "reason": "command"}
+    when name == "fetch"
+        -- política de hosts de url.syn (hermes url_safety): secretos en la URL y metadata de la nube se
+        -- deniegan SIEMPRE (incluso en yolo); hosts privados/loopback (el dev server del usuario) piden;
+        -- lo público se permite. Una URL inválida se permite: la tool devuelve el error explicado.
+        let furl be when contains(args, "url") then text(args["url"]) otherwise ""
+        let why be u.sensitive(furl)
+        when why != nothing
+            give {"decision": "deny", "reason": "the URL carries " + why + " — secrets never travel in URLs"}
+        let fp be u.parse(furl)
+        when not fp["ok"]
+            give {"decision": "allow", "reason": "invalid URL (the tool explains)"}
+        let cls be u.host_class(fp["host"])
+        when cls == "blocked"
+            give {"decision": "deny", "reason": "cloud metadata endpoint " + fp["host"]}
+        when cls == "private"
+            when mode == "yolo"
+                give {"decision": "allow", "reason": "yolo mode (private host " + fp["host"] + ")"}
+            when mode == "strict"
+                give {"decision": "deny", "reason": "strict mode (private host " + fp["host"] + ")"}
+            give {"decision": "ask", "reason": "fetches a private/loopback host (" + fp["origin"] + ")"}
+        give {"decision": "allow", "reason": "public URL"}
     when name == "write" or name == "edit"
         -- el scope file("./*") ya impide salir del workspace; aquí solo miramos secretos obvios
         let p be when contains(args, "path") then lower(replace_text(text(args["path"]), "\\", "/")) otherwise ""
@@ -167,6 +190,9 @@ export task describe_call(name, args)
         give "skill install " + text(args["source"]) + " --skill " + text(args["name"]) + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"
     when name == "bash"
         give "$ " + one_line(when contains(args, "command") then text(args["command"]) otherwise "", 160)
+    when name == "fetch"
+        let ffmt be arg(args, "format", "markdown")
+        give "fetch " + one_line(arg(args, "url", "?"), 140) + (when ffmt != "markdown" then " (" + ffmt + ")" otherwise "")
     -- lectura/búsqueda: como lo escribiría un humano en la shell
     when name == "read"
         let rng be when contains(args, "offset") or contains(args, "limit") then "  (" + (when contains(args, "offset") then "desde " + text(floor(number(text(args["offset"])))) otherwise "") + (when contains(args, "limit") then " " + text(floor(number(text(args["limit"])))) + " líneas" otherwise "") + ")" otherwise ""

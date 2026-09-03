@@ -1,0 +1,220 @@
+-- lib/tools/url.syn — URLs para la tool fetch y para permission.syn (puro, sin capacidades)
+--
+--   parse(url)        → {ok, error?, url, scheme, host, port, path, query, origin, dir}
+--   host_class(host)  → "public" | "private" | "blocked"
+--   sensitive(url)    → motivo (texto) si la URL lleva una credencial, o nothing
+--   resolve(base, href) → URL absoluta de un href (relativo o no), o nothing si no es navegable (#, javascript:)
+--
+-- Política de hosts (tomada de hermes url_safety.py, sin resolver DNS: el runtime no expone un resolver):
+--   * "blocked": endpoints de metadata de la nube (169.254.169.254 y familia, metadata.google.internal).
+--     Nunca son un destino legítimo: se deniegan SIEMPRE, incluso en yolo.
+--   * "private": loopback, redes privadas (10/8, 172.16/12, 192.168/16, CGNAT 100.64/10), link-local,
+--     localhost y sufijos internos. Legítimo para mirar el propio dev server → PIDE aprobación (yolo permite,
+--     strict deniega). Un host numérico ambiguo (entero, hex, octal) cae aquí también.
+--   * "public": el resto. Límite conocido: sin DNS no se detecta un nombre público que resuelve a una IP
+--     privada (DNS rebinding); hermes lo cubre con un resolver, aquí queda documentado.
+
+let SENSITIVE_PARAMS be ["access_token", "api_key", "apikey", "auth_token", "authorization", "awsaccesskeyid", "client_secret", "credential", "credentials", "jwt", "password", "passwd", "secret", "session_id", "signature", "token", "private_key", "x_amz_security_token", "x_amz_signature", "x-amz-security-token", "x-amz-signature"]
+let SECRET_RE be "(?i)(\\bsk-(ant-|proj-)?[a-z0-9_-]{24,}|\\bghp_[a-z0-9]{20,}|\\bgithub_pat_[a-z0-9_]{20,}|\\bgho_[a-z0-9]{20,}|\\bglpat-[a-z0-9_-]{16,}|\\bxox[abprs]-[a-z0-9-]{10,}|\\bakia[0-9a-z]{16}\\b|\\baiza[0-9a-z_-]{30,}|-----begin [a-z ]*private key|\\beyj[a-z0-9_-]{20,}\\.eyj[a-z0-9_-]{20,})"
+
+task fail(msg)
+    give {"ok": false, "error": msg}
+
+export task parse(raw)
+    when raw == nothing
+        give fail("missing URL")
+    let u be trim(text(raw))
+    -- "https:// host" — el modelo a veces mete un espacio tras el esquema (hermes normalize_url_for_request)
+    set u to replace_re(u, "^([A-Za-z][A-Za-z0-9+.-]*://)\\s+", "\\1")
+    when u == ""
+        give fail("missing URL")
+    when length(u) > 2048
+        give fail("URL longer than 2048 chars")
+    when contains(u, " ") or contains(u, "\n") or contains(u, "\t")
+        give fail("URL contains whitespace: " + u)
+    let sp be split(u, "://")
+    when length(sp) < 2
+        give fail("not an absolute http(s) URL: " + u)
+    let scheme be lower(sp[0])
+    when scheme != "http" and scheme != "https"
+        give fail("unsupported scheme '" + scheme + "' (only http and https)")
+    let rest be join(slice(sp, 1, length(sp)), "://")
+    -- fragmento y query
+    let frag_sp be split(rest, "#")
+    set rest to frag_sp[0]
+    let q_sp be split(rest, "?")
+    let query be when length(q_sp) > 1 then join(slice(q_sp, 1, length(q_sp)), "?") otherwise ""
+    set rest to q_sp[0]
+    -- autoridad y path
+    let slash_sp be split(rest, "/")
+    let authority be slash_sp[0]
+    let path be when length(slash_sp) > 1 then "/" + join(slice(slash_sp, 1, length(slash_sp)), "/") otherwise "/"
+    when contains(authority, "@")
+        give fail("credentials in the URL are not allowed")
+    when authority == ""
+        give fail("missing host: " + u)
+    let host be lower(authority)
+    let port be ""
+    when starts_with(host, "[")
+        -- IPv6 literal: [::1]:8080
+        let close be split(host, "]")
+        set host to slice(close[0], 1, length(close[0]))
+        when length(close) > 1 and starts_with(close[1], ":")
+            set port to slice(close[1], 1, length(close[1]))
+    otherwise
+        let hp be split(host, ":")
+        when length(hp) > 2
+            give fail("malformed host: " + authority)
+        set host to hp[0]
+        when length(hp) == 2
+            set port to hp[1]
+    when port != "" and not matches(port, "[0-9]{1,5}")
+        give fail("malformed port: " + port)
+    -- "example.com." (FQDN con punto final) ≡ "example.com"
+    while ends_with(host, ".")
+        set host to slice(host, 0, length(host) - 1)
+    when host == ""
+        give fail("missing host: " + u)
+    let origin be scheme + "://" + host + (when port != "" then ":" + port otherwise "")
+    let dir_parts be split(path, "/")
+    let dir be join(slice(dir_parts, 0, length(dir_parts) - 1), "/") + "/"
+    give {"ok": true, "url": origin + path + (when query != "" then "?" + query otherwise ""), "scheme": scheme, "host": host, "port": port, "path": path, "query": query, "origin": origin, "dir": dir}
+
+-- octetos de una IPv4 en notación decimal con puntos, o nothing
+task ipv4_octets(host)
+    when not matches(host, "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}")
+        give nothing
+    let out be []
+    each p in split(host, ".")
+        let n be floor(number(p))
+        when n > 255
+            give nothing
+        set out to append(out, n)
+    give out
+
+task ipv4_class(o)
+    let a be o[0]
+    let b be o[1]
+    when a == 169 and b == 254
+        give "blocked"
+    when a == 100 and b == 100 and o[2] == 100 and o[3] == 200
+        give "blocked"
+    when a == 127 or a == 10 or a == 0
+        give "private"
+    when a == 192 and b == 168
+        give "private"
+    when a == 172 and b >= 16 and b <= 31
+        give "private"
+    when a == 100 and b >= 64 and b <= 127
+        give "private"
+    when a >= 224
+        give "private"
+    give "public"
+
+export task host_class(host)
+    let h be lower(text(host))
+    when h == "metadata.google.internal" or h == "metadata.goog" or h == "fd00:ec2::254"
+        give "blocked"
+    let o be ipv4_octets(h)
+    when o != nothing
+        give ipv4_class(o)
+    -- IPv6: loopback, unspecified, ULA fc00::/7, link-local fe80::/10, IPv4 mapeadas ::ffff:a.b.c.d
+    when contains(h, ":")
+        when h == "::1" or h == "::"
+            give "private"
+        when starts_with(h, "::ffff:")
+            let inner be ipv4_octets(slice(h, 7, length(h)))
+            give when inner != nothing then ipv4_class(inner) otherwise "private"
+        when starts_with(h, "fc") or starts_with(h, "fd") or starts_with(h, "fe8") or starts_with(h, "fe9") or starts_with(h, "fea") or starts_with(h, "feb")
+            give "private"
+        give "public"
+    when h == "localhost" or ends_with(h, ".localhost") or ends_with(h, ".internal") or ends_with(h, ".local") or ends_with(h, ".home.arpa") or ends_with(h, ".lan")
+        give "private"
+    -- formas numéricas ambiguas (2130706433, 0x7f000001, 0177.0.0.1): clásicos de bypass → tratar como privado
+    when matches(h, "[0-9]+") or matches(h, "0x[0-9a-f]+") or matches(h, "[0-9x.]+")
+        give "private"
+    give "public"
+
+-- %XX → carácter (para inspeccionar una URL con secretos codificados)
+task percent_decode(s)
+    let out be s
+    each m in find_all(s, "%[0-9A-Fa-f]{2}")
+        let ch be nothing
+        try
+            set ch to json_decode("\"\\u00" + slice(m, 1, 3) + "\"")
+        recover e
+            set ch to nothing
+        when ch != nothing
+            set out to replace_text(out, m, ch)
+    give out
+
+export task sensitive(raw)
+    when raw == nothing
+        give nothing
+    let u be text(raw)
+    let decoded be percent_decode(u)
+    when length(find_all(u, SECRET_RE)) > 0 or length(find_all(decoded, SECRET_RE)) > 0
+        give "an API key or token"
+    let p be parse(u)
+    when not p["ok"]
+        give nothing
+    when p["query"] == ""
+        give nothing
+    each pair in split(p["query"], "&")
+        let kv be split(pair, "=")
+        let k be lower(trim(percent_decode(kv[0])))
+        let v be when length(kv) > 1 then join(slice(kv, 1, length(kv)), "=") otherwise ""
+        when v != "" and contains(SENSITIVE_PARAMS, k)
+            give "a credential-like query parameter (" + kv[0] + ")"
+    give nothing
+
+-- "/a/b/../c/./d" → "/a/c/d"
+task normalize_path(path)
+    let out be []
+    each seg in split(path, "/")
+        when seg == ".."
+            when length(out) > 0
+                set out to slice(out, 0, length(out) - 1)
+        otherwise when seg != "." and seg != ""
+            set out to append(out, seg)
+    give "/" + join(out, "/") + (when ends_with(path, "/") and length(out) > 0 then "/" otherwise "")
+
+export task resolve(base, href)
+    when href == nothing
+        give nothing
+    let h be trim(text(href))
+    let lh be lower(h)
+    when h == "" or starts_with(h, "#") or starts_with(lh, "javascript:") or starts_with(lh, "data:") or starts_with(lh, "mailto:") or starts_with(lh, "tel:")
+        give nothing
+    when matches(h, "[A-Za-z][A-Za-z0-9+.-]*:.*")
+        give h
+    let b be parse(base)
+    when not b["ok"]
+        give h
+    when starts_with(h, "//")
+        give b["scheme"] + ":" + h
+    -- separar query/fragmento del path relativo para normalizar solo el path
+    let tail be ""
+    let core be h
+    let qi be split(h, "?")
+    let fi be split(h, "#")
+    when length(qi) > 1
+        set core to qi[0]
+        set tail to "?" + join(slice(qi, 1, length(qi)), "?")
+    otherwise when length(fi) > 1
+        set core to fi[0]
+        set tail to "#" + join(slice(fi, 1, length(fi)), "#")
+    when core == ""
+        give b["origin"] + b["path"] + tail
+    when starts_with(core, "/")
+        give b["origin"] + normalize_path(core) + tail
+    give b["origin"] + normalize_path(b["dir"] + core) + tail
+
+-- nombre de archivo estable para la caché/spill de una URL: fetch-<host>-<digest>
+export task slug(host)
+    let s be replace_re(lower(text(host)), "[^a-z0-9._-]", "-")
+    when length(s) > 60
+        set s to slice(s, 0, 60)
+    when s == ""
+        give "page"
+    give s

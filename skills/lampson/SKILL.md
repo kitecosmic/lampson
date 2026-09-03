@@ -25,6 +25,14 @@ description: How this harness works — tools, workspace mount, permissions, age
   more context. `replace_all=true` for intentional multi-replace.
 - `read` returns up to 2000 lines; use `offset`/`limit` for big files. Outputs > 30k chars are truncated.
 - `find` is a simple glob (`*.ts`, `test_*`, `*config*`), `grep` is regex by default (`regex=false` for literals).
+- `fetch(url)` returns a web page as Markdown (about a tenth of the characters of its HTML: scripts, styles,
+  nav and footers stripped, links absolute, code blocks and tables kept; a site that serves Markdown is
+  taken as is). Follows up to 5 redirects. Long pages come back head+tail and the full text is saved to
+  `.lampson/spill/fetch-<host>-<id>.md` — page it with `read offset/limit` or `grep`, never re-fetch; the
+  same URL within 20 minutes is served from that file. `format=text` for prose without links, `format=html`
+  to see the raw markup. localhost / private hosts ask the user (good for checking your own dev server);
+  cloud metadata endpoints and URLs carrying tokens are refused. Binary content (images, PDF) is reported,
+  not returned — use `bash` with `curl -o` for downloads.
 - `lsp(op=symbols, path)` is the cheapest way to understand a big file: every function/class/variable
   with its line range — then `read` only the range you need. `definition` / `references` / `hover` /
   `implementation` take 1-based `line` + `character` ON the identifier. If no server is configured for

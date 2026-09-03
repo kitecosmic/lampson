@@ -82,3 +82,24 @@
 /* puertos ocupados por lampson: visibles pero sin link ni ✕ */
 .p .port.own { color:var(--ink-3); font-weight:400; }
 .p.own .cm { color:var(--ink-3); }
+
+/* explorador de archivos: selección, portapapeles, arrastre, renombrar en línea y menú contextual */
+#tree:focus { outline:none; }
+.row.sel { background:var(--paper-2); }
+.row.cut { opacity:.55; }
+.row.dragging { opacity:.4; }
+.row.drop, #tree.drop { background:var(--accent-bg); border-left-color:var(--accent); }
+.row.flash { background:var(--accent-bg); transition:background .7s; }
+.row input.rn { flex:1; min-width:0; font:inherit; color:var(--ink); background:var(--paper-2); border:1px solid var(--accent); border-radius:var(--r); padding:0 4px; outline:none; }
+.row.new { color:var(--ink); }
+.ctx { position:fixed; z-index:70; min-width:220px; background:var(--paper); border:1px solid var(--rule-2); border-radius:var(--r); box-shadow:0 10px 30px rgba(0,0,0,.35); padding:4px 0; font:400 12.5px/1.5 var(--mono); user-select:none; }
+.ctx .it { display:flex; align-items:center; gap:14px; padding:4px 12px; cursor:pointer; color:var(--ink-2); white-space:nowrap; }
+.ctx .it:hover { background:var(--paper-2); color:var(--ink); }
+.ctx .it .k { margin-left:auto; color:var(--ink-3); font-size:10.5px; }
+.ctx .it.dis { opacity:.4; pointer-events:none; }
+.ctx .it.danger:hover { color:var(--rubric); }
+.ctx .it.ask { color:var(--ink-2); gap:6px; }
+.ctx .it.ask .yes { color:var(--rubric); font-weight:600; cursor:pointer; }
+.ctx .it.ask .no { cursor:pointer; }
+.ctx .it.ask .yes:hover, .ctx .it.ask .no:hover { text-decoration:underline; text-underline-offset:.18em; }
+.ctx .sep { height:1px; background:var(--rule); margin:4px 0; }

@@ -165,7 +165,7 @@ task print_diff_with(lead, path, d)
 
 -- tools "instantáneas": la llamada se imprime junto con su resultado, en una sola línea
 task is_instant(name)
-    give name == "read" or name == "ls" or name == "find" or name == "grep" or name == "memory" or name == "edit" or name == "write" or name == "todo" or name == "lsp"
+    give name == "read" or name == "ls" or name == "find" or name == "grep" or name == "memory" or name == "edit" or name == "write" or name == "todo" or name == "lsp" or name == "fetch"
 
 let pending_call be ""
 
