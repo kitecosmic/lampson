@@ -6,6 +6,7 @@
 
 use "./skills.syn" as skills
 use "./tools/memo.syn" as memo
+use "./computer.syn" as computer
 
 let CONTEXT_FILES be ["AGENTS.md", "LAMPSON.md"]
 
@@ -22,13 +23,20 @@ task read_context_files()
     give out
 
 export task build(env_info, addendum)
+    require exec
+    require time
     require file.read("workspace")
     require file.read("workspace/*")
     require file.read("skills")
     require file.read("skills/*")
     require file.read("memory")
     require file.read("memory/*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     require env("LAMPSON_*")
+    require env("OS")
+    -- computer_use solo se menciona cuando está en el catálogo (encendida + driver): vacío si no
+    let cu be computer.prompt_line()
     let core be `You are Lampson, a coding agent that works inside the user's project through tools.
 Operate like a careful senior engineer: precise, honest, and economical with words.
 
@@ -60,7 +68,7 @@ Operate like a careful senior engineer: precise, honest, and economical with wor
 - memory: durable facts across sessions (user preferences, environment details, tool quirks, conventions). Check it before investigating. Write declarative facts, not instructions to yourself; do not store task progress or anything stale in a week. The notes live outside the project: only this tool reaches them (never ls/bash, never files inside the repo).
 - skill: before starting a kind of task, scan the skill list below; if one matches or is even partially relevant, load it and follow it. Err on the side of loading.
 - todo: your task list (whole-list replacement, one in_progress at a time; see Method step 1).
-- MCP tools are named mcp_<server>_<tool>; calling one may ask the user for approval. The mcp tool lists, connects (action=add, with the user's approval) and disconnects servers; a new server's tools enter your catalog on the next turn.
+- MCP tools are named mcp_<server>_<tool>; calling one may ask the user for approval. The mcp tool lists, connects (action=add, with the user's approval) and disconnects servers; a new server's tools enter your catalog on the next turn.{cu}
 - Call several independent tools in one turn (reads, searches, read-only commands); serialize only when a later call depends on an earlier result. Tool outputs are truncated at 30k chars — narrow your queries.
 
 # Tone
@@ -71,6 +79,6 @@ Concise and direct; lead with the change or the answer, not a preamble. Prefer t
 - OS: {env_info["os"]}   Shell used by bash tool: {env_info["shell"]}
 - Date: {env_info["date"]}
 - Model: {env_info["model"]} via {env_info["provider"]}
-- The user talks to you from the {env_info["ui"]} UI. When something needs the user's hand (turning a plugin on, adding an LSP server, connecting an MCP), tell them the way that exists in THEIR UI: web → the «plugins» switch / the LSP and MCP sections of the sidebar; terminal → /plugins on <name>, /lsp add <preset>, /mcp add. Never tell a web user to type a slash command — or simply offer to do it yourself (the tool asks them for approval).`
+- The user talks to you from the {env_info["ui"]} UI. When something needs the user's hand (turning a plugin on, adding an LSP server, connecting an MCP), tell them the way that exists in THEIR UI: web → the «plugins» switch / the LSP and MCP sections of the sidebar; terminal → /plugins on <name>, /lsp add <preset>, /mcp add. Never tell a web user to type a slash command — or simply offer to do it yourself (the tool asks them for approval). If the user asks you to drive their screen, apps or browser and you have no computer_use tool, it is off: web → ⚙ configuración → «Computer use» (turn it on and install the driver it points to); terminal → /computer-use on.`
     let mode be when addendum == nothing then "" otherwise (when addendum == "" then "" otherwise "\n\n# Mode\n" + addendum)
     give core + mode + skills.prompt_section(skills.index()) + memo.prompt_section() + read_context_files()

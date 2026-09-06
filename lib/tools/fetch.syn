@@ -240,7 +240,7 @@ task links(h, base, plain)
         let inner be capture(a, "(?is)<a\\b[^>]*>(.*?)</a>")
         let txt be when inner == nothing then "" otherwise inline_text(inner[0])
         let href be capture(a, "(?is)<a\\b[^>]*\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
-        let abs be when href == nothing then nothing otherwise u.resolve(base, href[0])
+        let abs be when href == nothing then nothing otherwise unwrap_ddg(u.resolve(base, href[0]))
         let repl be txt
         -- anclas internas (#x) sin destino real: "Skip to content", el "§"/"#" de cada heading → fuera
         when abs == nothing
@@ -250,6 +250,33 @@ task links(h, base, plain)
             set repl to when abs == txt then "<" + abs + ">" otherwise "[" + txt + "](" + abs + ")"
         set out to replace_text(out, a, repl)
     give out
+
+-- DuckDuckGo (html.duckduckgo.com — buscar en la web SIN API key ni navegador) envuelve cada resultado en
+-- //duckduckgo.com/l/?uddg=<destino codificado>&rut=…: el modelo necesita el destino real (para traerlo con fetch
+-- o abrirlo con computer_use), no el redirect. Sin builtin de percent-decoding: se decodifica a bytes y luego UTF-8.
+task unwrap_ddg(url)
+    when url == nothing
+        give nothing
+    when not contains(url, "duckduckgo.com/l/?")
+        give url
+    let m be capture(url, "[?&]uddg=([^&]*)")
+    when m == nothing
+        give url
+    give pct_decode(m[0])
+
+task pct_decode(s)
+    let out be bytes("")
+    let i be 0
+    let n be length(s)
+    while i < n
+        let ch be slice(s, i, i + 1)
+        when ch == "%" and i + 3 <= n and matches(slice(s, i + 1, i + 3), "[0-9A-Fa-f]{2}")
+            set out to out + bytes(slice(s, i + 1, i + 3), "hex")
+            set i to i + 3
+        otherwise
+            set out to out + bytes(when ch == "+" then " " otherwise ch)
+            set i to i + 1
+    give decode(out, "utf8_lossy")
 
 -- blockquote: marcadores y luego prefijo "> " línea por línea
 task quote_lines(s)
@@ -563,7 +590,7 @@ export task tool(url, format, max_chars, timeout)
 
 export let SPEC be {
     "name": "fetch",
-    "description": "Fetch a web page or HTTP API response and return it as Markdown (default), plain text or raw HTML — scripts, styles, navigation and footers stripped, entities decoded, links made absolute, code blocks and tables kept. Use it instead of bash+curl whenever you will READ the result (docs, READMEs, issues, changelogs, API JSON): it asks the server for Markdown first and returns about a tenth of the characters of raw HTML. Follows up to 5 redirects. Pages longer than max_chars come back as head+tail with the full text saved to a file you can page with read (offset/limit) or grep — never fetch the same URL twice in a turn; repeats within 20 minutes are served from that file anyway. Binary content (images, PDF, archives) is reported, not returned. Private/loopback hosts (localhost, 10.x, 192.168.x, *.internal) ask the user first — fine for checking your own dev server; cloud metadata endpoints are always refused. Cite the URL when you use its content.",
+    "description": "Fetch a web page or HTTP API response and return it as Markdown (default), plain text or raw HTML — scripts, styles, navigation and footers stripped, entities decoded, links made absolute, code blocks and tables kept. Use it instead of bash+curl whenever you will READ the result (docs, READMEs, issues, changelogs, API JSON): it asks the server for Markdown first and returns about a tenth of the characters of raw HTML. Follows up to 5 redirects. Pages longer than max_chars come back as head+tail with the full text saved to a file you can page with read (offset/limit) or grep — never fetch the same URL twice in a turn; repeats within 20 minutes are served from that file anyway. Binary content (images, PDF, archives) is reported, not returned. Private/loopback hosts (localhost, 10.x, 192.168.x, *.internal) ask the user first — fine for checking your own dev server; cloud metadata endpoints are always refused. Cite the URL when you use its content. To SEARCH the web (no API key, no browser): fetch https://html.duckduckgo.com/html/?q=<url-encoded query> — the results come back as Markdown with the real target links; refine the query as needed, then fetch the page you chose.",
     "parameters": {"type": "object", "properties": {
         "url": {"type": "string", "description": "Absolute http(s) URL"},
         "format": {"type": "string", "enum": ["markdown", "text", "html"], "description": "markdown (default): HTML converted to Markdown, or the site's own Markdown when it offers one; text: plain text, no links or markup; html: the raw HTML (to see structure, selectors, meta tags)"},

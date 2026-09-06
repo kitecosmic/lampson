@@ -30,6 +30,11 @@ the short version of these pages also lives at [lampson.org/docs](https://lampso
   file's structure without reading it, `definition`/`references`/`hover` resolve what grep leaves
   ambiguous. Nothing is bundled: `/lsp add typescript|python|rust|go|css|html` (or your own command),
   global or per project; each server starts on its first query.
+- **Computer use** (off by default): the agent drives your desktop and browser *in the background* — it reads
+  the accessibility tree of any window, clicks, types and navigates without moving your mouse or stealing
+  focus. It runs on a separate driver you install yourself (`⚙ → Computer use` in the web UI and
+  `/computer-use` in the terminal show the command); one browser tab, a tab budget and no destructive
+  shortcuts are enforced by the harness, not just requested in the prompt.
 - **Plugins** (your own tools): a folder with a `plugin.json` manifest plus code — a Synsema program that runs
   under a capability ceiling, or any executable (js, py, sh…). Global in `lampson/plugins/<name>/`, per
   project in `.lampson/plugins/<name>/` (the agent can write those). **Off by default**: you turn them on
@@ -349,6 +354,34 @@ while steps < max_steps and tokens <= budget
   all of them; `plan`/`review`/`explore` only those marked `readOnlyHint`. Every call goes through
   `permission.syn`: **ask** by default, allow in yolo, deny in strict — and lands in the session trace.
 - Not yet: HTTP/SSE transports, resources/prompts, sampling.
+
+### Computer use
+
+`lib/computer.syn` turns the desktop into one tool, `computer_use`, on top of an external driver
+([cua-driver](https://cua.ai/docs/how-to-guides/driver/install): an MCP server over stdio that reads the
+accessibility tree of any window and posts input to it in the background — your cursor never moves, focus
+never changes). Lampson does **not** install the driver: turn the tool on (`⚙ → Computer use` in the web UI,
+`/computer-use on` in the terminal) and both show the official install command while it is missing. The
+tool enters the model's catalog — and the `computer-use` skill the index — only when it is on AND the driver
+is found (`LAMPSON_COMPUTER_DRIVER` overrides the lookup; `LAMPSON_COMPUTER_USE=1` in `.env` forces it on).
+
+- One tool, many actions: `windows` → `see(pid, window_id)` (element tree; `screenshot=true` adds a PNG) →
+  `click element=N` / `type` / `key` / `hotkey` / `scroll` / `drag` / `set_value` → `see` again. Web pages go
+  through the driver's typed route: `prepare(pid)` once (an isolated browser by default; the
+  `computer_grant_profile` setting lets it attach to your signed-in browser), `browser` → `page` (semantic
+  refs) → `navigate` / `page_click` / `page_type` / `page_scroll`; `page_text` reads any browser window with
+  no setup at all.
+- The driver runs inside a supervisor agent started on the first call (state in `computer:driver` on the
+  blackboard, requests over the bus, like MCP servers) and dies with lampson. Screenshots reach the model as
+  an image attached to a user message when the provider has vision (only the latest keeps its image), as a
+  note otherwise; `max_image_dimension` is the driver's.
+- Enforced in code, not only in the prompt: shortcuts that open or close tabs/windows are refused (one tab —
+  `navigate` in the tab you have; searches go through `fetch` on DuckDuckGo's HTML endpoint, no API key), a
+  tab budget (`computer_max_tabs`, 5 by default), no lock/logout/close-app keys, no shell commands typed into
+  terminal windows.
+- Permissions: reading (windows, trees, screenshots, page text) never asks; `launch`, `raise` and `prepare`
+  ask every time; every other action asks once per run (yolo allows, strict denies). The driver's telemetry
+  is switched off through its environment.
 
 ### LSP (language servers)
 

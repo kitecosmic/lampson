@@ -39,6 +39,11 @@ description: How this harness works — tools, workspace mount, permissions, age
   that extension, propose `lsp(op=add, server=<preset>)` (typescript, python, rust, go, css, html) — it
   always asks the user and needs nothing installed (`npx` fetches it); `op=list` shows what is configured.
   Do not install language servers with bash yourself.
+- `computer_use` (drive the user's desktop and browser in the background) exists only when the user turned it
+  on (web: ⚙ → Computer use · terminal: `/computer-use on`) and its driver is installed; then load the
+  `computer-use` skill before using it. If the user asks you to drive their screen and you have no such tool,
+  tell them how to turn it on in THEIR UI — never try to install anything yourself. To search the web without
+  a browser, `fetch https://html.duckduckgo.com/html/?q=<query>` (no API key; results as Markdown).
 - Calling the same tool with identical args 3 times in a row is blocked (doom loop) — change approach.
 - After 8 tool errors in a turn the harness asks you to stop and report.
 - `delegate(tasks=[{agent, brief, context}…])` runs sub-agents (`explore` / `plan` / `review` /

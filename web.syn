@@ -66,6 +66,7 @@ use "./lib/sched_run.syn" as sched_run
 use "./lib/approvals.syn" as approvals
 use "./lib/permission.syn" as permission
 use "./lib/term.syn" as term
+use "./lib/computer.syn" as computer
 
 let APPROVAL_TIMEOUT be 180
 
@@ -466,6 +467,27 @@ serve on 8080
             -- la zona horaria cacheada en el blackboard se recalcula
             share nothing as "lampson:tz"
             give {"ok": true, "values": settings.values(), "tz_detected": schedule.tz_offset()}
+        recover err
+            give fail(400, text(err))
+
+    -- computer use (lib/computer.syn): estado del driver externo (instalado, versión, doctor) y encendido/apagado.
+    -- Lampson no instala el driver: si falta, `install` trae el comando oficial y la UI lo muestra.
+    route "GET /w/:slug/api/computer" requires auth
+        give computer.status()
+
+    route "POST /w/:slug/api/computer" requires auth
+        let b be json of request
+        try
+            when contains(b, "enabled")
+                settings.set_value("computer_use", when b["enabled"] == true then "1" otherwise "")
+                computer.reset_state()
+                when b["enabled"] != true
+                    computer.stop_driver()
+            when contains(b, "max_tabs")
+                settings.set_value("computer_max_tabs", text(b["max_tabs"]))
+            when contains(b, "grant_profile")
+                settings.set_value("computer_grant_profile", when b["grant_profile"] == true then "1" otherwise "")
+            give {"ok": true, "status": computer.status()}
         recover err
             give fail(400, text(err))
 

@@ -55,6 +55,7 @@ use "./lib/tools/todo.syn" as todo
 use "./lib/schedule.syn" as schedule
 use "./lib/sched_run.syn" as sched_run
 use "./lib/approvals.syn" as approvals
+use "./lib/computer.syn" as computer
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -350,6 +351,7 @@ let COMMANDS be [
     ["/mcp", "[add <nombre> <comando…> [--project] | remove <nombre>]", "servers MCP: listar, conectar o quitar (global: lampson/.lampson/mcp.json · proyecto: .lampson/mcp.json)"],
     ["/plugins", "[on <nombre> | off <nombre> | run <plugin> <tool> [json] | remove <nombre>]", "plugins (tools propias, en cualquier lenguaje): listar, encender o apagar (global: lampson/plugins/ · proyecto: .lampson/plugins/)"],
     ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
+    ["/computer-use", "[on|off]", "computer use: el agente maneja tu escritorio y navegador en segundo plano (driver aparte, apagado por defecto); sin argumento muestra el estado y, si falta el driver, cómo instalarlo"],
     ["/schedule", "[add <json> | run <id> | on <id> | off <id> | remove <id> | log <id>]", "tareas programadas (cada 6h, todos los días a las 9…): plugin, comando o corrida del agente; corren mientras lampson esté abierto (o con lampson --daemon start, sin nada abierto)"],
     ["/approve", "<id> [yes|no]", "responder una aprobación pendiente de una tarea programada que corre en background (sin yes|no la pregunta con el menú ↑↓)"],
     ["/out", "[n]", "resultado completo de la última tool del turno (n = contar hacia atrás: /out 2 es la anteúltima)"],
@@ -411,6 +413,10 @@ task complete_args(cmd, head, last)
         when trim(head) == "add"
             give sort_by(keys(lsp.PRESETS), (x) => x)
         give ["--project", "--ext"]
+    when cmd == "/computer-use"
+        when first
+            give ["on", "off"]
+        give []
     when cmd == "/approve"
         when first
             give apply((a) => a["id"], approvals.pending())
@@ -536,11 +542,36 @@ task show_config(cfg, ws, profile, mode, opts)
     print("")
     print("  proveedor   " + cfg["provider"] + " (" + cfg["wire"] + " → " + cfg["base_url"] + ")")
     print("  modelo      " + cfg["model"] + "   max_tokens " + text(cfg["max_tokens"]) + "   timeout " + text(floor(cfg["timeout"])) + "s")
-    print("  agente      " + profile + "   tools: " + join(agents.profile(profile)["tools"], ", "))
+    print("  agente      " + profile + "   tools: " + join(agents.tool_names(agents.profile(profile)), ", "))
     print("  permisos    " + mode)
     print("  límites     " + text(opts["max_steps"]) + " pasos/turno · " + text(floor(opts["budget_tokens"])) + " tokens/turno · compacta a " + text(floor(opts["compact_at_tokens"])))
     print("  workspace   " + ws)
+    print("  computer    " + (when computer.enabled() then (when computer.driver() != "" then "encendido" otherwise "encendido · driver NO instalado (/computer-use)") otherwise "apagado (/computer-use on)"))
     print("")
+
+-- /computer-use: estado del driver externo y cómo instalarlo (lib/computer.syn); on|off queda en config.json
+task computer_lines()
+    let s be computer.status()
+    let out be []
+    when s["enabled"]
+        set out to append(out, green("computer use: encendido") + dim(" — el agente maneja tu escritorio y navegador en segundo plano"))
+    otherwise
+        set out to append(out, dim("computer use: apagado") + "  " + cyan("/computer-use on") + dim(" para encenderlo — el agente maneja tu escritorio y navegador en segundo plano"))
+    when not s["installed"]
+        set out to append(out, (when s["enabled"] then red("○ driver no instalado") otherwise dim("○ driver no instalado")) + dim(" — es un paquete aparte (" + s["install"]["docs"] + "); instalalo vos en una terminal:"))
+        set out to append(out, "    " + cyan(s["install"]["command"]))
+        set out to append(out, "    " + cyan(s["install"]["then"]))
+    otherwise
+        let bad be where(s["checks"], (k) => k["status"] != "ok" and k["status"] != "skip")
+        set out to append(out, (when s["ok"] then green("● driver " + s["version"]) otherwise yellow("▲ driver " + s["version"] + " con problemas")) + dim("  " + s["path"]))
+        each k in bad
+            set out to append(out, "    " + yellow(k["label"] + ": " + k["message"]))
+        when s["error"] != nothing
+            set out to append(out, "    " + red(text(s["error"])))
+        when s["driver_error"] != nothing
+            set out to append(out, "    " + red(text(s["driver_error"])))
+        set out to append(out, dim("  " + (when s["running"] then "conectado" otherwise "arranca con la primera acción del agente") + " · pestañas máx " + text(s["max_tabs"]) + " · navegador abierto del usuario: " + (when s["grant_profile"] then "permitido" otherwise "no (abre uno aparte)") + " · también en la web: ⚙ → Computer use"))
+    give out
 
 -- sugerencias para un comando desconocido: por prefijo
 task suggest(input)
@@ -578,8 +609,10 @@ task banner(ws, cfg, profile, mode, sid)
         set ext to append(ext, (when mcp_on == length(ms) then green("mcp " + text(mcp_on) + "/" + text(length(ms))) otherwise red("mcp " + text(mcp_on) + "/" + text(length(ms)))))
     when length(ss) > 0
         set ext to append(ext, dim("lsp " + text(length(ss))))
+    when computer.enabled()
+        set ext to append(ext, when computer.driver() != "" then green("computer use") otherwise red("computer use: driver no instalado"))
     when length(ext) > 0
-        print("  extras      " + join(ext, dim("  ·  ")) + dim("   (/plugins /mcp /lsp)"))
+        print("  extras      " + join(ext, dim("  ·  ")) + dim("   (/plugins /mcp /lsp /computer-use)"))
     let upd be update.line()
     when upd != ""
         print("  " + yellow("⬆ " + upd) + dim("  (o /update acá)"))
@@ -1342,6 +1375,22 @@ while running
             set mode to slice(input, 1, length(input))
             set opts to opts_for(profile, mode)
             print("permisos=" + opts["permission_mode"])
+        otherwise when input == "/computer-use" or starts_with(input, "/computer-use ")
+            let crest be lower(trim(slice(input, 13, length(input))))
+            when crest == "on" or crest == "true" or crest == "off" or crest == "false"
+                let con be crest == "on" or crest == "true"
+                settings.set_value("computer_use", when con then "1" otherwise "")
+                computer.reset_state()
+                when not con
+                    computer.stop_driver()
+                -- el catálogo y el system prompt cambian (la tool y su skill entran o salen)
+                set system_msg to system_for(profile)
+                set messages to [system_msg] + slice(messages, 1, length(messages))
+                set opts to opts_for(profile, mode)
+            otherwise when crest != ""
+                print("  uso: /computer-use [on|off]")
+            each l in computer_lines()
+                print("  " + l)
         otherwise when starts_with(input, "/agent")
             let want be trim(slice(input, 6, length(input)))
             when want == ""

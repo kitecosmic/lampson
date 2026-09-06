@@ -38,6 +38,9 @@ try {
     # terminales web que sobreviven al socket (lib/term.syn): supervisor, bus, replay, kill
     synsema run term_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # computer use contra el driver real (lib/computer.syn): solo lectura; sin driver instalado imprime skip
+    synsema run computer_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
     # cliente MCP contra tests/mock_mcp.js (node)
     $env:LAMPSON_MCP_CONFIG = ".lampson/tmp/mcp_test.json"
     synsema run mcp_test.syn

@@ -29,6 +29,8 @@ LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema run proc_test.syn || code=1
 LAMPSON_NO_CONFIG=1 synsema run tty_test.syn || code=1
 # terminales web que sobreviven al socket (lib/term.syn): supervisor, bus, replay, kill
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema run term_test.syn || code=1
+# computer use contra el driver real (lib/computer.syn): solo lectura; sin driver instalado imprime skip
+LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema run computer_test.syn || code=1
 # cliente MCP contra tests/mock_mcp.js (node)
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_MCP_CONFIG=.lampson/tmp/mcp_test.json synsema run mcp_test.syn || code=1
 # cliente LSP contra tests/mock_lsp.js (node, framing Content-Length)

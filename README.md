@@ -96,7 +96,8 @@ plugins were called *lamps*; old `.lampson/lamps/` folders and `LAMP_*` variable
 Sub-agents that work in parallel · skills (`SKILL.md` procedures, anything on [skills.sh](https://skills.sh)
 works) · MCP servers with the JSON you already have · language servers for real go-to-definition · project
 memory it reads back next session · sessions with a readable trace of every step · web pages fetched as
-Markdown (a tenth of the tokens of raw HTML) · paste a screenshot and ask.
+Markdown (a tenth of the tokens of raw HTML) · paste a screenshot and ask · computer use, opt-in: the agent
+drives your desktop and browser in the background (one tab, no destructive keys) on a driver you install apart.
 
 ## Learn more
 

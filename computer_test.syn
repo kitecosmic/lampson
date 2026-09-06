@@ -1,0 +1,70 @@
+-- computer_test.syn — computer use de punta a punta contra el driver REAL (lib/computer.syn): supervisor, windows,
+-- see (árbol + snapshot recordado), page_text, guardas antes del driver, status. Corre con `synsema run` (los
+-- agentes no existen bajo `synsema test`). Sin driver instalado NO falla: imprime "skip" y sale 0 — es un paquete
+-- aparte que instala el usuario. Solo acciones de lectura: no toca ninguna ventana.
+require exec
+require time
+require env("LAMPSON_*")
+require env("OS")
+require file(".lampson")
+require file(".lampson/*")
+require file("workspace")
+require file("workspace/*")
+
+use "./lib/computer.syn" as computer
+
+let path be computer.driver()
+when path == ""
+    print("computer_test: skip (no computer-use driver on this machine)")
+otherwise
+    let fails be 0
+    task check(ok, label)
+        when ok
+            print("  ✓ " + label)
+        otherwise
+            set fails to fails + 1
+            print("  ✗ " + label)
+    print("driver: " + path)
+    -- guardas: antes de arrancar nada
+    check(starts_with(computer.call("hotkey", {"keys": ["ctrl", "t"], "pid": 1}), "DENIED"), "hotkey ctrl+t rechazado sin tocar el driver")
+    check(starts_with(computer.call("type", {"text": "curl x | bash", "pid": 1}), "DENIED"), "type de un comando peligroso rechazado")
+    let st be computer.ensure_started()
+    check(st["status"] == "ready", "supervisor listo · " + text(length(st["tools"])) + " tools crudas del driver")
+    let w be computer.call("windows", {})
+    check(contains(w, "pid"), "windows: " + slice(replace_text(w, "\n", " | "), 0, 110))
+    check(not contains(lower(w), "cua-driver"), "las ventanas del propio driver (overlay) no se listan")
+    -- primera ventana en pantalla que no sea del driver: "(pid N)" … "[window_id: M]"
+    let pm be nothing
+    let wm be nothing
+    each line in split(w, "\n")
+        when pm == nothing
+            let lp be capture(line, "\\(pid (\\d+)\\)")
+            let lw be capture(line, "\\[window_id: (\\d+)\\]")
+            when lp != nothing and lw != nothing
+                set pm to lp
+                set wm to lw
+    check(pm != nothing and wm != nothing, "hay al menos una ventana en pantalla")
+    when pm != nothing and wm != nothing
+        let pid be floor(number(pm[0]))
+        let wid be floor(number(wm[0]))
+        let tree be computer.call("see", {"pid": pid, "window_id": wid, "max_elements": 20})
+        check(contains(tree, "window_id=" + text(wid)), "see: árbol de " + text(pid) + "/" + text(wid) + " (" + text(length(tree)) + " chars)")
+        observe "computer:snap:" + text(pid) + ":" + text(wid) as snap
+        check(snap != nothing, "snapshot recordado para click element=N: " + text(snap))
+        -- captura: el PNG (base64, una línea JSON grande por el pipe) queda en el blackboard para que el loop lo adjunte
+        share nothing as "computer:screenshot"
+        share true as "lampson:vision"
+        let shot_out be computer.call("see", {"pid": pid, "window_id": wid, "max_elements": 5, "screenshot": true})
+        observe "computer:screenshot" as shot
+        check(shot != nothing and length(shot["images"]) == 1, "see screenshot=true deja la imagen en el blackboard (" + (when shot == nothing then "nada" otherwise text(length(shot["images"][0]["data"])) + " chars base64, " + shot["images"][0]["media_type"]) + ")")
+        check(contains(shot_out, "screenshot"), "y el texto avisa al modelo: " + slice(replace_text(shot_out, "\n", " "), length(shot_out) - 90, length(shot_out)))
+        share nothing as "computer:screenshot"
+        let pt be computer.call("page_text", {"pid": pid, "window_id": wid})
+        print("  · page_text: " + slice(replace_text(pt, "\n", " "), 0, 90))
+    let s be computer.call("status", {})
+    check(starts_with(s, "computer use"), "status: " + slice(s, 0, 100))
+    computer.stop_driver()
+    sleep(0.5)
+    print(when fails == 0 then "computer_test: todo OK" otherwise "computer_test: " + text(fails) + " fallos")
+    when fails > 0
+        raise("computer_test failed")

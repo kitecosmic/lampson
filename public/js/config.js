@@ -11,11 +11,17 @@ function paintModel() {
 const CFG_SECTIONS = [
   { id: 'general', name: 'General', meta: 'zona horaria' },
   { id: 'approvals', name: 'Aprobaciones a distancia', meta: 'URL pública · webhook' },
+  { id: 'computer', name: 'Computer use', meta: 'escritorio y navegador · driver aparte' },
   { id: 'provider', name: 'Proveedor', meta: 'modelo · API key' }
 ];
 function cfgField(v, key, label, placeholder, ds, type) {
   return `<label class="col">${label}<input name="${key}" type="${type || 'text'}" spellcheck="false" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(v[key] || '')}" ${v[key + '_from_env'] ? 'disabled title="fijado en .env (LAMPSON_' + key.toUpperCase() + '): editalo ahí"' : ''}><span class="ds">${ds}</span></label>`;
 }
+// interruptor visible (pill con perilla): el texto cambia con el estado; fijado en .env queda deshabilitado
+function toggleHtml(name, on, fromEnv, envName, onText, offText) {
+  return `<label class="toggle ${on ? 'on' : ''}" title="${fromEnv ? 'fijado en .env (' + envName + '): editalo ahí' : ''}"><input type="checkbox" name="${name}" ${on ? 'checked' : ''} ${fromEnv ? 'disabled' : ''}><span class="knob"></span><span class="tx" data-on="${esc(onText)}" data-off="${esc(offText)}">${on ? esc(onText) : esc(offText)}</span></label>`;
+}
+function paintToggle(lab) { const on = lab.querySelector('input').checked; const tx = lab.querySelector('.tx'); lab.classList.toggle('on', on); if (tx) tx.textContent = on ? tx.dataset.on : tx.dataset.off; }
 async function openCfg(section, onboarding) {
   let r; try { r = await (await fetch(BASE + '/api/settings/values')).json(); } catch (e) { r = { values: {} }; }
   const v = r.values || {};
@@ -37,6 +43,12 @@ async function openCfg(section, onboarding) {
           + cfgField(v, 'webhook_url', 'webhook', 'https://hooks.example.com/lampson', 'POST JSON por cada aprobación pendiente (id, mensaje, links); reenvialo a Telegram, Slack o mail con n8n, un bot o un .syn de 6 líneas')
           + `<label class="col">secreto del webhook<input name="webhook_secret" type="password" spellcheck="false" autocomplete="off" placeholder="${v.has_webhook_secret ? '● guardado — escribí uno nuevo para cambiarlo' : 'opcional'}"><span class="ds">firma HMAC-SHA256 del body en <code>X-Lampson-Signature</code>; dejá vacío para no cambiarlo</span></label>`
           + `<div class="pfoot"><button class="primary" data-save>Guardar</button><span class="derr"></span></div></div>`;
+        // computer use (lib/computer.syn): un switch, el estado del driver (o cómo instalarlo) y sus dos knobs
+        if (s.id === 'computer') return `<div class="dhead"><span class="nm serif">Computer use</span>${toggleHtml('computer_use', v.computer_use, v.computer_use_from_env, 'LAMPSON_COMPUTER_USE', 'encendido', 'apagado')}</div><div class="dform"><p class="lead">El agente maneja tu escritorio y tu navegador <b>en segundo plano</b>: ve las ventanas, hace clic, escribe y navega sin moverte el mouse ni robarte el foco. Usa un <b>driver aparte</b> que Lampson no instala: encendé el interruptor y, si falta, acá abajo aparece el comando para instalarlo. Apagado, el agente ni ve la tool.</p>
+          <div class="cu-status" id="cuStatus"><span class="ds">comprobando el driver…</span></div>`
+          + cfgField(v, 'computer_max_tabs', 'pestañas como máximo', '5', 'cuántas pestañas distintas puede manejar el agente por corrida · los atajos que abren pestañas (ctrl+t…) se rechazan siempre: navega en la misma pestaña, y busca en la web con fetch (sin abrir nada)')
+          + `<div class="trow">${toggleHtml('computer_grant_profile', v.computer_grant_profile, v.computer_grant_profile_from_env, 'LAMPSON_COMPUTER_GRANT_PROFILE', 'usa mi navegador abierto (sesión iniciada)', 'navegador aparte, sin mis cookies')}<span class="ds">apagado: el driver abre un navegador aparte con perfil propio, sin tus cookies · encendido: puede atarse a tu Chrome/Edge abierto y ver sus páginas, cookies y sesiones — solo si confiás en la tarea; aplica al reiniciar Lampson</span></div>`
+          + `<div class="pfoot"><button class="primary" data-save-computer>Guardar</button><span class="derr"></span></div></div>`;
         // proveedor / modelo / key
         setupSel = cfg.provider || (cfg.providers || [])[0]?.name || '';
         const rows = (cfg.providers || []).map(p => `<div class="pr ${p.name === setupSel ? 'on' : ''}" data-name="${esc(p.name)}"><b>${esc(p.name)}</b><span class="dm">${esc(p.model)}</span><span class="k ${p.has_key ? '' : 'no'}">${p.name === 'ollama' ? 'sin key' : (p.has_key ? '● key guardada' : '○ sin key')}</span></div>`).join('');
@@ -61,6 +73,49 @@ async function openCfg(section, onboarding) {
           if (!r2.ok) { err(r2.data.error || ('error ' + r2.status)); return; }
           Object.assign(v, r2.data.values || {}); err('✓ guardado'); add('meta', '⚙ configuración guardada'); loadSched(); loadApprovals();
         };
+        const saveC = box.querySelector('[data-save-computer]');
+        if (saveC) {
+          const paintStatus = (st, code) => {
+            const el = box.querySelector('#cuStatus'); if (!el) return;
+            if (!st) { el.innerHTML = `<span class="ds">no pude consultar el estado del driver${code ? ' (HTTP ' + code + ')' : ''} — si acabás de actualizar Lampson, reinicialo (<code>lampson --hub restart</code>) y volvé a abrir esta ventana</span>`; return; }
+            if (!st.installed) {
+              el.innerHTML = `<div class="cu-line no">○ driver no instalado</div><p class="ds">Es un paquete aparte (<a href="${esc(st.install.docs)}" target="_blank" rel="noopener">cua.ai</a>): instalalo vos en una terminal y después tocá «comprobar de nuevo».</p><pre class="cu-cmd">${esc(st.install.command)}\n${esc(st.install.then)}</pre><button class="hbtn sm" data-recheck>comprobar de nuevo</button>`;
+            } else {
+              const bad = (st.checks || []).filter(c => c.status !== 'ok' && c.status !== 'skip');
+              el.innerHTML = `<div class="cu-line ${st.ok ? 'ok' : 'warn'}">${st.ok ? '●' : '▲'} driver ${esc(st.version)} <span class="ds">${esc(st.path)}</span></div>`
+                + (bad.length ? `<ul class="ds">${bad.map(c => `<li>${esc(c.label)}: ${esc(c.message)}</li>`).join('')}</ul>` : '')
+                + `<p class="ds">${st.running ? 'conectado' : 'arranca con la primera acción del agente'} · ${st.enabled ? 'la tool está en el catálogo del agente' : 'apagado: el agente no ve la tool'}${st.driver_error ? ' · ' + esc(st.driver_error) : ''}</p><button class="hbtn sm" data-recheck>comprobar de nuevo</button>`;
+            }
+            const rc = el.querySelector('[data-recheck]'); if (rc) rc.onclick = () => load();
+          };
+          const load = async () => { try { const r = await fetch(BASE + '/api/computer'); if (!r.ok) { paintStatus(null, r.status); return; } paintStatus(await r.json()); } catch (e) { paintStatus(null, 0); } };
+          load();
+          // el interruptor principal guarda al instante (como el de los plugins); el del navegador y las pestañas, con Guardar
+          const sw = box.querySelector('[name="computer_use"]');
+          if (sw) sw.onchange = async () => {
+            const lab = sw.closest('label'); paintToggle(lab); sw.disabled = true; err(sw.checked ? 'encendiendo…' : 'apagando…');
+            try {
+              const r2 = await api(BASE + '/api/computer', { enabled: sw.checked });
+              if (!r2.ok) { sw.checked = !sw.checked; paintToggle(lab); err(r2.data.error || ('error ' + r2.status)); return; }
+              v.computer_use = sw.checked ? '1' : ''; err(sw.checked ? '✓ encendido' : '✓ apagado'); add('meta', '⚙ computer use ' + (sw.checked ? 'encendido' : 'apagado')); paintStatus(r2.data.status);
+            } catch (e) { sw.checked = !sw.checked; paintToggle(lab); err(e.message); } finally { sw.disabled = false; }
+          };
+          const gp = box.querySelector('[name="computer_grant_profile"]');
+          if (gp) gp.onchange = () => paintToggle(gp.closest('label'));
+          saveC.onclick = async () => {
+            const body = {};
+            const mt = box.querySelector('[name="computer_max_tabs"]'); if (mt && !mt.disabled) { if (mt.value.trim() && !/^[0-9]+$/.test(mt.value.trim())) { err('pestañas: un número entero'); return; } body.max_tabs = mt.value.trim(); }
+            if (gp && !gp.disabled) body.grant_profile = gp.checked;
+            err('guardando…'); saveC.disabled = true;
+            try {
+              const r2 = await api(BASE + '/api/computer', body);
+              if (!r2.ok) { err(r2.data.error || ('error ' + r2.status)); return; }
+              if (body.grant_profile !== undefined) v.computer_grant_profile = body.grant_profile ? '1' : '';
+              if (body.max_tabs !== undefined) v.computer_max_tabs = body.max_tabs;
+              err('✓ guardado'); paintStatus(r2.data.status);
+            } catch (e) { err(e.message); } finally { saveC.disabled = false; }
+          };
+        }
         const saveP = box.querySelector('[data-save-provider]');
         if (saveP) {
           const f = n => box.querySelector(`[name="${n}"]`);

@@ -33,6 +33,7 @@ use "./provider.syn" as provider
 use "./prompt.syn" as prompt
 use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
+use "./computer.syn" as computer
 
 export let DIR be ".lampson/agents"
 let MAX_TASKS be 6
@@ -40,7 +41,7 @@ let PARALLEL be 4
 
 export let PROFILES be {
     "build": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill", "mcp", "plugin", "schedule", "delegate"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill", "mcp", "plugin", "schedule", "delegate", "computer_use"],
         "steps": 40,
         "addendum": "You are in BUILD mode: you may read, edit, create files and run commands. Delegate exploration of large codebases to the `explore` agent and independent code review to the `review` agent when it saves context; several independent questions can go in one delegate call (they run in parallel)."
     },
@@ -60,7 +61,7 @@ export let PROFILES be {
         "addendum": "You are an EXPLORER: read-only. Locate the code relevant to the question (files, functions, line numbers) and report it concisely with paths and short excerpts. Do not propose changes."
     },
     "worker": {
-        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill"],
+        "tools": ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill", "computer_use"],
         "steps": 40,
         "addendum": "You are a WORKER sub-agent: implement exactly the scoped task you were given (read, edit, run tests), then report what you changed (files) and how you verified it. Stay inside the scope; if something outside it is needed, report it instead of doing it."
     }
@@ -93,14 +94,31 @@ export task addendum_for(name)
 task mcp_readonly_only(name)
     give not (name == "build" or name == "worker")
 
+-- tools del perfil que entran de verdad: computer_use está en build/worker pero solo cuando el usuario la
+-- encendió y el driver existe (lib/computer.syn) — si no, el modelo ni la ve
+export task tool_names(p)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when contains(p["tools"], "computer_use")
+        when not computer.available()
+            give where(p["tools"], (n) => n != "computer_use")
+    give p["tools"]
+
 export task registry_for(name)
+    require exec
+    require time
     require file(".lampson")
     require file(".lampson/*")
     require file("workspace")
     require file("workspace/*")
     require env("LAMPSON_*")
+    require env("OS")
     let p be profile(name)
-    let reg be tools.registry_subset(p["tools"])
+    let reg be tools.registry_subset(tool_names(p))
     when contains(p["tools"], "delegate")
         set reg["delegate"] to delegate
     each m in mcp.names(mcp_readonly_only(name))
@@ -110,13 +128,16 @@ export task registry_for(name)
     give reg
 
 export task catalog_for(name)
+    require exec
+    require time
     require file(".lampson")
     require file(".lampson/*")
     require file("workspace")
     require file("workspace/*")
     require env("LAMPSON_*")
+    require env("OS")
     let p be profile(name)
-    let cat be tools.catalog_subset(p["tools"])
+    let cat be tools.catalog_subset(tool_names(p))
     when contains(p["tools"], "delegate")
         set cat to append(cat, DELEGATE_SPEC)
     give cat + mcp.catalog(mcp_readonly_only(name)) + plugins.catalog(mcp_readonly_only(name))
@@ -313,7 +334,7 @@ export task run_child(spec)
         let system be {"role": "system", "content": prompt.build(env_info(cfg), p["addendum"] + CHILD_NOTE)}
         let full_brief be when spec["context"] == nothing or spec["context"] == "" then spec["brief"] otherwise spec["brief"] + "\n\nContext from the delegating agent:\n" + spec["context"]
         let messages be [system, {"role": "user", "content": full_brief}]
-        let opts be loop.default_opts(tools.registry_subset(p["tools"]), tools.catalog_subset(p["tools"]), nothing)
+        let opts be loop.default_opts(tools.registry_subset(tool_names(p)), tools.catalog_subset(tool_names(p)), nothing)
         set opts to loop.with_steps(opts, p["steps"])
         set opts to loop.with_mode(opts, when spec["mode"] == "yolo" then "yolo" otherwise "strict")
         set opts to loop.with_inbox(opts, child_inbox, id)

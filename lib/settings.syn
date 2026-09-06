@@ -85,7 +85,8 @@ export task set_default(name, model)
 
 -- valores de configuración generales (rueda de la UI): tz, public_url, webhook_url, webhook_secret…
 -- Vacío = borrar la clave. Nunca se devuelven secretos al navegador: `values()` marca webhook_secret como has_*.
-export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret", "idle_hours"]
+-- computer_*: la tool computer_use (lib/computer.syn) — "1" enciende; max_tabs y grant_profile son sus knobs
+export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret", "idle_hours", "computer_use", "computer_max_tabs", "computer_grant_profile"]
 
 -- el archivo REAL, ignorando LAMPSON_NO_CONFIG: escribir con el doc en blanco de los tests pisaría provider/keys
 -- (pasó el 2026-08-29 probando la rueda con un web de test)

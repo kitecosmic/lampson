@@ -37,9 +37,12 @@ let ROOTS be [
     {"dir": "workspace/.lampson/skills", "source": "local"}
 ]
 
+use "./computer.syn" as computer
+
 task frontmatter(md)
-    -- devuelve {name, description, body}; sin frontmatter → name vacío
-    let out be {"name": "", "description": "", "body": md}
+    -- devuelve {name, description, requires, body}; sin frontmatter → name vacío.
+    -- `requires: computer_use` (skills del harness): la skill solo entra al índice si esa tool está disponible
+    let out be {"name": "", "description": "", "requires": "", "body": md}
     when not starts_with(md, "---")
         give out
     let rest be slice(md, 3, length(md))
@@ -54,10 +57,13 @@ task frontmatter(md)
             set out["name"] to trim(slice(l, 5, length(l)))
         otherwise when starts_with(l, "description:")
             set out["description"] to trim(slice(l, 12, length(l)))
+        otherwise when starts_with(l, "requires:")
+            set out["requires"] to trim(slice(l, 9, length(l)))
     set out["body"] to trim(body)
     give out
 
-task scan_root(root, acc)
+-- hidden = tools que NO están disponibles: una skill con `requires:` de una de ellas no se lista
+task scan_root(root, acc, hidden)
     let out be acc
     try
         each e in list_dir(root["dir"])
@@ -66,7 +72,8 @@ task scan_root(root, acc)
                 try
                     let fm be frontmatter(read_file(path))
                     let name be when fm["name"] == "" then e["name"] otherwise fm["name"]
-                    set out[name] to {"name": name, "description": fm["description"], "path": path, "source": root["source"]}
+                    when not contains(hidden, fm["requires"])
+                        set out[name] to {"name": name, "description": fm["description"], "path": path, "source": root["source"]}
                 recover err
                     set out to out
     recover err
@@ -75,15 +82,20 @@ task scan_root(root, acc)
 
 -- índice: map name → {name, description, path, source}
 export task index()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
     require file.read("skills")
     require file.read("skills/*")
     require file.read("workspace")
     require file.read("workspace/*")
     require file.read(".lampson")
     require file.read(".lampson/*")
+    let hidden be when computer.available() then [] otherwise ["computer_use"]
     let acc be {}
     each r in ROOTS
-        set acc to scan_root(r, acc)
+        set acc to scan_root(r, acc, hidden)
     give acc
 
 -- sección del system prompt
@@ -98,6 +110,10 @@ export task prompt_section(idx)
     give join(lines, "\n")
 
 export task load(name)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
     require file.read("skills")
     require file.read("skills/*")
     require file.read("workspace")
