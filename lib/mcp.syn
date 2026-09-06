@@ -109,6 +109,24 @@ agent McpSup
         let sub be bus_subscribe(["mcp.req." + name, "mcp.stop." + name, "mcp.stop_all"])
         -- request síncrona (handshake y tools/list): manda y espera la respuesta con ese id, saltando
         -- notificaciones y basura; devuelve {result} | {error} | nothing (timeout / proceso muerto)
+        -- MIGA runtime (2026-09-06): proc_spawn en line_mode parte las líneas de más de 1 MiB en trozos de 1 MiB; un
+        -- resultado grande (una captura base64) llegaba en trozos que no decodificaban y la respuesta se perdía.
+        -- `acc` junta los trozos hasta que el JSON cierra; un trozo suelto que decodifica solo reinicia el acumulador.
+        let acc be ""
+        task decode_line(data)
+            let joined be acc + data
+            try
+                let m be json_decode(joined)
+                set acc to ""
+                give m
+            recover e1
+                try
+                    let m2 be json_decode(data)
+                    set acc to ""
+                    give m2
+                recover e2
+                    set acc to when length(joined) > 40000000 then "" otherwise joined
+                    give nothing
         task rpc(method, params, timeout)
             set seq to seq + 1
             let id be seq
@@ -122,12 +140,10 @@ agent McpSup
                 otherwise when ev["type"] == "exit"
                     set answer to {"error": "server exited with code " + text(ev["data"]["exit_code"])}
                 otherwise when ev["type"] == "stdout"
-                    try
-                        let m be json_decode(ev["data"])
+                    let m be decode_line(ev["data"])
+                    when m != nothing
                         when contains(m, "id") and m["id"] == id
                             set answer to when contains(m, "error") then {"error": text(m["error"]["message"])} otherwise {"result": m["result"]}
-                    recover e2
-                        set answer to answer
             give answer
         task notify(method, params)
             proc_send(p, json_encode({"jsonrpc": "2.0", "method": method, "params": params}) + "\n")

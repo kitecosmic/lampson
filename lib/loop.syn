@@ -124,7 +124,7 @@ export task spill(name, id, out)
     let path be SPILL_DIR + "/" + id + ".txt"
     write_file(path, out)
     let half be floor(SPILL_CAP / 2)
-    give slice(out, 0, half) + "\n\n[... " + text(length(out) - SPILL_CAP) + " chars omitted. Full result saved to " + path + " — grep it, or read it with offset/limit; do not re-run the command ...]\n\n" + slice(out, length(out) - half, length(out))
+    give slice(out, 0, half) + "\n\n[... " + text(length(out) - SPILL_CAP) + " chars omitted. Full result saved to " + path + " — use the grep or read TOOLS on that exact path (it lives in lampson, outside your workspace: bash cannot see it); do not re-run the command ...]\n\n" + slice(out, length(out) - half, length(out))
 
 -- recibo de una línea para un tool result viejo
 export task receipt(m)

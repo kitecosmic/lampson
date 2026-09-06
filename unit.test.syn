@@ -988,29 +988,15 @@ test "computer: open_url — la barra de direcciones se elige por etiqueta (idio
     assert_eq(computer.pick_omnibox([{"element_index": 3, "role": "Edit", "label": "whatever"}])["element_index"], 3, "primer Edit como fallback")
     assert_eq(computer.pick_omnibox([{"element_index": 1, "role": "Button", "label": "x"}]), nothing)
     assert(contains(computer.ACTIONS, "open_url"))
+    assert(contains(computer.ACTIONS, "page_select"))
+    assert(contains(computer.ACTIONS, "page_fill"))
+    assert_error(() => computer.call("page_fill", {"target_id": "t", "tab_id": "b"}), "sin fields")
+    assert_error(() => computer.call("page_fill", {"target_id": "t", "tab_id": "b", "fields": "x"}), "fields no es lista")
+    assert_error(() => computer.map_action("page_fill", {"target_id": "t", "tab_id": "b", "fields": []}))
     assert_error(() => computer.call("open_url", {"pid": 1, "window_id": 2}), "sin url")
-    -- permiso: open_url trae la ventana al frente para el Enter → pide el permiso de foreground (una vez)
-    share nothing as "computer:grant_fg"
-    share true as "computer:grant"
-    assert_eq(permission.evaluate("computer_use", {"action": "open_url", "pid": 1, "window_id": 2, "url": "https://a.b"}, "ask")["decision"], "ask")
-    share true as "computer:grant_fg"
-    assert_eq(permission.evaluate("computer_use", {"action": "open_url", "pid": 1, "window_id": 2, "url": "https://a.b"}, "ask")["decision"], "allow")
-    share nothing as "computer:grant"
-    share nothing as "computer:grant_fg"
-
-test "permission: computer_use foreground — su propio permiso, una vez por corrida"
-    share nothing as "computer:grant"
-    share nothing as "computer:grant_fg"
-    share true as "computer:grant"
-    assert_eq(permission.evaluate("computer_use", {"action": "key", "key": "return"}, "ask")["decision"], "allow")
-    let fg be permission.evaluate("computer_use", {"action": "key", "key": "return", "delivery_mode": "foreground"}, "ask")
-    assert_eq(fg["decision"], "ask")
-    assert(contains(fg["reason"], "front"))
-    share true as "computer:grant_fg"
-    assert_eq(permission.evaluate("computer_use", {"action": "type", "text": "x", "delivery_mode": "foreground"}, "ask")["decision"], "allow")
-    assert_eq(permission.evaluate("computer_use", {"action": "type", "text": "x", "delivery_mode": "foreground"}, "strict")["decision"], "deny")
-    share nothing as "computer:grant"
-    share nothing as "computer:grant_fg"
+    assert_error(() => computer.call("page_select", {"target_id": "t", "tab_id": "b", "ref": "p1:1"}), "sin option")
+    -- open_url y page_select son compuestas: no pasan por map_action
+    assert_error(() => computer.map_action("open_url", {"pid": 1, "window_id": 2, "url": "https://a.b"}))
 
 test "computer: cada parámetro del SPEC existe en la task de la tool (un arg desconocido muere antes de la tool)"
     -- 2026-09-06: delivery_mode estaba en el schema pero no en computer_tool → «unknown parameter» y el modelo nunca
@@ -1022,6 +1008,30 @@ test "computer: cada parámetro del SPEC existe en la task de la tool (un arg de
             let out be text(call_tool(REG["computer_use"], args))
             assert(starts_with(out, "waited"), k + " → " + out)
     assert(starts_with(text(call_tool(REG["computer_use"], {"action": "wait", "seconds": 0.1, "delivery_mode": "foreground"})), "waited"))
+
+test "computer: app=\"chrome\" elige la ventana (la propia primero, nunca las del driver); veredicto del driver en el resultado"
+    let wins be [{"pid": 5, "window_id": 50, "app_name": "cua-driver.exe", "title": "Cua.AgentCursorOverlay.default"}, {"pid": 7, "window_id": 70, "app_name": "chrome.exe", "title": "Lampson - Google Chrome"}, {"pid": 7, "window_id": 71, "app_name": "chrome.exe", "title": "Nueva pestaña - Google Chrome"}, {"pid": 9, "window_id": 90, "app_name": "notepad.exe", "title": "Sin título: Bloc de notas"}]
+    assert_eq(computer.pick_window(wins, "chrome", nothing)["window_id"], 70)
+    assert_eq(computer.pick_window(wins, "Chrome", {"pid": 7, "window_id": 71})["window_id"], 71, "la ventana propia primero")
+    assert_eq(computer.pick_window(wins, "bloc de notas", nothing)["pid"], 9)
+    assert_eq(computer.pick_window(wins, "cursor", nothing), nothing, "las del driver no")
+    assert_eq(computer.pick_window(wins, "excel", nothing), nothing)
+    assert_eq(computer.effect_note(nothing), "")
+    assert_eq(computer.effect_note({"effect": "confirmed"}), "\n[effect: confirmed]")
+    assert(contains(computer.effect_note({"effect": "unverifiable"}), "re-capture"))
+    assert(contains(computer.effect_note({"effect": "suspected_noop", "escalation": {"recommended": "foreground", "reason": "chromium"}}), "next: foreground (chromium)"))
+    -- opciones de un desplegable: solo roles de opción, sin los «Remove from…» de los chips ni textboxes
+    let refs be [{"ref": "p1:0", "role": "button", "name": "“Latin America” option. Remove from “Where…” field"}, {"ref": "p1:1", "role": "textbox", "name": "Any other tech, ecosystem…"}, {"ref": "p1:2", "role": "option", "name": "Ninguno"}, {"ref": "p1:3", "role": "option", "name": "In closed beta"}, {"ref": "p1:4", "role": "menuitem", "name": "Latin America"}]
+    assert_eq(length(computer.option_refs(refs)), 3)
+    assert_eq(computer.pick_option(refs, "closed beta")["ref"], "p1:3", "contenida")
+    assert_eq(computer.pick_option(refs, "Latin America")["ref"], "p1:4", "exacta")
+    assert_eq(computer.pick_option(refs, "in closed beta (private)")["ref"], "p1:3", "al revés")
+    assert_eq(computer.pick_option(refs, "ecosystem"), nothing, "un textbox nunca")
+    assert_eq(computer.pick_option(refs, "option"), nothing, "un botón Remove nunca")
+    let rr be computer.render_refs({"page": {"title": "T", "url": "https://a.b"}, "refs": [{"ref": "p1:0", "role": "link", "name": "Docs", "actions": ["click"]}, {"ref": "p1:1", "role": "button", "name": "Go", "actions": ["click"]}]}, "snap", 1)
+    assert(contains(rr, "p1:0 link \"Docs\" [click]"))
+    assert(contains(rr, "… 1 more"))
+    assert(not contains(rr, "outline"))
 
 test "computer: guard — hotkey/key/type/navigate pasan por las guardas antes del driver"
     share nothing as "computer:own_window"
@@ -1045,16 +1055,24 @@ test "computer: describe — una línea legible para aprobaciones y log"
     assert_eq(computer.describe({"action": "hotkey", "keys": ["ctrl", "l"], "pid": 10}), "computer hotkey ctrl+l pid 10")
     assert(starts_with(computer.describe({"action": "navigate", "target_id": "t", "tab_id": "b", "url": "https://a.b"}), "computer navigate https://a.b"))
 
-test "permission: computer_use — leer siempre, actuar pide una vez por corrida, launch/raise/prepare siempre"
+test "permission: computer_use — leer siempre; actuar pide UNA vez por corrida y cubre todo (foreground, apps, navegador)"
     share nothing as "computer:grant"
     assert_eq(permission.evaluate("computer_use", {"action": "see", "pid": 1, "window_id": 2}, "ask")["decision"], "allow")
-    assert_eq(permission.evaluate("computer_use", {"action": "click", "element": 1}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("computer_use", {"action": "page_text", "pid": 1, "window_id": 2}, "strict")["decision"], "allow")
+    let first be permission.evaluate("computer_use", {"action": "click", "element": 1}, "ask")
+    assert_eq(first["decision"], "ask")
+    assert(contains(first["reason"], "asked once"))
     assert_eq(permission.evaluate("computer_use", {"action": "click", "element": 1}, "strict")["decision"], "deny")
     assert_eq(permission.evaluate("computer_use", {"action": "click", "element": 1}, "yolo")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "launch", "name": "notepad"}, "ask")["decision"], "ask")
     share true as "computer:grant"
     assert_eq(permission.evaluate("computer_use", {"action": "type", "text": "x"}, "ask")["decision"], "allow")
-    assert_eq(permission.evaluate("computer_use", {"action": "launch", "name": "notepad"}, "ask")["decision"], "ask")
-    assert_eq(permission.evaluate("computer_use", {"action": "prepare", "pid": 1}, "yolo")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "key", "key": "return", "delivery_mode": "foreground"}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "launch", "name": "notepad"}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "raise", "pid": 1}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "prepare", "pid": 1}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "open_url", "pid": 1, "window_id": 2, "url": "https://a.b"}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("computer_use", {"action": "type", "text": "x", "delivery_mode": "foreground"}, "strict")["decision"], "deny")
     share nothing as "computer:grant"
     assert(starts_with(permission.describe_call("computer_use", {"action": "see", "pid": 1, "window_id": 2}), "computer see"))
 

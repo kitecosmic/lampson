@@ -155,35 +155,21 @@ export task evaluate(name, args, mode)
             give {"decision": "deny", "reason": "strict mode (installs a third-party skill)"}
         give {"decision": "ask", "reason": "installs a third-party skill from " + (when contains(args, "source") then text(args["source"]) otherwise "?") + " (" + (when contains(args, "scope") then text(args["scope"]) otherwise "global") + ")"}
     when name == "computer_use"
-        -- el escritorio del usuario (lib/computer.syn): leer (ventanas, árbol, capturas, texto) siempre; abrir apps,
-        -- traer al frente y preparar el navegador piden SIEMPRE; el resto de las acciones pide UNA vez por corrida
-        -- (la tool deja "computer:grant" en el blackboard al ejecutar la primera aprobada). strict deniega actuar.
+        -- el escritorio del usuario (lib/computer.syn): leer (ventanas, árbol, capturas, texto) siempre; actuar pide UNA
+        -- sola vez por corrida — la primera acción — y cubre todo lo demás (teclas en foreground, abrir apps y
+        -- navegadores): pedir por cada cosa hacía inútil la tool (2026-09-06: cuatro pedidos para llenar un form).
+        -- La tool deja "computer:grant" en el blackboard al ejecutar la primera aprobada. strict deniega actuar.
         let cact be when contains(args, "action") then lower(text(args["action"])) otherwise ""
-        when contains(computer.ASK_ALWAYS, cact)
-            when mode == "yolo"
-                give {"decision": "allow", "reason": "yolo mode (computer " + cact + ")"}
-            when mode == "strict"
-                give {"decision": "deny", "reason": "strict mode (computer " + cact + ")"}
-            give {"decision": "ask", "reason": when cact == "launch" then "opens an app on your desktop" otherwise (when cact == "raise" then "brings a window to the front" otherwise "prepares a browser for page control (may open a separate browser window)")}
-        when contains(computer.ACTING, cact)
-            when mode == "yolo"
-                give {"decision": "allow", "reason": "yolo mode (computer " + cact + ")"}
-            when mode == "strict"
-                give {"decision": "deny", "reason": "strict mode (computer " + cact + ")"}
-            -- foreground = trae la ventana al frente un instante (Chrome lo exige para teclas): su propio permiso, una vez
-            let fg be cact == "open_url"
-            when contains(args, "delivery_mode")
-                set fg to lower(text(args["delivery_mode"])) == "foreground"
-            when fg
-                observe "computer:grant_fg" as gfg
-                when gfg == true
-                    give {"decision": "allow", "reason": "foreground input granted this run"}
-                give {"decision": "ask", "reason": "briefly brings a window to the front to deliver keys or clicks (Chrome needs it; your previous window is restored) — asked once per run"}
-            observe "computer:grant" as granted
-            when granted == true
-                give {"decision": "allow", "reason": "desktop control granted this run"}
-            give {"decision": "ask", "reason": "controls your desktop in the background (asked once per run)"}
-        give {"decision": "allow", "reason": "read-only tool"}
+        when not contains(computer.ACTING, cact)
+            give {"decision": "allow", "reason": "read-only tool"}
+        when mode == "yolo"
+            give {"decision": "allow", "reason": "yolo mode (computer " + cact + ")"}
+        when mode == "strict"
+            give {"decision": "deny", "reason": "strict mode (computer " + cact + ")"}
+        observe "computer:grant" as granted
+        when granted == true
+            give {"decision": "allow", "reason": "desktop control granted this run"}
+        give {"decision": "ask", "reason": "takes control of your desktop for the rest of this run — clicks and keys in the background (briefly to the front when an app needs it), opening apps and browser windows; asked once"}
     give {"decision": "allow", "reason": "read-only tool"}
 
 -- Resumen legible de una tool call, para mostrar al humano antes de aprobar / en el log.

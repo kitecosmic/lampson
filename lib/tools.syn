@@ -37,7 +37,7 @@ use "./computer.syn" as computer
 -- OJO: cada propiedad del SPEC tiene que ser un parámetro acá — un arg que no está da "unknown parameter" antes de
 -- llegar a computer.call (2026-09-06: delivery_mode faltaba y el modelo no pudo apretar Enter en Chrome). Lo cubre
 -- un test de unit.test.syn que recorre las propiedades del SPEC.
-task computer_tool(action, pid, window_id, element, x, y, text, key, keys, modifiers, direction, amount, from_x, from_y, to_x, to_y, x1, y1, x2, y2, value, name, path, url, target_id, tab_id, ref, query, screenshot, max_elements, replace, delta_y, delta_x, profile, seconds, button, delivery_mode)
+task computer_tool(action, pid, window_id, element, x, y, text, key, keys, modifiers, direction, amount, from_x, from_y, to_x, to_y, x1, y1, x2, y2, value, name, path, url, target_id, tab_id, ref, query, screenshot, max_elements, replace, delta_y, delta_x, profile, seconds, button, delivery_mode, option, app, capture_after, fields)
     require exec
     require time
     require env("LAMPSON_*")
@@ -45,7 +45,7 @@ task computer_tool(action, pid, window_id, element, x, y, text, key, keys, modif
     require file.read(".lampson")
     require file.read(".lampson/*")
     let a be {}
-    each e in [["pid", pid], ["window_id", window_id], ["element", element], ["x", x], ["y", y], ["text", text], ["key", key], ["keys", keys], ["modifiers", modifiers], ["direction", direction], ["amount", amount], ["from_x", from_x], ["from_y", from_y], ["to_x", to_x], ["to_y", to_y], ["x1", x1], ["y1", y1], ["x2", x2], ["y2", y2], ["value", value], ["name", name], ["path", path], ["url", url], ["target_id", target_id], ["tab_id", tab_id], ["ref", ref], ["query", query], ["screenshot", screenshot], ["max_elements", max_elements], ["replace", replace], ["delta_y", delta_y], ["delta_x", delta_x], ["profile", profile], ["seconds", seconds], ["button", button], ["delivery_mode", delivery_mode]]
+    each e in [["pid", pid], ["window_id", window_id], ["element", element], ["x", x], ["y", y], ["text", text], ["key", key], ["keys", keys], ["modifiers", modifiers], ["direction", direction], ["amount", amount], ["from_x", from_x], ["from_y", from_y], ["to_x", to_x], ["to_y", to_y], ["x1", x1], ["y1", y1], ["x2", x2], ["y2", y2], ["value", value], ["name", name], ["path", path], ["url", url], ["target_id", target_id], ["tab_id", tab_id], ["ref", ref], ["query", query], ["screenshot", screenshot], ["max_elements", max_elements], ["replace", replace], ["delta_y", delta_y], ["delta_x", delta_x], ["profile", profile], ["seconds", seconds], ["button", button], ["delivery_mode", delivery_mode], ["option", option], ["app", app], ["capture_after", capture_after], ["fields", fields]]
         when e[1] != nothing
             set a[e[0]] to e[1]
     give computer.call(action, a)

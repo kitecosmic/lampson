@@ -9,6 +9,8 @@ const TOOLS = [
   { name: 'add', description: 'Adds two numbers', inputSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'] } },
   { name: 'fail', description: 'Always fails', inputSchema: { type: 'object', properties: {} } },
   { name: 'slow', description: 'Answers after ms milliseconds', inputSchema: { type: 'object', properties: { ms: { type: 'number' } } } },
+  // una respuesta de 2,5 MB en UNA línea: el runtime de Synsema la entrega en trozos de 1 MiB (2026-09-06)
+  { name: 'big', description: 'Returns a 2.5 MB text in one line', inputSchema: { type: 'object', properties: {} } },
 ];
 rl.on('line', (line) => {
   let req; try { req = JSON.parse(line); } catch { return; }
@@ -23,6 +25,7 @@ rl.on('line', (line) => {
     if (name === 'add') return out({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: String(Number(args.a) + Number(args.b)) }], structuredContent: { sum: Number(args.a) + Number(args.b) } } });
     if (name === 'fail') return out({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: 'boom: this tool always fails' }] } });
     if (name === 'slow') return setTimeout(() => out({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'done after ' + args.ms } ] } }), Number(args.ms || 100));
+    if (name === 'big') return out({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'BIG:' + 'x'.repeat(2500000) + ':END' }] } });
     return out({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + name } });
   }
   if (id !== undefined) out({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } });
