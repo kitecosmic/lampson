@@ -233,6 +233,16 @@ result: `edit`/`write` print a line diff (`- red / + green`, line numbers, 2 lin
 tools are collapsed to 15 lines. `/out [n]` prints the n-th last result of the turn in full and
 `/verbose` toggles full output for every tool (saved in `.lampson/config.json`).
 
+In the web UI the file tree opens files in an editor (`public/js/editor.js`): syntax colours by file type
+(JS/TS, CSS, HTML, JSON, Markdown, Python, Rust, Go, shell, PowerShell, SQL, YAML, Dockerfile… via a
+vendored highlight.js, plus Synsema from the TextMate grammar in the `kitecosmic/synsema` repo) and
+`Ctrl+S` saves (`POST /api/fs {op:"write"}` → `lib/fs.syn`, only files that already exist, inside the
+workspace). Before saving it re-reads the file: if the agent changed it meanwhile you choose to overwrite
+or reload instead of clobbering it, and when the agent edits the file you have open and you have no local
+changes it refreshes by itself. Unsaved edits survive switching files (kept as drafts until the page is
+reloaded, which warns). Files over 200k chars open read-only; binaries (sqlite, images, fonts…) show a notice in the viewer instead of an error in the chat. Code fences in the chat are
+highlighted the same way.
+
 The project is mounted as `lampson/workspace` (an NTFS junction on Windows, a symlink elsewhere)
 and every tool declares `file("workspace/*")` — that literal, named scope is what makes the
 confinement real. Config, sessions and process logs live in the `lampson` folder, never in your project.
@@ -241,9 +251,12 @@ confinement real. Config, sessions and process logs live in the `lampson` folder
 
 | `LAMPSON_PROVIDER` | wire | endpoint |
 |---|---|---|
-| `openai` `deepseek` `kimi` `groq` `grok` `openrouter` `ollama` `glm` | OpenAI | `{base_url}/chat/completions` |
+| `openai` `deepseek` `kimi` `groq` `grok` `openrouter` `ollama` `glm` `glm-coding` | OpenAI | `{base_url}/chat/completions` |
 | `anthropic` `minimax` | Anthropic | `{base_url}/messages` |
 
+`glm` is Z.ai pay-as-you-go and `glm-coding` the GLM Coding Plan subscription: same key, different
+endpoint. A Coding Plan key on `glm` answers `429 {"code":"1113","message":"Insufficient balance or no
+resource package"}` — pick `glm-coding` instead; the key saved for `glm` is reused (and vice versa).
 Any compatible endpoint: set `LAMPSON_BASE_URL` (and `LAMPSON_WIRE` if the preset can't guess).
 Model names are normalized to lowercase for providers whose APIs are case-sensitive (DeepSeek, OpenAI,
 Anthropic, Groq, Kimi, Grok, OpenRouter — `DeepSeek-V4-Pro` would be a 400); MiniMax and Ollama keep

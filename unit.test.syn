@@ -37,6 +37,8 @@ use "./lib/plugins.syn" as plugins
 use "./lib/tools/todo.syn" as todo
 use "./lib/prompt.syn" as prompt
 use "./lib/fs.syn" as fs
+use "./lib/settings.syn" as settings
+use "./lib/tree.syn" as tree
 
 let REG be tools.registry()
 
@@ -148,6 +150,7 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert_eq(provider.normalize_model("openai", "GPT-4o"), "gpt-4o")
     assert_eq(provider.normalize_model("minimax", "MiniMax-M3"), "MiniMax-M3")
     assert_eq(provider.normalize_model("glm", "GLM-5.3-Flash"), "glm-5.3-flash")
+    assert_eq(provider.normalize_model("glm-coding", "GLM-5.3"), "glm-5.3")
     assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-v4-flash")
     assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
     assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
@@ -193,6 +196,20 @@ test "presets: cada uno tiene wire, base_url y model"
 
 task ends_with_slash(s)
     give slice(s, length(s) - 1, length(s)) == "/"
+
+test "glm-coding: endpoint del Coding Plan, mismo wire, variable de key sin guion"
+    assert_eq(provider.PRESETS["glm-coding"]["base_url"], "https://api.z.ai/api/coding/paas/v4")
+    assert_eq(provider.PRESETS["glm-coding"]["wire"], provider.PRESETS["glm"]["wire"])
+    assert_eq(provider.key_var("glm-coding"), "LAMPSON_API_KEY_GLM_CODING")
+    assert_eq(provider.key_var("deepseek"), "LAMPSON_API_KEY_DEEPSEEK")
+
+-- tests/run.ps1|sh fijan LAMPSON_NO_CONFIG=1: load() da un doc en blanco y save() NO debe escribir el archivo real
+-- (2026-09-05: tty_test tipeó /exit → remember_command → save(blanco) borró provider y keys del usuario)
+test "settings.save no escribe config.json bajo LAMPSON_NO_CONFIG=1"
+    when env("LAMPSON_NO_CONFIG", "") == "1"
+        assert_eq(settings.save({"provider": "x", "model": "y", "keys": {}}), false)
+    otherwise
+        print("  (saltado: LAMPSON_NO_CONFIG no está en 1)")
 
 -- ---------- tools ----------
 
@@ -825,4 +842,28 @@ test "fs: mkdir/create/rename/move/copy/delete dentro del workspace, sin pisar n
     assert_error(() => fs.remove(D + "/no-existe"))
     assert_error(() => fs.apply({"op": "zap", "path": D}))
     assert_eq(fs.apply({"op": "delete", "path": D})["path"], D)
+    assert(not file_exists("workspace/" + D), "limpio")
+
+test "fs.write (editor web): pisa solo archivos que existen, dentro del workspace"
+    let D be T + "/fsw"
+    assert_eq(fs.mkdir(T, "fsw")["path"], D)
+    assert_eq(fs.create(D, "e.syn", "print(1)")["path"], D + "/e.syn")
+    assert_eq(fs.write(D + "/e.syn", "print(2)\nprint(3)")["lines"], 2)
+    assert_eq(read_file("workspace/" + D + "/e.syn"), "print(2)\nprint(3)")
+    assert_eq(fs.apply({"op": "write", "path": D + "/e.syn", "content": ""})["path"], D + "/e.syn")
+    assert_eq(read_file("workspace/" + D + "/e.syn"), "")
+    assert_error(() => fs.write(D + "/no-existe.txt", "x"))
+    assert_error(() => fs.write(D, "x"))
+    assert_error(() => fs.write("../fuera.txt", "x"))
+    assert_error(() => fs.apply({"op": "write", "path": D + "/tampoco.txt", "content": "x"}))
+    -- lo que lee el visor: líneas y la marca truncated que deja el editor en solo lectura
+    assert_eq(fs.write(D + "/e.syn", "hola\nmundo")["path"], D + "/e.syn")
+    let fc be tree.file_content(D + "/e.syn")
+    assert_eq(fc["lines"], 2)
+    assert_eq(fc["truncated"], false)
+    assert_eq(fc["binary"], false)
+    assert_eq(fc["size"], 10)
+    assert_error(() => tree.file_content(D + "/no-existe.txt"))
+    assert_error(() => tree.file_content(D))
+    assert_eq(fs.remove(D)["path"], D)
     assert(not file_exists("workspace/" + D), "limpio")

@@ -1,0 +1,48 @@
+/* code: el editor de archivos del visor y el tema de highlight.js (archivos abiertos y bloques ``` del chat) */
+
+/* ---- editor: textarea transparente sobre el <pre> resaltado; el gutter aparte sigue el scroll (js/editor.js) ---- */
+#viewer.edit { height:100%; display:flex; flex-direction:column; }
+#viewer.edit .vh { flex:none; }
+#editor { flex:1; min-height:0; position:relative; overflow:hidden; background:var(--paper); }
+#editor[hidden] { display:none; }
+/* la misma métrica que #viewer pre (layout.css): 12.5px/1.62 mono, padding 14px 18px, números en 4ch + 16px */
+#egut { position:absolute; left:0; top:0; width:calc(18px + 4ch + 16px); padding:14px 0 14px 18px; font:400 12.5px/1.62 var(--mono); color:var(--ink-3); text-align:right; user-select:none; pointer-events:none; will-change:transform; }
+#egut span { display:block; padding-right:16px; }
+#viewer #ehl, #viewer #eta { position:absolute; inset:0; margin:0; padding:14px 18px 14px calc(18px + 4ch + 16px); font:400 12.5px/1.62 var(--mono); tab-size:4; white-space:pre; overflow-wrap:normal; word-break:normal; letter-spacing:normal; }
+#viewer #ehl { overflow:hidden; pointer-events:none; color:var(--ink); }
+#viewer #ehl code { display:block; font:inherit; white-space:pre; min-height:100%; min-width:max-content; }
+/* min/max-height:none pisan el textarea genérico del composer (layout.css: max-height 220px) */
+#viewer #eta { display:block; width:100%; height:100%; min-height:0; max-height:none; border:0; outline:0; resize:none; background:transparent; color:transparent; -webkit-text-fill-color:transparent; caret-color:var(--ink); overflow:auto; }
+#viewer #eta::selection { background:var(--sel); color:transparent; }
+#viewer #eta[readonly] { caret-color:transparent; cursor:default; }
+/* cabecera del visor en modo editor: lenguaje · líneas · estado; el botón guardar solo si hay algo que guardar */
+.vh .dirty { color:var(--amber); font-weight:600; }
+.vh .note { color:var(--str); }
+.vh .warn { color:var(--amber); }
+.vh .err { color:var(--rubric); }
+.vh a { color:var(--accent); text-decoration:none; border-bottom:1px dashed var(--rule-2); }
+.vh a:hover { color:var(--ink); border-bottom-color:var(--ink-3); }
+.vh #vsave { padding:4px 9px; font-size:9.5px; letter-spacing:.08em; }
+.vh #vsave:disabled { opacity:.4; }
+.vh .x.ask { color:var(--ink); }
+.vh .x.ask .yes { color:var(--rubric); cursor:pointer; font-weight:600; }
+.vh .x.ask .no { cursor:pointer; }
+
+/* ---- highlight.js: la paleta se raciona como en el resto de la UI — azul lo estructural (keywords, tags), verde
+   strings, ámbar números/literales/builtins/atributos, rubric rojo lo que abre permisos en Synsema (require,
+   allow, deny…), gris los comentarios. Funciona en dark y light porque todo son tokens. ---- */
+.hljs { color:var(--ink); background:transparent; }
+.hljs-comment, .hljs-quote, .hljs-meta, .hljs-meta .hljs-keyword, .hljs-meta .hljs-string { color:var(--ink-3); font-style:italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-tag, .hljs-name, .hljs-doctag, .hljs-section, .hljs-template-tag { color:var(--accent); }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_, .hljs-symbol, .hljs-bullet, .hljs-link { color:var(--str); }
+.hljs-number, .hljs-literal, .hljs-built_in, .hljs-type, .hljs-attr, .hljs-attribute, .hljs-selector-class, .hljs-selector-id, .hljs-selector-attr, .hljs-selector-pseudo, .hljs-variable, .hljs-template-variable, .hljs-variable.language_, .hljs-property { color:var(--amber); }
+.hljs-title, .hljs-title.function_, .hljs-title.class_, .hljs-title.class_.inherited__, .hljs-title.function_.invoke__ { color:var(--ink); font-weight:600; }
+.hljs-deletion { color:var(--rubric); }
+.hljs-keyword.security_ { color:var(--rubric); }
+.hljs-subst { color:var(--ink); font-weight:400; }
+.hljs-punctuation, .hljs-operator { color:var(--ink-2); }
+.hljs-emphasis { font-style:italic; }
+.hljs-strong { font-weight:600; }
+/* xml/html: el nombre del tag azul, sus atributos ámbar, los valores verdes */
+.hljs-tag .hljs-attr { color:var(--amber); }
+.hljs-tag .hljs-string { color:var(--str); }

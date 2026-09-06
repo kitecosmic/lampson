@@ -241,15 +241,23 @@ function showMenu(x, y, e, only) {
   if (only === 'delete') { const first = m.querySelector('.it'); if (first) first.click(); }
 }
 
+// abre el archivo en el editor (js/editor.js): colores por tipo de archivo, Ctrl+S guarda. El <pre> #vbody queda para logs.
 async function openFile(path, row) {
   document.querySelectorAll('.row.active').forEach(x => x.classList.remove('active')); if (row) row.classList.add('active');
   const r = await fetch(BASE + '/api/file?path=' + encodeURIComponent(path)); const d = await r.json();
-  if (!r.ok) { add('denied', esc(d.error || 'error')); return; }
-  $('#vpath').textContent = d.path; $('#vmeta').textContent = d.lines + ' líneas';
-  $('#vbody').className = ''; $('#vbody').innerHTML = String(d.content).split('\n').map((l, i) => `<span class="ln">${i + 1}</span>${esc(l)}`).join('\n');
+  if (!r.ok) { viewerNotice(path, 'no se pudo abrir', String(d.error || 'error')); return; }
+  if (!row) { const ar = rowOf(d.path); if (ar) ar.classList.add('active'); }
+  if (d.binary) { viewerNotice(d.path, 'binario · ' + fmtSize(d.size), 'Este archivo no es texto (base de datos, imagen, fuente, ejecutable…): no se puede mostrar ni editar acá.' + (d.error ? '\n\n' + d.error : '')); return; }
+  $('#vpath').textContent = d.path; $('#vbody').className = '';
+  edOpen(d);
   showPane('viewer'); $('#stage').scrollTop = 0;
 }
+// avisos del visor (binario, error al abrir): en el propio visor, no como mensaje en el chat
+function viewerNotice(path, meta, text) { showText(path, meta, text, false); }
+function fmtSize(n) { n = Number(n) || 0; return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
 // el árbol se refresca solo cuando una tool pudo crear/borrar archivos, con un pequeño debounce; ↻ lo fuerza a mano
 function treeChanged() { debounce('tree', loadTree, 400); }
 $('#tree-reload').onclick = e => { e.stopPropagation(); const b = e.currentTarget; b.classList.remove('spin'); void b.offsetWidth; b.classList.add('spin'); loadTree(); };
-$('#vclose').onclick = () => { showPane('log'); procOpen = null; clearInterval(procTimer); $('#vbody').className = ''; document.querySelectorAll('.row.active, .m.active, .p.active').forEach(x => x.classList.remove('active')); memOpen = null; };
+function closeViewer(discard) { showPane('log'); procOpen = null; clearInterval(procTimer); $('#vbody').className = ''; document.querySelectorAll('.row.active, .m.active, .p.active').forEach(x => x.classList.remove('active')); memOpen = null; edClose(discard); const x = $('#vclose'); x.classList.remove('ask'); x.textContent = '✕ cerrar'; }
+// con cambios sin guardar, el ✕ pregunta antes (mismo patrón en línea que borrar en el árbol)
+$('#vclose').onclick = () => { if (edVisible() && edDirty()) { inlineConfirm($('#vclose'), '¿descartar cambios?', () => closeViewer(true)); return; } closeViewer(false); };

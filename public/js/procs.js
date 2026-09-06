@@ -44,6 +44,6 @@ async function openProc(name) {
 async function refreshProcViewer(name) {
   if (procOpen !== name || $('#viewer').style.display === 'none') { clearInterval(procTimer); return; }
   const x = await (await fetch(BASE + '/api/proc/log?name=' + encodeURIComponent(name) + '&tail=400')).json();
-  $('#vbody').textContent = x.log || ''; $('#vmeta').textContent = x.running ? '● corriendo · log en vivo' : '○ terminado';
+  viewerText(); $('#vbody').textContent = x.log || ''; $('#vmeta').textContent = x.running ? '● corriendo · log en vivo' : '○ terminado';
   if (!x.running) { clearInterval(procTimer); loadProcs(); }
 }

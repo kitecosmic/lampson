@@ -21,7 +21,7 @@ async function openAgent(id) {
     let r; try { r = await (await fetch(BASE + '/api/agents/log?id=' + encodeURIComponent(id))).json(); } catch (e) { return false; }
     const meta = (r.agent || {});
     $('#vpath').textContent = 'subagente ' + id; $('#vmeta').textContent = meta.status === 'running' ? `● corriendo · ${meta.steps} pasos · log en vivo` : `○ ${meta.status || 'terminado'} · ${meta.steps ?? '?'} pasos · ${meta.tokens ?? '?'} tokens`;
-    const pre = $('#vbody'); pre.className = 'log'; pre.textContent = (r.log || '(sin salida todavía)') + (meta.status && meta.status !== 'running' && meta.text ? '\n\n── informe ──\n' + meta.text : '');
+    viewerText(); const pre = $('#vbody'); pre.className = 'log'; pre.textContent = (r.log || '(sin salida todavía)') + (meta.status && meta.status !== 'running' && meta.text ? '\n\n── informe ──\n' + meta.text : '');
     return meta.status === 'running';
   };
   agentPaint = async () => { if (agentOpen !== id || $('#viewer').style.display === 'none') return; const still = await paint(); if (!still) loadAgents(); };

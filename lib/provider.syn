@@ -37,15 +37,36 @@ export let PRESETS be {
     "ollama":     {"wire": "openai",    "base_url": "http://127.0.0.1:11434/v1",         "model": "qwen2.5-coder"},
     "anthropic":  {"wire": "anthropic", "base_url": "https://api.anthropic.com/v1",      "model": "claude-sonnet-4-6"},
     "minimax":    {"wire": "anthropic", "base_url": "https://api.minimax.io/anthropic/v1", "model": "MiniMax-M3"},
-    -- Z.ai (Zhipu): API compatible con OpenAI. Coding Plan: LAMPSON_BASE_URL=https://api.z.ai/api/coding/paas/v4
-    "glm":        {"wire": "openai",    "base_url": "https://api.z.ai/api/paas/v4",       "model": "glm-5.3"}
+    -- Z.ai (Zhipu), API compatible con OpenAI, dos presets con la MISMA key (es la misma cuenta):
+    -- `glm` = pago por uso (saldo prepago); `glm-coding` = GLM Coding Plan (suscripción), que solo vale
+    -- en el endpoint /coding/. La key de un Coding Plan contra `glm` da 429 código 1113 "Insufficient
+    -- balance or no resource package" (visto 2026-09-05): no es la key, es el endpoint.
+    "glm":        {"wire": "openai",    "base_url": "https://api.z.ai/api/paas/v4",        "model": "glm-5.3"},
+    "glm-coding": {"wire": "openai",    "base_url": "https://api.z.ai/api/coding/paas/v4", "model": "glm-5.3"}
 }
 
 -- Keys: una por proveedor en .env como LAMPSON_API_KEY_<PROVIDER> (LAMPSON_API_KEY_DEEPSEEK, _ANTHROPIC…);
 -- LAMPSON_API_KEY es la del proveedor por defecto (LAMPSON_PROVIDER). Así se cambia de proveedor en caliente
 -- (/provider en terminal, selector en la web) sin tocar .env. Solo se comprueba SI hay key, nunca se muestra.
-task key_var(name)
-    give "LAMPSON_API_KEY_" + upper(name)
+-- (`glm-coding` → LAMPSON_API_KEY_GLM_CODING: un guion no es válido en un nombre de variable)
+export task key_var(name)
+    give "LAMPSON_API_KEY_" + upper(join(split(name, "-"), "_"))
+
+-- Presets que comparten cuenta y key (z.ai): si uno no tiene key propia, usa la del otro.
+let KEY_ALIASES be {"glm-coding": "glm", "glm": "glm-coding"}
+
+-- Nombre bajo el que hay key para `n` (config.json o LAMPSON_API_KEY_<P>): él mismo, si no su alias, si no "".
+task key_owner(n)
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when settings.raw_key(n) != "" or env(key_var(n), "") != ""
+        give n
+    when contains(KEY_ALIASES, n)
+        let a be KEY_ALIASES[n]
+        when settings.raw_key(a) != "" or env(key_var(a), "") != ""
+            give a
+    give ""
 
 -- proveedor por defecto: config.json (onboarding / UI) > LAMPSON_PROVIDER en .env > deepseek
 task env_default()
@@ -67,9 +88,7 @@ export task has_key(name)
     require file.read(".lampson/*")
     when name == "ollama"
         give true
-    when settings.raw_key(name) != ""
-        give true
-    when env(key_var(name), "") != ""
+    when key_owner(name) != ""
         give true
     give name == env_default() and env("LAMPSON_API_KEY", "") != ""
 
@@ -97,7 +116,7 @@ export task providers()
 -- Nombres de modelo: DeepSeek, OpenAI, Anthropic, Groq, Kimi, Grok y OpenRouter publican ids en minúsculas
 -- y la API rechaza otra capitalización ("deepseek-v4-pro" sí, "DeepSeek-V4-Pro" → 400 invalid_request_error,
 -- visto 2026-08-27 con un nombre tipeado en /setup). MiniMax ("MiniMax-M3") y Ollama (tags) se dejan tal cual.
-let LOWERCASE_MODELS be ["deepseek", "openai", "anthropic", "groq", "kimi", "grok", "openrouter", "glm"]
+let LOWERCASE_MODELS be ["deepseek", "openai", "anthropic", "groq", "kimi", "grok", "openrouter", "glm", "glm-coding"]
 
 export task normalize_model(name, model)
     let m be trim(text(model))
@@ -163,12 +182,15 @@ export task config_for(name, model)
     when model != nothing and model != ""
         set m to model
     set m to normalize_model(n, m)
-    -- key: guardada en config.json > LAMPSON_API_KEY_<P> > LAMPSON_API_KEY (solo para el proveedor de .env)
+    -- key: guardada en config.json > LAMPSON_API_KEY_<P> > LAMPSON_API_KEY (solo para el proveedor de .env).
+    -- Si el preset no tiene key propia se usa la de su alias (KEY_ALIASES: glm ↔ glm-coding).
     let key be secret("LAMPSON_API_KEY", "ollama")
-    when env(key_var(n), "") != ""
-        set key to secret(key_var(n), "ollama")
-    when settings.raw_key(n) != ""
-        set key to as_secret(settings.raw_key(n), "api_key_" + n)
+    let ko be key_owner(n)
+    when ko != ""
+        when env(key_var(ko), "") != ""
+            set key to secret(key_var(ko), "ollama")
+        when settings.raw_key(ko) != ""
+            set key to as_secret(settings.raw_key(ko), "api_key_" + ko)
     give {
         "provider": n,
         "wire": wire,
@@ -258,7 +280,7 @@ export task supports_vision(cfg)
     when p == "kimi"
         give contains(m, "vision") or contains(m, "vl")
     -- GLM: los modelos con visión llevan sufijo v (glm-4.5v, glm-4.6v)
-    when p == "glm"
+    when p == "glm" or p == "glm-coding"
         give contains(m, "vision") or ends_with(m, "v") or contains(m, "v-")
     give false
 

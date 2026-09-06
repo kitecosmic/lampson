@@ -5,15 +5,17 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <title>Lampson</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- estilos: tokens (fuentes, paleta, base) → layout (grid, cabecera, paneles, chat, composer) → sidebar → chat → panel (el modal) -->
+<!-- estilos: tokens (fuentes, paleta, base) → layout (grid, cabecera, paneles, chat, composer) → sidebar → chat → panel (el modal) → code (editor de archivos + tema de highlight.js) -->
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/layout.css">
 <link rel="stylesheet" href="/css/sidebar.css">
 <link rel="stylesheet" href="/css/chat.css">
 <link rel="stylesheet" href="/css/panel.css">
+<link rel="stylesheet" href="/css/code.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
+<script src="/vendor/highlight.min.js"></script>
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
@@ -91,7 +93,8 @@
 </aside>
 <main>
   <div id="stage">
-    <div id="viewer"><div class="vh"><b id="vpath"></b><span id="vmeta"></span><span class="spacer"></span><span class="x" id="vclose">✕ cerrar</span></div><pre id="vbody"></pre></div>
+    <!-- visor: #vbody para logs y texto; #editor (js/editor.js) para archivos: textarea transparente sobre el <pre> resaltado -->
+    <div id="viewer"><div class="vh"><b id="vpath"></b><span id="vmeta"></span><span class="spacer"></span><button class="hbtn sm" id="vsave" hidden title="guardar (Ctrl+S)">guardar</button><span class="x" id="vclose">✕ cerrar</span></div><pre id="vbody"></pre><div id="editor" hidden><div id="egut"></div><pre id="ehl"><code class="hljs"></code></pre><textarea id="eta" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="editor"></textarea></div></div>
     <div id="log"></div>
     <div id="termpane"><div class="vh"><span class="st"></span><b>terminal</b><span class="ttabs" id="ttabs"></span><button class="hbtn sm new" id="tnew" title="abrir otra terminal: una shell nueva en el workspace">+ nueva terminal</button><span id="tmeta"></span><span class="spacer"></span><span class="wbtn" id="tmin" title="minimizar: esconde el panel y la shell sigue viva">&#8212;</span><span class="wbtn" id="tmax" title="pantalla completa">&#9633;</span><span class="wbtn cl" id="tclose" title="cerrar esta terminal y matar su shell">&#10005;</span></div><div id="xterms"></div></div>
   </div>
@@ -112,6 +115,7 @@
 <script src="/js/theme.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/tree.js"></script>
+<script src="/js/editor.js"></script>
 <script src="/js/terminal.js"></script>
 <script src="/js/procs.js"></script>
 <script src="/js/agents.js"></script>

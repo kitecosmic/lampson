@@ -43,7 +43,7 @@ lampson            # in the terminal
 lampson --web      # in the browser → http://127.0.0.1:8080
 ```
 
-The first time it asks which provider you use — DeepSeek, Anthropic, OpenAI, GLM (Z.ai), Kimi, Groq, OpenRouter,
+The first time it asks which provider you use — DeepSeek, Anthropic, OpenAI, GLM (Z.ai, pay-as-you-go or Coding Plan), Kimi, Groq, OpenRouter,
 Ollama (runs on your machine, no key)… — and for your API key. That's it. Change it any time with `/model`.
 
 More ways (Docker, from source, updating): **[lampson.org/install](https://lampson.org/install)**.

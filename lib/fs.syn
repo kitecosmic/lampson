@@ -102,6 +102,20 @@ export task create(dir, name, content)
     write_file(c.ROOT + "/" + rel, when content == nothing then "" otherwise text(content))
     give {"path": rel, "is_dir": false}
 
+-- guardar desde el editor de la web: pisa SOLO un archivo que ya existe (crear es `create`), dentro del workspace.
+-- "¿cambió en disco desde que lo abrí?" lo comprueba el cliente releyendo antes de guardar (js/editor.js), así el
+-- servidor no guarda estado por archivo.
+export task write(path, content)
+    require file("workspace")
+    require file("workspace/*")
+    let t be target(path)
+    must_exist(t)
+    when t["info"]["is_dir"]
+        raise("\"" + t["rel"] + "\" is a folder")
+    let s be when content == nothing then "" otherwise text(content)
+    write_file(t["real"], s)
+    give {"path": t["rel"], "is_dir": false, "lines": length(split(s, "\n"))}
+
 export task rename(path, name)
     require exec
     require env("LAMPSON_*")
@@ -215,6 +229,8 @@ export task apply(b)
         give mkdir(path, name)
     when op == "create"
         give create(path, name, when contains(b, "content") then b["content"] otherwise "")
+    when op == "write"
+        give write(path, when contains(b, "content") then b["content"] otherwise "")
     when op == "rename"
         give rename(path, name)
     when op == "move"
@@ -223,4 +239,4 @@ export task apply(b)
         give copy(path, dest)
     when op == "delete"
         give remove(path)
-    raise("unknown op '" + op + "' (mkdir, create, rename, move, copy, delete)")
+    raise("unknown op '" + op + "' (mkdir, create, write, rename, move, copy, delete)")

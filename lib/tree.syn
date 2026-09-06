@@ -55,5 +55,18 @@ export task file_content(path)
     require file.read("workspace")
     require file.read("workspace/*")
     let real be c.ws(path)
-    let content be read_file(real)
-    give {"path": c.unws(real), "content": c.truncate(content, 200000), "lines": length(split(content, "\n"))}
+    let rel be c.unws(real)
+    let info be file_info(real)
+    when not info["exists"]
+        raise("\"" + rel + "\" does not exist")
+    when info["is_dir"]
+        raise("\"" + rel + "\" is a folder")
+    -- binarios (sqlite, imágenes, fuentes…): read_file no puede decodificarlos como UTF-8 y el runtime lo reporta
+    -- como "File not found" (engañoso; visto 2026-09-05 con un dev.db de Prisma). En vez de un error, {binary: true}
+    -- y el visor muestra su aviso, sin ensuciar el chat.
+    try
+        let content be read_file(real)
+        -- truncated: el editor de la web lo abre en solo lectura (guardar el recorte destruiría el archivo)
+        give {"path": rel, "content": c.truncate(content, 200000), "lines": length(split(content, "\n")), "truncated": length(content) > 200000, "binary": false, "size": info["size"]}
+    recover err
+        give {"path": rel, "content": "", "lines": 0, "truncated": false, "binary": true, "size": info["size"], "error": text(err)}

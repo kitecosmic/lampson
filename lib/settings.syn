@@ -41,6 +41,12 @@ export task load()
 export task save(doc)
     require file(".lampson")
     require file(".lampson/*")
+    require env("LAMPSON_*")
+    -- LAMPSON_NO_CONFIG=1 (tests): NUNCA escribir el archivo real. Como load() devuelve un doc en blanco,
+    -- cualquier save() (remember_command al tipear /exit en tty_test, /verbose, set_key, set_default…)
+    -- pisaba provider y keys del usuario (pasó el 2026-09-05: tty_test dejó config.json vacío).
+    when env("LAMPSON_NO_CONFIG", "") == "1"
+        give false
     write_file(cfg_path(), json_encode(doc))
     give true
 

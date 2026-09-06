@@ -9,7 +9,7 @@ let busy = false; let cfg = {};
 
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function md(src) { // Markdown mínimo: code fences, inline code, bold, headers, listas, párrafos
-  const blocks = []; src = String(src ?? '').replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, c) => { blocks.push('<pre><code>' + esc(c) + '</code></pre>'); return '\uE000' + (blocks.length - 1) + '\uE001'; }); // marcador = índice entre U+E000/U+E001, NUNCA dígitos a secas (se perdieron dos veces al reescribir el archivo y todo número salía undefined)
+  const blocks = []; src = String(src ?? '').replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, c) => { blocks.push('<pre><code class="hljs">' + (typeof hlCode === 'function' ? hlCode(c, l) : esc(c)) + '</code></pre>'); return '\uE000' + (blocks.length - 1) + '\uE001'; }); // marcador = índice entre U+E000/U+E001, NUNCA dígitos a secas (se perdieron dos veces al reescribir el archivo y todo número salía undefined)
   let h = esc(src).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   h = h.split(/\n{2,}/).map(p => {
     if (/^\uE000\d+\uE001$/.test(p.trim())) return p;
@@ -34,7 +34,8 @@ async function api(path, body) {
 // zona central: 'log' | 'viewer' | 'term'
 function showPane(which) {
   log.style.display = which === 'log' ? '' : 'none';
-  $('#viewer').style.display = which === 'viewer' ? 'block' : 'none';
+  // el editor de archivos (#viewer.edit, code.css) es una columna flex que llena el stage; el texto/log sigue en bloque
+  $('#viewer').style.display = which !== 'viewer' ? 'none' : ($('#viewer').classList.contains('edit') ? 'flex' : 'block');
   $('#termpane').style.display = which === 'term' ? 'flex' : 'none';
   // volver al chat = al final de la conversación (el viewer de archivos deja el scroll de #stage arriba)
   if (which === 'log') $('#stage').scrollTop = $('#stage').scrollHeight;
@@ -42,6 +43,7 @@ function showPane(which) {
 // visor de texto (archivo, log, traza, memoria): título, meta y contenido plano
 function showText(title, meta, text, toEnd) {
   $('#vpath').textContent = title; $('#vmeta').textContent = meta || '';
+  if (typeof viewerText === 'function') viewerText();
   const pre = $('#vbody'); pre.className = 'log'; pre.textContent = text;
   showPane('viewer'); $('#stage').scrollTop = toEnd ? $('#stage').scrollHeight : 0;
 }
