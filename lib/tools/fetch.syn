@@ -1,10 +1,10 @@
 -- lib/tools/fetch.syn — traer una página web o una respuesta HTTP como Markdown/texto, sin ruido
 --
 -- Antes (2026-09-02) el modelo hacía `bash curl <url>` y recibía HTML crudo: head, CSS, nav, scripts —
--- hasta 10k chars por llamada de puro ruido (synsema.com: 26,8 KB de HTML vs 2,5 KB de Markdown).
+-- hasta 10k chars por llamada de puro ruido (synsema.org: 26,8 KB de HTML vs 2,5 KB de Markdown).
 -- Esta tool combina lo mejor de los tres harnesses de referencia:
 --   * opencode webfetch.ts — negociación `Accept` con q-values por formato (markdown/text/html): un sitio
---     que sirve Markdown (synsema.com) lo entrega directo, sin convertir.
+--     que sirve Markdown (synsema.org) lo entrega directo, sin convertir.
 --   * deepseek web-fetch-http — transporte: redirects MANUALES (http_get no los sigue) hasta 5 saltos,
 --     revalidando cada salto con la política de hosts; tope de bytes; Content-Type clasificado (html /
 --     texto / binario); cabecera "url · HTTP status · tipo · tamaño" y pie explícito al truncar.

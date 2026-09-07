@@ -26,7 +26,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue) -or -not (Test-Path $gi
 # 2. synsema
 if (-not (Get-Command synsema -ErrorAction SilentlyContinue)) {
     Say "installing synsema…"
-    Invoke-Expression (Invoke-RestMethod https://synsema.com/install.ps1)
+    Invoke-Expression (Invoke-RestMethod https://synsema.org/install.ps1)
     $env:Path = "$env:Path;$env:LOCALAPPDATA\Synsema"
     if (-not (Get-Command synsema -ErrorAction SilentlyContinue)) { throw "synsema was installed but is not on PATH yet — open a new terminal and re-run this installer" }
 }

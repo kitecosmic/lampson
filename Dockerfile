@@ -8,7 +8,7 @@
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git bash procps iproute2 \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://synsema.com/install.sh | SYNSEMA_INSTALL_DIR=/usr/local/bin sh && synsema --version
+RUN curl -fsSL https://synsema.org/install.sh | SYNSEMA_INSTALL_DIR=/usr/local/bin sh && synsema --version
 WORKDIR /lampson
 COPY . /lampson
 RUN mkdir -p /lampson/workspace /lampson/.lampson /lampson/memory && chmod +x lampson.sh lib/tools/*.sh

@@ -16,7 +16,7 @@ for t in git bash curl; do command -v "$t" >/dev/null || { say "missing '$t' —
 
 if ! command -v synsema >/dev/null; then
     say "installing synsema…"
-    curl -fsSL https://synsema.com/install.sh | sh
+    curl -fsSL https://synsema.org/install.sh | sh
     export PATH="$HOME/.local/bin:$HOME/.synsema/bin:$PATH"
     command -v synsema >/dev/null || { say "synsema installed but not on PATH yet — open a new shell and re-run"; exit 1; }
 fi

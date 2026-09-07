@@ -23,7 +23,7 @@ The form now shows “Wrong email or password” when the API returns 401. Tests
 npm i -g lampson
 ```
 
-No Node.js? One line does it all (installs what's missing, including [Synsema](https://synsema.com)):
+No Node.js? One line does it all (installs what's missing, including [Synsema](https://synsema.org)):
 
 ```powershell
 # Windows (PowerShell)

@@ -969,9 +969,9 @@ test "computer: browser y page renderizan lo que el driver manda en structuredCo
     assert(contains(rb, "- tab_id: tab-10 · \"Docs\""))
     assert(contains(rb, "Bind ONCE"))
     assert_eq(computer.render_bind(nothing, "x"), "x")
-    let snap be {"page": {"title": "Synsema", "url": "https://synsema.com/"}, "snapshot": {"id": "p1", "complete": false, "omitted": {"offscreen": 479}}, "outline": "- banner\n  - link \"Docs\" [focusable=true]", "refs": [{"ref": "p1:2", "role": "link", "name": "Docs", "actions": ["click", "pointer"], "visibility": "in_viewport"}, {"ref": "p1:5", "role": "button", "name": nothing, "actions": ["click"], "visibility": "near_viewport"}], "content_refs": [{"ref": "p1:9", "role": "statictext", "name": "## Install"}]}
-    let rs be computer.render_snapshot(snap, "semantic snapshot p1 of https://synsema.com/: 2 action ref(s), 1 content ref(s)", false)
-    assert(contains(rs, "page: \"Synsema\" https://synsema.com/"))
+    let snap be {"page": {"title": "Synsema", "url": "https://synsema.org/"}, "snapshot": {"id": "p1", "complete": false, "omitted": {"offscreen": 479}}, "outline": "- banner\n  - link \"Docs\" [focusable=true]", "refs": [{"ref": "p1:2", "role": "link", "name": "Docs", "actions": ["click", "pointer"], "visibility": "in_viewport"}, {"ref": "p1:5", "role": "button", "name": nothing, "actions": ["click"], "visibility": "near_viewport"}], "content_refs": [{"ref": "p1:9", "role": "statictext", "name": "## Install"}]}
+    let rs be computer.render_snapshot(snap, "semantic snapshot p1 of https://synsema.org/: 2 action ref(s), 1 content ref(s)", false)
+    assert(contains(rs, "page: \"Synsema\" https://synsema.org/"))
     assert(contains(rs, "479 nodes offscreen"))
     assert(contains(rs, "outline:\n- banner"))
     assert(contains(rs, "  p1:2 link \"Docs\" [click,pointer]"))
