@@ -41,8 +41,11 @@ export let PRESETS be {
     -- `glm` = pago por uso (saldo prepago); `glm-coding` = GLM Coding Plan (suscripción), que solo vale
     -- en el endpoint /coding/. La key de un Coding Plan contra `glm` da 429 código 1113 "Insufficient
     -- balance or no resource package" (visto 2026-09-05): no es la key, es el endpoint.
-    "glm":        {"wire": "openai",    "base_url": "https://api.z.ai/api/paas/v4",        "model": "glm-5.3"},
-    "glm-coding": {"wire": "openai",    "base_url": "https://api.z.ai/api/coding/paas/v4", "model": "glm-5.3"}
+    -- Modelo por defecto glm-5.3-flash (2026-09-07): el primer GLM-5 multimodal nativo (imágenes por
+    -- image_url, verificado con un PNG en data URL), 1M de contexto, 128K de salida y más rápido que
+    -- glm-5.3; ambos endpoints lo listan en GET /models. Su thinking no se puede apagar (ver chat_openai).
+    "glm":        {"wire": "openai",    "base_url": "https://api.z.ai/api/paas/v4",        "model": "glm-5.3-flash"},
+    "glm-coding": {"wire": "openai",    "base_url": "https://api.z.ai/api/coding/paas/v4", "model": "glm-5.3-flash"}
 }
 
 -- Keys: una por proveedor en .env como LAMPSON_API_KEY_<PROVIDER> (LAMPSON_API_KEY_DEEPSEEK, _ANTHROPIC…);
@@ -222,7 +225,15 @@ task err_result(msg)
 
 -- ---------- OpenAI wire (chat/completions) ----------
 
-task to_openai_messages(messages)
+-- Presets de Z.ai: comparten cuenta y key, y son los únicos que reciben `thinking` y el eco del razonamiento.
+task is_glm(cfg)
+    when not contains(cfg, "provider")
+        give false
+    give cfg["provider"] == "glm" or cfg["provider"] == "glm-coding"
+
+-- keep_reasoning: devolver el `reasoning` guardado en cada assistant como `reasoning_content` (solo Z.ai;
+-- otros endpoints podrían rechazar el campo). Ver chat_openai.
+task to_openai_messages(messages, keep_reasoning)
     let out be []
     each m in messages
         when m["role"] == "assistant"
@@ -233,6 +244,10 @@ task to_openai_messages(messages)
                     each tc in m["tool_calls"]
                         set tcs to append(tcs, {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": json_encode(tc["args"])}})
                     set entry to {"role": "assistant", "content": m["content"], "tool_calls": tcs}
+            when keep_reasoning and contains(m, "reasoning")
+                when m["reasoning"] != nothing
+                    when m["reasoning"] != ""
+                        set entry["reasoning_content"] to m["reasoning"]
             set out to append(out, entry)
         otherwise when m["role"] == "tool"
             set out to append(out, {"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
@@ -279,9 +294,10 @@ export task supports_vision(cfg)
         give contains(m, "vision") or starts_with(m, "grok-4")
     when p == "kimi"
         give contains(m, "vision") or contains(m, "vl")
-    -- GLM: los modelos con visión llevan sufijo v (glm-4.5v, glm-4.6v)
+    -- GLM: los modelos con visión llevan sufijo v (glm-4.5v, glm-4.6v); glm-5.3-flash es el primer GLM-5
+    -- multimodal nativo (glm-5.3 a secas NO acepta imágenes). Verificado 2026-09-07 con un PNG por data URL.
     when p == "glm" or p == "glm-coding"
-        give contains(m, "vision") or ends_with(m, "v") or contains(m, "v-")
+        give contains(m, "vision") or ends_with(m, "v") or contains(m, "v-") or starts_with(m, "glm-5.3-flash")
     give false
 
 -- Modelo sin visión: la imagen se reemplaza por una nota que el modelo puede explicarle al usuario
@@ -333,9 +349,16 @@ task parse_args(raw)
         give {"_raw": raw, "_parse_error": err}
 
 task chat_openai(cfg, messages, catalog)
-    let body be {"model": cfg["model"], "messages": to_openai_messages(messages), "max_tokens": cfg["max_tokens"]}
+    let glm be is_glm(cfg)
+    let body be {"model": cfg["model"], "messages": to_openai_messages(messages, glm), "max_tokens": cfg["max_tokens"]}
     when length(catalog) > 0
-        set body to {"model": cfg["model"], "messages": to_openai_messages(messages), "max_tokens": cfg["max_tokens"], "tools": to_openai_tools(catalog)}
+        set body["tools"] to to_openai_tools(catalog)
+    -- Z.ai: el thinking de glm-5.3-flash no se puede apagar y la doc recomienda clear_thinking=false, que
+    -- conserva el razonamiento entre pasos de un turno SI cada assistant vuelve con su reasoning_content
+    -- (por eso se guarda `reasoning` en el mensaje y to_openai_messages lo ecoa). Solo para los presets
+    -- glm: otros endpoints OpenAI rechazan parámetros desconocidos. Verificado 2026-09-07: 200 con y sin eco.
+    when glm
+        set body["thinking"] to {"type": "enabled", "clear_thinking": false}
     let headers be {"Authorization": bearer(cfg["key"]), "Content-Type": "application/json"}
     let r be http_post(strip_slash(cfg["base_url"]) + "/chat/completions", json_encode(body), headers, cfg["timeout"])
     when contains(r, "error")
@@ -353,6 +376,11 @@ task chat_openai(cfg, messages, catalog)
         when msg["tool_calls"] != nothing
             each tc in msg["tool_calls"]
                 set calls to append(calls, {"id": tc["id"], "name": tc["function"]["name"], "args": parse_args(tc["function"]["arguments"])})
+    -- razonamiento del paso (reasoning_content): se guarda solo para Z.ai, que es quien lo vuelve a pedir
+    let reasoning be ""
+    when glm and contains(msg, "reasoning_content")
+        when msg["reasoning_content"] != nothing
+            set reasoning to text(msg["reasoning_content"])
     let usage be {"input": 0, "output": 0, "cached": 0}
     when contains(j, "usage")
         when j["usage"] != nothing
@@ -370,7 +398,7 @@ task chat_openai(cfg, messages, catalog)
             give {"text": "", "tool_calls": [], "usage": usage, "stop": "end", "error": "empty response: the model used its whole output budget (max_tokens=" + text(cfg["max_tokens"]) + ") without emitting text or tool calls — a reasoning model can spend it all thinking. Raise LAMPSON_MAX_TOKENS (or simplify the request) and say «seguí»."}
         set txt to txt + "\n\n[respuesta cortada: se alcanzó max_tokens=" + text(cfg["max_tokens"]) + " — decí «seguí» para que continúe]"
     let finish be when length(calls) > 0 then "tool_calls" otherwise "end"
-    give {"text": txt, "tool_calls": calls, "usage": usage, "stop": finish, "error": nothing}
+    give {"text": txt, "tool_calls": calls, "usage": usage, "stop": finish, "error": nothing, "reasoning": reasoning}
 
 -- ---------- Anthropic wire (messages) ----------
 

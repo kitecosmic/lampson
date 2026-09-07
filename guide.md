@@ -120,8 +120,8 @@ the `provider · model` pill in the web header (one key per provider is kept, so
 (≤ 1568 px) and sent inline. In the terminal, `/paste` attaches the image on the clipboard (copy a
 screenshot first) and `/image <path>` a file; they go with your next message (`📎2 ❯`). If the current model does not declare image input, you are warned before
 sending and the model receives a text note instead of a 400. The table is `supports_vision` in
-`lib/provider.syn` (anthropic, minimax, gpt-4o/4.1/5, o-series, groq llama-4, and models named
-`*vision*`/`*vl*` on openrouter/ollama/kimi/grok); set `"vision": true` in `config.json` to override
+`lib/provider.syn` (anthropic, minimax, gpt-4o/4.1/5, o-series, groq llama-4, glm-5.3-flash and the
+GLM `*v` models, and models named `*vision*`/`*vl*` on openrouter/ollama/kimi/grok); set `"vision": true` in `config.json` to override
 it for a model Lampson does not know — or `false` to force the text note.
 
 **Updating**: Lampson checks `origin/main` on start and tells you when a newer version exists (terminal
@@ -262,6 +262,9 @@ confinement real. Config, sessions and process logs live in the `lampson` folder
 `glm` is Z.ai pay-as-you-go and `glm-coding` the GLM Coding Plan subscription: same key, different
 endpoint. A Coding Plan key on `glm` answers `429 {"code":"1113","message":"Insufficient balance or no
 resource package"}` — pick `glm-coding` instead; the key saved for `glm` is reused (and vice versa).
+Both default to `glm-5.3-flash`, Z.ai's first natively multimodal GLM-5 (images, 1M context, 128K output,
+faster than `glm-5.3`). Its thinking cannot be switched off, so Lampson sends `thinking.clear_thinking=false`
+and echoes each step's `reasoning_content` back in the next request, as Z.ai recommends for tool loops.
 Any compatible endpoint: set `LAMPSON_BASE_URL` (and `LAMPSON_WIRE` if the preset can't guess).
 Model names are normalized to lowercase for providers whose APIs are case-sensitive (DeepSeek, OpenAI,
 Anthropic, Groq, Kimi, Grok, OpenRouter — `DeepSeek-V4-Pro` would be a 400); MiniMax and Ollama keep

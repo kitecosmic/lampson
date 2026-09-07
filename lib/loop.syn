@@ -395,6 +395,11 @@ export task run_turn(cfg, messages, opts, on_event)
         emit(on_event, "usage", {"step": steps, "usage": r["usage"], "total": usage}, tag)
         let clean_text be strip_raw_tool_calls(r["text"])
         let assistant be {"role": "assistant", "content": clean_text, "tool_calls": r["tool_calls"]}
+        -- razonamiento del paso (solo lo trae el wire para los presets glm): va en el mensaje para
+        -- devolvérselo al modelo en el paso siguiente (thinking conservado, ver provider.chat_openai)
+        when contains(r, "reasoning")
+            when r["reasoning"] != ""
+                set assistant["reasoning"] to r["reasoning"]
         set msgs to append(msgs, assistant)
         when clean_text != ""
             emit(on_event, "assistant", clean_text, tag)
