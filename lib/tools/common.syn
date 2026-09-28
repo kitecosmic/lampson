@@ -20,7 +20,7 @@ task has_dotdot(p)
 
 -- path del modelo → path real bajo workspace/
 export task ws(path)
-    let p be when path == nothing then "." otherwise replace_text(text(path), "\\", "/")
+    let p be when path == nothing then "." otherwise replace(text(path), "\\", "/")
     let stripping be true
     while stripping
         when starts_with(p, "./")

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131412">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<title>Lampson · entrar</title>
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/login.css">
+<script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body class="auth">
+<main class="authbox">
+  <img src="/favicon.svg" alt="" class="logo" width="48" height="48">
+  <!-- login: dispositivo ya emparejado -->
+  <section id="login" hidden>
+    <p class="eyebrow">lampson</p>
+    <h1>Entrar</h1>
+    <p class="lead">Usá la passkey de este dispositivo: huella, cara o el bloqueo de pantalla.</p>
+    <button class="primary" id="doLogin">Entrar con passkey</button>
+    <p class="hint">¿Dispositivo nuevo? En la PC donde corre lampson abrí <b>dispositivos</b> → <b>emparejar</b> y escaneá el QR.</p>
+  </section>
+  <!-- emparejar: llegó desde el QR (/pair#<código>) -->
+  <section id="pair" hidden>
+    <p class="eyebrow">emparejar dispositivo</p>
+    <h1>Conectar con tu PC</h1>
+    <p class="lead">Vas a crear una passkey para este dispositivo. Después entrás solo con la huella o la cara, sin contraseñas.</p>
+    <label class="field">nombre del dispositivo<input id="devName" maxlength="60" autocomplete="off" spellcheck="false"></label>
+    <button class="primary" id="doPair">Crear passkey</button>
+    <p class="hint">El código del QR vale 5 minutos y sirve una sola vez.</p>
+  </section>
+  <p class="msg" id="msg" role="status"></p>
+</main>
+<script src="/js/pwa.js"></script>
+<script src="/js/login.js"></script>
+</body>
+</html>

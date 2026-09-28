@@ -68,7 +68,7 @@ export task list()
         let entries be list_dir(DIR)
         each e in entries
             when not e["is_dir"]
-                let id be replace_text(e["name"], ".json", "")
+                let id be replace(e["name"], ".json", "")
                 try
                     let d be load(id)
                     let title be when contains(d["meta"], "title") then d["meta"]["title"] otherwise ""
@@ -80,7 +80,7 @@ export task list()
                     set out to out
     recover err
         give []
-    give sort_by(out, (s) => 0 - number(replace_text(replace_text(s["id"], "-", ""), "test", "")))
+    give sort_by(out, (s) => 0 - number(replace(replace(s["id"], "-", ""), "test", "")))
 
 -- Búsqueda de texto en las sesiones de ESTE proyecto (título y contenido de los mensajes user/assistant):
 -- [{id, updated, title, snippet}] — snippet = el primer trozo donde aparece `q`. Vacío = todas (sin snippet).
@@ -111,7 +111,7 @@ export task search(q, limit)
                                 let pos be length(split(lc, needle)[0])
                                 let a be when pos > 60 then pos - 60 otherwise 0
                                 let b be when pos + length(needle) + 90 < length(c) then pos + length(needle) + 90 otherwise length(c)
-                                set hit to (when a > 0 then "…" otherwise "") + replace_text(replace_text(slice(c, a, b), "\r", ""), "\n", " ") + (when b < length(c) then "…" otherwise "")
+                                set hit to (when a > 0 then "…" otherwise "") + replace(replace(slice(c, a, b), "\r", ""), "\n", " ") + (when b < length(c) then "…" otherwise "")
                 recover err
                     set hit to nothing
             when hit != nothing
@@ -132,7 +132,7 @@ export task delete(id)
     let files be [path_of(id), ".lampson/trace/" + id + ".log", ".lampson/trace/" + id + ".last"]
     each f in files
         when env("OS", "") == "Windows_NT"
-            run("cmd", ["/c", "del", "/q", replace_text(f, "/", "\\")], 10)
+            run("cmd", ["/c", "del", "/q", replace(f, "/", "\\")], 10)
         otherwise
             run("rm", ["-f", f], 10)
     give "borrada " + id
@@ -141,7 +141,7 @@ export task delete(id)
 export task title_of(messages)
     each m in messages
         when m["role"] == "user"
-            let t be replace_text(m["content"], "\n", " ")
+            let t be replace(m["content"], "\n", " ")
             when length(t) > 60
                 give slice(t, 0, 60) + "…"
             give t

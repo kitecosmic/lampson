@@ -3,35 +3,38 @@ use "./tools/common.syn" as c
 
 let MAX_ENTRIES be 2000
 
-task walk(dir, depth, max_depth, state)
+-- n = entradas contadas hasta ahora en todo el árbol; da {items, n} (listas y mapas son valores: el contador vuelve con give)
+task walk(dir, depth, max_depth, n)
     let out be []
     when depth > max_depth
-        give out
+        give {"items": out, "n": n}
     let entries be []
     try
         set entries to list_dir(dir)
     recover err
-        give out
+        give {"items": out, "n": n}
     each e in entries
-        when state["n"] >= MAX_ENTRIES
-            give out
+        when n >= MAX_ENTRIES
+            give {"items": out, "n": n}
         let rel be c.unws(dir + "/" + e["name"])
         when e["is_dir"]
             when not contains(c.IGNORED_DIRS, e["name"])
-                set state["n"] to state["n"] + 1
-                set out to append(out, {"name": e["name"], "path": rel, "is_dir": true, "children": walk(dir + "/" + e["name"], depth + 1, max_depth, state)})
+                set n to n + 1
+                let sub be walk(dir + "/" + e["name"], depth + 1, max_depth, n)
+                set n to sub["n"]
+                set out to append(out, {"name": e["name"], "path": rel, "is_dir": true, "children": sub["items"]})
         otherwise
-            set state["n"] to state["n"] + 1
+            set n to n + 1
             set out to append(out, {"name": e["name"], "path": rel, "is_dir": false, "size": e["size"]})
     -- carpetas primero
-    give where(out, (x) => x["is_dir"]) + where(out, (x) => not x["is_dir"])
+    give {"items": where(out, (x) => x["is_dir"]) + where(out, (x) => not x["is_dir"]), "n": n}
 
 -- árbol anidado: [{name, path, is_dir, size?, children?}]
 export task tree(max_depth)
     require file.read("workspace")
     require file.read("workspace/*")
-    let state be {"n": 0}
-    give {"entries": walk(c.ROOT, 0, max_depth, state), "count": state["n"], "truncated": state["n"] >= MAX_ENTRIES}
+    let w be walk(c.ROOT, 0, max_depth, 0)
+    give {"entries": w["items"], "count": w["n"], "truncated": w["n"] >= MAX_ENTRIES}
 
 -- render de texto para la terminal (2 niveles, compacto)
 export task render(max_depth, max_lines)

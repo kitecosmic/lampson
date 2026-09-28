@@ -70,7 +70,7 @@ export task tz_offset()
 
 -- "+0200" | "-03:00" | "-3" → segundos
 export task parse_offset(raw)
-    let s be replace_text(trim(raw), ":", "")
+    let s be replace(trim(raw), ":", "")
     when s == ""
         give 0
     let sign be when starts_with(s, "-") then -1 otherwise 1
@@ -126,8 +126,8 @@ task parse_span(tok)
     let t be lower(tok)
     when not matches(t, "[0-9]+(\.[0-9]+)?(s|m|h|d|min|h?ora?s?|d[ií]as?|seg(undos)?|minutos?)?")
         give nothing
-    let num be number(capture(t, "[0-9]+(?:\.[0-9]+)?"))
-    let unit be replace_re(t, "^[0-9.]+", "")
+    let num be number(regex_capture(t, "[0-9]+(?:\.[0-9]+)?")[0])
+    let unit be regex_replace(t, "^[0-9.]+", "")
     when unit == "s" or starts_with(unit, "seg")
         give floor(num)
     when unit == "m" or starts_with(unit, "min")
@@ -139,9 +139,9 @@ task parse_span(tok)
 -- → {ok, plan: {kind: every|daily|weekly, seconds?, hh?, mm?, days?}, error}
 export task parse_when(spec)
     let s be lower(trim(text(spec)))
-    set s to replace_text(replace_text(replace_text(s, " a las ", " "), " at ", " "), "todos los días", "daily")
-    set s to replace_text(replace_text(s, "todos los dias", "daily"), "every day", "daily")
-    let toks be where(split(replace_text(s, ",", " "), " "), (x) => x != "")
+    set s to replace(replace(replace(s, " a las ", " "), " at ", " "), "todos los días", "daily")
+    set s to replace(replace(s, "todos los dias", "daily"), "every day", "daily")
+    let toks be where(split(replace(s, ",", " "), " "), (x) => x != "")
     when length(toks) == 0
         give {"ok": false, "error": "empty schedule"}
     let head be toks[0]
@@ -335,7 +335,7 @@ export task mount_ok()
         give true
 
 task norm_path(p)
-    let s be lower(replace_text(trim(p), "\\", "/"))
+    let s be lower(replace(trim(p), "\\", "/"))
     -- Git Bash: /c/Users/x → c:/users/x
     when matches(s, "/[a-z]/.*")
         set s to slice(s, 1, 2) + ":" + slice(s, 2, length(s))
@@ -369,8 +369,8 @@ task put(t)
     give t
 
 task slug(name)
-    let s be lower(replace_re(text(name), "[^A-Za-z0-9]+", "-"))
-    set s to replace_re(replace_re(s, "^-+", ""), "-+$", "")
+    let s be lower(regex_replace(text(name), "[^A-Za-z0-9]+", "-"))
+    set s to regex_replace(regex_replace(s, "^-+", ""), "-+$", "")
     when s == ""
         give "task"
     when length(s) > 24
@@ -471,7 +471,7 @@ task default_name(action)
     when action["type"] == "bash"
         let cmd be action["command"]
         give when length(cmd) > 40 then slice(cmd, 0, 40) + "…" otherwise cmd
-    let p be replace_text(action["prompt"], "\n", " ")
+    let p be replace(action["prompt"], "\n", " ")
     give when length(p) > 40 then slice(p, 0, 40) + "…" otherwise p
 
 export task remove(id)
@@ -628,7 +628,7 @@ export task record(t, started, status, output, extra)
     give fresh
 
 task one_line(s, max)
-    let t be trim(replace_text(replace_text(text(s), "\r", ""), "\n", " ⏎ "))
+    let t be trim(replace(replace(text(s), "\r", ""), "\n", " ⏎ "))
     when length(t) > max
         give slice(t, 0, max) + "…"
     give t
@@ -646,7 +646,7 @@ export task log_tail(id, n)
     when not matches(text(id), "[a-z0-9-]{1,40}")
         give ""
     try
-        let lines be split(replace_text(read_file(LOG_DIR + "/" + id + ".log"), "\r", ""), "\n")
+        let lines be split(replace(read_file(LOG_DIR + "/" + id + ".log"), "\r", ""), "\n")
         when length(lines) > n
             set lines to slice(lines, length(lines) - n, length(lines))
         give join(lines, "\n")

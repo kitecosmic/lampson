@@ -120,13 +120,13 @@ serve on 8765
         when starts_with(q, "bash")
             when tools_seen == 0
                 give reply_tools([tool_call("bash", {"command": "echo hello-from-shell && echo err 1>&2 && exit 2"})])
-            give reply_text("final bash · tool said: " + replace_text(msgs[length(msgs) - 1]["content"], "\n", " | "))
+            give reply_text("final bash · tool said: " + replace(msgs[length(msgs) - 1]["content"], "\n", " | "))
         when starts_with(q, "loop")
             give reply_tools([tool_call("ls", {"path": "."})])
         when starts_with(q, "cuelga")
             when tools_seen == 0
                 give reply_tools([tool_call("bash", {"command": "node -e \"setInterval(()=>{},1000)\" & sleep 200", "timeout": 2})])
-            give reply_text("final cuelga · tool said: " + replace_text(msgs[length(msgs) - 1]["content"], "\n", " | "))
+            give reply_text("final cuelga · tool said: " + replace(msgs[length(msgs) - 1]["content"], "\n", " | "))
         when starts_with(q, "servidor")
             when tools_seen == 0
                 give reply_tools([tool_call("bash", {"command": "(sleep 300 > /dev/null 2>&1 < /dev/null &) ; echo bg-started"})])
@@ -138,7 +138,7 @@ serve on 8765
                 give reply_tools([tool_call("bash", {"command": "sleep 3; echo ok"})])
             when tools_seen == 2
                 give reply_tools([tool_call("process", {"action": "logs", "name": "demo", "tail": 3}), tool_call("process", {"action": "list"})])
-            give reply_text("final proceso · last: " + replace_text(msgs[length(msgs) - 1]["content"], "\n", " | "))
+            give reply_text("final proceso · last: " + replace(msgs[length(msgs) - 1]["content"], "\n", " | "))
         when starts_with(q, "crudo")
             when tools_seen == 0
                 give reply_tools([tool_call("ls", {"path": "."})])

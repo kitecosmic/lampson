@@ -31,15 +31,15 @@ otherwise
     let st be computer.ensure_started()
     check(st["status"] == "ready", "supervisor listo · " + text(length(st["tools"])) + " tools crudas del driver")
     let w be computer.call("windows", {})
-    check(contains(w, "pid"), "windows: " + slice(replace_text(w, "\n", " | "), 0, 110))
+    check(contains(w, "pid"), "windows: " + slice(replace(w, "\n", " | "), 0, 110))
     check(not contains(lower(w), "cua-driver"), "las ventanas del propio driver (overlay) no se listan")
     -- primera ventana en pantalla que no sea del driver: "(pid N)" … "[window_id: M]"
     let pm be nothing
     let wm be nothing
     each line in split(w, "\n")
         when pm == nothing
-            let lp be capture(line, "\\(pid (\\d+)\\)")
-            let lw be capture(line, "\\[window_id: (\\d+)\\]")
+            let lp be regex_capture(line, "\\(pid (\\d+)\\)")
+            let lw be regex_capture(line, "\\[window_id: (\\d+)\\]")
             when lp != nothing and lw != nothing
                 set pm to lp
                 set wm to lw
@@ -57,10 +57,10 @@ otherwise
         let shot_out be computer.call("see", {"pid": pid, "window_id": wid, "max_elements": 5, "screenshot": true})
         observe "computer:screenshot" as shot
         check(shot != nothing and length(shot["images"]) == 1, "see screenshot=true deja la imagen en el blackboard (" + (when shot == nothing then "nada" otherwise text(length(shot["images"][0]["data"])) + " chars base64, " + shot["images"][0]["media_type"]) + ")")
-        check(contains(shot_out, "screenshot"), "y el texto avisa al modelo: " + slice(replace_text(shot_out, "\n", " "), length(shot_out) - 90, length(shot_out)))
+        check(contains(shot_out, "screenshot"), "y el texto avisa al modelo: " + slice(replace(shot_out, "\n", " "), length(shot_out) - 90, length(shot_out)))
         share nothing as "computer:screenshot"
         let pt be computer.call("page_text", {"pid": pid, "window_id": wid})
-        print("  · page_text: " + slice(replace_text(pt, "\n", " "), 0, 90))
+        print("  · page_text: " + slice(replace(pt, "\n", " "), 0, 90))
     let s be computer.call("status", {})
     check(starts_with(s, "computer use"), "status: " + slice(s, 0, 100))
     computer.stop_driver()

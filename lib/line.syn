@@ -37,7 +37,7 @@ task starts(s, p)
 task candidates(buf, ctx)
     when not starts(buf, "/") or contains(buf, "\n")
         give {"kind": "", "items": [], "token": ""}
-    let sp be capture(buf, "^(/\S*)\s+(.*)$")
+    let sp be regex_capture(buf, "^(/\S*)\s+(.*)$")
     when sp == nothing
         -- comando a medias: recientes primero cuando es "/" pelado
         let items be []
@@ -208,7 +208,7 @@ export task read(prompt, color, ctx)
             set result to nothing
             set done to true
         otherwise when ev["type"] == "paste"
-            set st to insert(st, replace_text(ev["text"], "\r", ""))
+            set st to insert(st, replace(ev["text"], "\r", ""))
             set st to refresh_menu(st, ctx)
         otherwise when ev["type"] == "resize"
             ui.set_cols(ev["cols"])

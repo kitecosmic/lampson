@@ -21,12 +21,12 @@ export task status()
     let branch be ""
     let changes be {}
     let counts be {"modified": 0, "added": 0, "deleted": 0, "untracked": 0}
-    each line in split(replace_text(out, "\r", ""), "\n")
+    each line in split(replace(out, "\r", ""), "\n")
         when starts_with(line, "## ")
             set branch to split(split(slice(line, 3, length(line)), "...")[0], " ")[0]
         otherwise when length(line) > 3
             let xy be slice(line, 0, 2)
-            let path be replace_text(trim(slice(line, 3, length(line))), "\"", "")
+            let path be replace(trim(slice(line, 3, length(line))), "\"", "")
             when contains(path, " -> ")
                 set path to split(path, " -> ")[1]
             let code be trim(xy)

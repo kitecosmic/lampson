@@ -126,27 +126,27 @@ let NAMED be {"nbsp": " ", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "cop
 export task decode_entities(s)
     let out be s
     -- numéricas: &#233; &#xE9;
-    each m in find_all(out, "&#[0-9]{1,7};|&#[xX][0-9A-Fa-f]{1,6};")
+    each m in regex_find_all(out, "&#[0-9]{1,7};|&#[xX][0-9A-Fa-f]{1,6};")
         let inner be slice(m, 2, length(m) - 1)
         let cp be when starts_with(lower(inner), "x") then hex_to_int(slice(inner, 1, length(inner))) otherwise floor(number(inner))
-        set out to replace_text(out, m, cp_text(cp))
+        set out to replace(out, m, cp_text(cp))
     -- con nombre (las comunes; el resto se deja tal cual)
-    each m in find_all(out, "&[A-Za-z][A-Za-z0-9]{1,8};")
+    each m in regex_find_all(out, "&[A-Za-z][A-Za-z0-9]{1,8};")
         let name be slice(m, 1, length(m) - 1)
         when contains(NAMED, name)
-            set out to replace_text(out, m, NAMED[name])
-    give replace_text(out, "&amp;", "&")
+            set out to replace(out, m, NAMED[name])
+    give replace(out, "&amp;", "&")
 
 task strip_tags(s)
-    give replace_re(s, "(?s)<[^>]*>", "")
+    give regex_replace(s, "(?s)<[^>]*>", "")
 
 -- texto de un fragmento inline (título, texto de un link, celda): sin tags, entidades, espacios colapsados
 task inline_text(s)
-    give trim(replace_re(decode_entities(strip_tags(s)), "\\s+", " "))
+    give trim(regex_replace(decode_entities(strip_tags(s)), "\\s+", " "))
 
 export task title_of(html)
     -- capture con grupos devuelve una LISTA de grupos (verificado): [0] es el título
-    let t be capture(html, "(?is)<title[^>]*>(.*?)</title>")
+    let t be regex_capture(html, "(?is)<title[^>]*>(.*?)</title>")
     when t == nothing
         give ""
     give inline_text(t[0])
@@ -157,14 +157,14 @@ export task title_of(html)
 task pull_pre(h, plain)
     let blocks be []
     let out be h
-    each e in enumerate(find_all(h, "(?is)<pre\\b.*?</pre>"))
+    each e in enumerate(regex_find_all(h, "(?is)<pre\\b.*?</pre>"))
         let blk be e["item"]
-        let langm be capture(blk, "(?i)language-([A-Za-z0-9_+#-]+)")
+        let langm be regex_capture(blk, "(?i)language-([A-Za-z0-9_+#-]+)")
         let lang be when langm == nothing then nothing otherwise langm[0]
-        let innerm be capture(blk, "(?is)<pre\\b[^>]*>(.*?)</pre>")
+        let innerm be regex_capture(blk, "(?is)<pre\\b[^>]*>(.*?)</pre>")
         let inner be when innerm == nothing then "" otherwise innerm[0]
         let code be decode_entities(strip_tags(inner))
-        set code to replace_text(code, "\r\n", "\n")
+        set code to replace(code, "\r\n", "\n")
         -- quitar un salto inicial/final (el HTML suele meterlos), no la indentación
         when starts_with(code, "\n")
             set code to slice(code, 1, length(code))
@@ -172,47 +172,47 @@ task pull_pre(h, plain)
             set code to slice(code, 0, length(code) - 1)
         let fenced be when plain then "\n\n" + code + "\n\n" otherwise "\n\n```" + (when lang != nothing then text(lang) otherwise "") + "\n" + code + "\n```\n\n"
         set blocks to append(blocks, fenced)
-        set out to replace_text(out, blk, "%%LPRE" + text(e["index"]) + "%%")
+        set out to replace(out, blk, "%%LPRE" + text(e["index"]) + "%%")
     give {"html": out, "blocks": blocks}
 
 task push_pre(s, blocks)
     let out be s
     each e in enumerate(blocks)
-        set out to replace_text(out, "%%LPRE" + text(e["index"]) + "%%", e["item"])
+        set out to replace(out, "%%LPRE" + text(e["index"]) + "%%", e["item"])
     give out
 
 -- <ol> → "1. …" (find_all + reemplazo literal: replace_re no puede contar)
 task number_lists(h)
     let out be h
-    each blk in find_all(h, "(?is)<ol\\b[^>]*>.*?</ol>")
+    each blk in regex_find_all(h, "(?is)<ol\\b[^>]*>.*?</ol>")
         let parts be split(blk, "<li")
         let items be []
         each e in enumerate(parts)
             when e["index"] > 0
                 -- "<li" + [atributos]> contenido </li>
-                let body be replace_re(e["item"], "(?s)^[^>]*>", "")
-                set body to replace_re(body, "(?is)</li>.*$", "")
+                let body be regex_replace(e["item"], "(?s)^[^>]*>", "")
+                set body to regex_replace(body, "(?is)</li>.*$", "")
                 set items to append(items, text(length(items) + 1) + ". " + trim(body))
-        set out to replace_text(out, blk, "\n\n" + join(items, "\n") + "\n\n")
+        set out to replace(out, blk, "\n\n" + join(items, "\n") + "\n\n")
     give out
 
 -- <table> → tabla GFM (sin colspan; hermes/deepseek también los ignoran)
 task tables(h)
     let out be h
-    each blk in find_all(h, "(?is)<table\\b.*?</table>")
+    each blk in regex_find_all(h, "(?is)<table\\b.*?</table>")
         let rows be []
         let first_is_head be false
         each e in enumerate(split(blk, "<tr"))
             when e["index"] > 0
-                let row be replace_re(e["item"], "(?s)^[^>]*>", "")
-                set row to replace_re(row, "(?is)</tr>.*$", "")
+                let row be regex_replace(e["item"], "(?s)^[^>]*>", "")
+                set row to regex_replace(row, "(?is)</tr>.*$", "")
                 let cells be []
-                let row_td be replace_re(row, "(?i)<th\\b", "<td")
+                let row_td be regex_replace(row, "(?i)<th\\b", "<td")
                 each ce in enumerate(split(row_td, "<td"))
                     when ce["index"] > 0
-                        let cell be replace_re(ce["item"], "(?s)^[^>]*>", "")
-                        set cell to replace_re(cell, "(?is)</t[dh]>.*$", "")
-                        set cells to append(cells, replace_text(inline_text(cell), "|", "\\|"))
+                        let cell be regex_replace(ce["item"], "(?s)^[^>]*>", "")
+                        set cell to regex_replace(cell, "(?is)</t[dh]>.*$", "")
+                        set cells to append(cells, replace(inline_text(cell), "|", "\\|"))
                 when length(cells) > 0
                     when length(rows) == 0 and contains(lower(row), "<th")
                         set first_is_head to true
@@ -230,16 +230,16 @@ task tables(h)
                 when e["index"] > 0
                     set with_sep to append(with_sep, e["item"])
             set rows to with_sep
-        set out to replace_text(out, blk, "\n\n" + join(rows, "\n") + "\n\n")
+        set out to replace(out, blk, "\n\n" + join(rows, "\n") + "\n\n")
     give out
 
 -- <a href> → [texto](url absoluta); en plain, solo el texto
 task links(h, base, plain)
     let out be h
-    each a in find_all(h, "(?is)<a\\b[^>]*>.*?</a>")
-        let inner be capture(a, "(?is)<a\\b[^>]*>(.*?)</a>")
+    each a in regex_find_all(h, "(?is)<a\\b[^>]*>.*?</a>")
+        let inner be regex_capture(a, "(?is)<a\\b[^>]*>(.*?)</a>")
         let txt be when inner == nothing then "" otherwise inline_text(inner[0])
-        let href be capture(a, "(?is)<a\\b[^>]*\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
+        let href be regex_capture(a, "(?is)<a\\b[^>]*\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
         let abs be when href == nothing then nothing otherwise unwrap_ddg(u.resolve(base, href[0]))
         let repl be txt
         -- anclas internas (#x) sin destino real: "Skip to content", el "§"/"#" de cada heading → fuera
@@ -248,7 +248,7 @@ task links(h, base, plain)
                 set repl to ""
         when not plain and abs != nothing and txt != ""
             set repl to when abs == txt then "<" + abs + ">" otherwise "[" + txt + "](" + abs + ")"
-        set out to replace_text(out, a, repl)
+        set out to replace(out, a, repl)
     give out
 
 -- DuckDuckGo (html.duckduckgo.com — buscar en la web SIN API key ni navegador) envuelve cada resultado en
@@ -259,7 +259,7 @@ task unwrap_ddg(url)
         give nothing
     when not contains(url, "duckduckgo.com/l/?")
         give url
-    let m be capture(url, "[?&]uddg=([^&]*)")
+    let m be regex_capture(url, "[?&]uddg=([^&]*)")
     when m == nothing
         give url
     give pct_decode(m[0])
@@ -288,7 +288,7 @@ task quote_lines(s)
         let line be l
         let opens be length(split(line, "%%LBQ%%")) - 1
         let closes be length(split(line, "%%/LBQ%%")) - 1
-        set line to replace_text(replace_text(line, "%%LBQ%%", ""), "%%/LBQ%%", "")
+        set line to replace(replace(line, "%%LBQ%%", ""), "%%/LBQ%%", "")
         when inq or opens > 0
             when trim(line) != ""
                 set line to "> " + trim(line)
@@ -300,12 +300,12 @@ task quote_lines(s)
     give join(out, "\n")
 
 export task to_markdown(html, base, plain)
-    let h be replace_text(text(html), "\r\n", "\n")
-    set h to replace_re(h, "(?s)<!--.*?-->", "")
+    let h be replace(text(html), "\r\n", "\n")
+    set h to regex_replace(h, "(?s)<!--.*?-->", "")
     -- ruido: sin contenido para el modelo (un patrón por tag: el motor Rust no tiene backreferences)
     -- (header también: en docs/GitHub es el menú del sitio; el título de la página va aparte en `title:`)
     each tg in ["script", "style", "noscript", "svg", "iframe", "template", "head", "nav", "header", "aside", "footer", "dialog", "select", "button", "canvas", "video", "audio", "object", "embed"]
-        set h to replace_re(h, "(?is)<" + tg + "\\b.*?</" + tg + "\\s*>", "")
+        set h to regex_replace(h, "(?is)<" + tg + "\\b.*?</" + tg + "\\s*>", "")
     let pre be pull_pre(h, plain)
     set h to pre["html"]
     -- links primero (una celda o un ítem con <a> conserva el link); listas numeradas y tablas antes de
@@ -314,58 +314,58 @@ export task to_markdown(html, base, plain)
     set h to number_lists(h)
     set h to tables(h)
     -- imágenes: alt como marca; sin alt, nada (base64 jamás llega al modelo)
-    set h to replace_re(h, "(?is)<img\\b[^>]*\\salt\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", "[image: \\1]")
-    set h to replace_re(h, "(?is)<img\\b[^>]*>", "")
+    set h to regex_replace(h, "(?is)<img\\b[^>]*\\salt\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", "[image: \\1]")
+    set h to regex_replace(h, "(?is)<img\\b[^>]*>", "")
     each lvl in ["1", "2", "3", "4", "5", "6"]
         let hashes be when plain then "" otherwise slice("######", 0, floor(number(lvl))) + " "
-        set h to replace_re(h, "(?is)<h" + lvl + "\\b[^>]*>(.*?)</h" + lvl + ">", "\n\n" + hashes + "\\1\n\n")
-    set h to replace_re(h, "(?i)<br\\s*/?>", "\n")
-    set h to replace_re(h, "(?i)<hr\\b[^>]*>", when plain then "\n\n" otherwise "\n\n---\n\n")
-    set h to replace_re(h, "(?is)<blockquote\\b[^>]*>", "\n\n%%LBQ%%")
-    set h to replace_re(h, "(?i)</blockquote>", "%%/LBQ%%\n\n")
-    set h to replace_re(h, "(?i)<li\\b[^>]*>", "\n- ")
-    set h to replace_re(h, "(?i)</li>", "")
-    set h to replace_re(h, "(?i)</(ul|ol|dl)>", "\n")
-    set h to replace_re(h, "(?i)<(ul|ol|dl)\\b[^>]*>", "\n")
-    set h to replace_re(h, "(?i)<dt\\b[^>]*>", "\n**")
-    set h to replace_re(h, "(?i)</dt>", "**\n")
-    set h to replace_re(h, "(?i)<dd\\b[^>]*>", "\n  ")
+        set h to regex_replace(h, "(?is)<h" + lvl + "\\b[^>]*>(.*?)</h" + lvl + ">", "\n\n" + hashes + "\\1\n\n")
+    set h to regex_replace(h, "(?i)<br\\s*/?>", "\n")
+    set h to regex_replace(h, "(?i)<hr\\b[^>]*>", when plain then "\n\n" otherwise "\n\n---\n\n")
+    set h to regex_replace(h, "(?is)<blockquote\\b[^>]*>", "\n\n%%LBQ%%")
+    set h to regex_replace(h, "(?i)</blockquote>", "%%/LBQ%%\n\n")
+    set h to regex_replace(h, "(?i)<li\\b[^>]*>", "\n- ")
+    set h to regex_replace(h, "(?i)</li>", "")
+    set h to regex_replace(h, "(?i)</(ul|ol|dl)>", "\n")
+    set h to regex_replace(h, "(?i)<(ul|ol|dl)\\b[^>]*>", "\n")
+    set h to regex_replace(h, "(?i)<dt\\b[^>]*>", "\n**")
+    set h to regex_replace(h, "(?i)</dt>", "**\n")
+    set h to regex_replace(h, "(?i)<dd\\b[^>]*>", "\n  ")
     -- énfasis vacíos decorativos (<i></i> como puntos de una barra) serían asteriscos sueltos
-    set h to replace_re(h, "(?is)<(i|em|b|strong)\\b[^>]*>\\s*</(i|em|b|strong)>", "")
+    set h to regex_replace(h, "(?is)<(i|em|b|strong)\\b[^>]*>\\s*</(i|em|b|strong)>", "")
     when not plain
-        set h to replace_re(h, "(?is)<(b|strong)\\b[^>]*>(.*?)</(b|strong)>", "**\\2**")
-        set h to replace_re(h, "(?is)<(i|em)\\b[^>]*>(.*?)</(i|em)>", "*\\2*")
-        set h to replace_re(h, "(?is)<code\\b[^>]*>(.*?)</code>", "`\\1`")
-    set h to replace_re(h, "(?i)</(p|div|section|article|main|header|figure|figcaption|details|summary|form|fieldset|address|tr|dd)>", "\n\n")
-    set h to replace_re(h, "(?i)<(p|div|section|article|main|header|figure|figcaption|details|summary|form|fieldset|address)\\b[^>]*>", "\n")
+        set h to regex_replace(h, "(?is)<(b|strong)\\b[^>]*>(.*?)</(b|strong)>", "**\\2**")
+        set h to regex_replace(h, "(?is)<(i|em)\\b[^>]*>(.*?)</(i|em)>", "*\\2*")
+        set h to regex_replace(h, "(?is)<code\\b[^>]*>(.*?)</code>", "`\\1`")
+    set h to regex_replace(h, "(?i)</(p|div|section|article|main|header|figure|figcaption|details|summary|form|fieldset|address|tr|dd)>", "\n\n")
+    set h to regex_replace(h, "(?i)<(p|div|section|article|main|header|figure|figcaption|details|summary|form|fieldset|address)\\b[^>]*>", "\n")
     set h to strip_tags(h)
     set h to decode_entities(h)
     -- énfasis vacío que quedó de tags sin texto
-    set h to replace_re(h, "\\*\\*\\s*\\*\\*", "")
-    set h to replace_re(h, "``", "")
+    set h to regex_replace(h, "\\*\\*\\s*\\*\\*", "")
+    set h to regex_replace(h, "``", "")
     -- espacios: colapsar (los <pre> están a salvo en sus marcadores)
-    set h to replace_text(h, cp_text(160), " ")
-    set h to replace_re(h, "[ \\t\\f\\v]+", " ")
-    set h to replace_re(h, "(?m)^ +", "")
-    set h to replace_re(h, "(?m) +$", "")
-    set h to replace_re(h, "\\n{3,}", "\n\n")
+    set h to replace(h, cp_text(160), " ")
+    set h to regex_replace(h, "[ \\t\\f\\v]+", " ")
+    set h to regex_replace(h, "(?m)^ +", "")
+    set h to regex_replace(h, "(?m) +$", "")
+    set h to regex_replace(h, "\\n{3,}", "\n\n")
     set h to quote_lines(h)
     set h to push_pre(h, pre["blocks"])
-    set h to replace_re(h, "\\n{3,}", "\n\n")
+    set h to regex_replace(h, "\\n{3,}", "\n\n")
     give trim(h)
 
 -- Markdown servido por el sitio: solo sacar imágenes base64 (hermes convert_base64_images_to_links)
 export task clean_markdown(md)
-    let out be replace_re(text(md), "!\\[([^\\]]*)\\]\\(\\s*data:image/[^)]*\\)", "[image: \\1]")
-    set out to replace_re(out, "data:image/[a-z+]+;base64,[A-Za-z0-9+/=]{40,}", "[image]")
-    give trim(replace_text(out, "\r\n", "\n"))
+    let out be regex_replace(text(md), "!\\[([^\\]]*)\\]\\(\\s*data:image/[^)]*\\)", "[image: \\1]")
+    set out to regex_replace(out, "data:image/[a-z+]+;base64,[A-Za-z0-9+/=]{40,}", "[image]")
+    give trim(replace(out, "\r\n", "\n"))
 
 -- href del <link rel="alternate" type="text/markdown">, resuelto; nothing si no hay
 export task markdown_alternate(html, base)
-    each l in find_all(text(html), "(?is)<link\\b[^>]*>")
+    each l in regex_find_all(text(html), "(?is)<link\\b[^>]*>")
         let ll be lower(l)
         when contains(ll, "alternate") and (contains(ll, "type=\"text/markdown\"") or contains(ll, "type='text/markdown'") or contains(ll, "type=\"text/x-markdown\""))
-            let href be capture(l, "(?is)\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
+            let href be regex_capture(l, "(?is)\\shref\\s*=\\s*[\"']([^\"']*)[\"']")
             when href != nothing
                 give u.resolve(base, href[0])
     give nothing

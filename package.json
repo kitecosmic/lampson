@@ -30,6 +30,7 @@
     "chat.syn",
     "web.syn",
     "hub.tpl.syn",
+    "edge.syn",
     "cli.syn",
     "lampson.ps1",
     "lampson.sh",

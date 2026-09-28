@@ -8,7 +8,7 @@
 use "./tools/common.syn" as c
 
 task sh_quote(s)
-    give "'" + replace_text(s, "'", "'\\''") + "'"
+    give "'" + replace(s, "'", "'\\''") + "'"
 
 -- shell POSIX aunque LAMPSON_SHELL apunte a cmd: mv/cp/rm/mkdir son de Git Bash
 task shell()
@@ -55,7 +55,7 @@ task check_name(name)
     let n be trim(text(name))
     when n == "" or n == "." or n == ".." or contains(n, "/") or contains(n, "\\")
         raise("invalid name \"" + text(name) + "\": one path segment, without / or \\")
-    when length(find_all(n, "[<>:\"|?*]")) > 0
+    when length(regex_find_all(n, "[<>:\"|?*]")) > 0
         raise("invalid name \"" + n + "\": < > : \" | ? * are not allowed in file names")
     give n
 

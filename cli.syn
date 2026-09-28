@@ -5,6 +5,7 @@
 --   LAMPSON_CMD=hub-status  → {alive}
 --   LAMPSON_CMD=hub-start | hub-stop
 --   LAMPSON_CMD=list
+--   LAMPSON_CMD=domain  LAMPSON_DOMAIN=<dominio>|off|""  [LAMPSON_EMAIL=<email>]   dominio propio con HTTPS (opcional)
 -- La salida útil va en la ÚLTIMA línea (JSON) para que el launcher la parsee.
 
 require exec
@@ -45,12 +46,71 @@ otherwise when cmd == "hub-status"
 otherwise when cmd == "hub-start"
     when not ws.hub_alive()
         ws.start_hub()
+    when ws.domain_cfg() != nothing and not ws.edge_alive()
+        ws.start_edge()
     print(json_encode({"alive": true}))
 otherwise when cmd == "hub-stop"
     each w in ws.all()
         ws.stop_ws(w)
+    ws.stop_edge()
     ws.stop_hub()
     print(json_encode({"alive": false}))
+otherwise when cmd == "domain"
+    let arg be trim(env("LAMPSON_DOMAIN", ""))
+    when arg == ""
+        -- estado
+        let cfg be ws.domain_cfg()
+        when cfg == nothing
+            print("sin dominio propio: lampson se usa en http://127.0.0.1:" + text(ws.HUB_PORT) + " (o por túnel).")
+            print("para usar el tuyo:  lampson --domain lampson.midominio.com --email vos@midominio.com")
+        otherwise
+            print("dominio: https://" + cfg["domain"] + "   (" + (when ws.edge_alive() then "● HTTPS activo" otherwise "○ el edge no está escuchando — mirá .lampson/edge.log") + ")")
+            print("certificado de Let's Encrypt a nombre de " + cfg["email"] + " · quitar: lampson --domain off")
+        print(json_encode({"domain": when cfg == nothing then nothing otherwise cfg["domain"], "edge": ws.edge_alive()}))
+    otherwise when lower(arg) == "off"
+        let had be ws.clear_domain()
+        ws.stop_edge()
+        ws.regen_hub()
+        when ws.hub_alive()
+            ws.stop_hub()
+            sleep(2)
+            ws.start_hub()
+        print(when had then "dominio quitado: el hub vuelve a escuchar en :" + text(ws.HUB_PORT) + " como antes." otherwise "no había dominio configurado.")
+        print(json_encode({"domain": nothing}))
+    otherwise
+        let cfg be nothing
+        try
+            set cfg to ws.set_domain(arg, env("LAMPSON_EMAIL", ""))
+        recover err
+            print("✗ " + regex_replace(text(err), "^.*?:\d+:\d+: ", ""))
+            print(json_encode({"error": text(err)}))
+        when cfg != nothing
+            -- el hub pasa a 127.0.0.1 (regen) y el edge arranca con el dominio nuevo
+            ws.regen_hub()
+            ws.stop_edge()
+            when ws.hub_alive()
+                ws.stop_hub()
+                sleep(2)
+            ws.start_hub()
+            ws.start_edge()
+            print("dominio: https://" + cfg["domain"] + " — pidiendo el certificado a Let's Encrypt…")
+            -- esperar a que el edge escuche (el certificado se pide al arrancar; tarda unos segundos)
+            let deadline be now() + 45
+            while now() < deadline and not ws.edge_alive()
+                sleep(1)
+            let up be ws.edge_alive()
+            let tail be ws.edge_log(12)
+            when up
+                print("● HTTPS activo en https://" + cfg["domain"] + " — emparejá el celular desde «dispositivos» (el QR ya usa esta URL).")
+            otherwise
+                print("○ el edge no quedó escuchando. Últimas líneas de .lampson/edge.log:")
+                each l in tail
+                    print("    " + l)
+                print("revisá: 1) el DNS de " + cfg["domain"] + " apunta a la IP de este servidor (registro A/AAAA);")
+                print("        2) los puertos 80 y 443 están abiertos en el firewall;")
+                print("        3) en Linux sin root, el binario puede usar puertos bajos: sudo setcap cap_net_bind_service=+ep $(command -v synsema)")
+                print("el hub reintenta solo cada 10 min; `lampson --domain off` vuelve a como estaba.")
+            print(json_encode({"domain": cfg["domain"], "edge": up}))
 otherwise when cmd == "hub-restart"
     -- lanzado desacoplado por workspaces.restart_hub_later: espera a que el hub termine lo que estaba haciendo,
     -- lo para y lo vuelve a arrancar con el hub.syn regenerado (bajo systemd, Restart=always ya lo levanta solo)

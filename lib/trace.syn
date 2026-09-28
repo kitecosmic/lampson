@@ -16,7 +16,7 @@ task path(sid)
     give DIR + "/" + sid + ".log"
 
 task one_line(s, max)
-    let t be replace_text(replace_text(text(s), "\r", ""), "\n", " ⏎ ")
+    let t be replace(replace(text(s), "\r", ""), "\n", " ⏎ ")
     when length(t) > max
         give slice(t, 0, max) + "…"
     give t
@@ -105,7 +105,7 @@ export task tail(sid, n)
     require file(".lampson")
     require file(".lampson/*")
     try
-        let lines be split(replace_text(read_file(path(sid)), "\r", ""), "\n")
+        let lines be split(replace(read_file(path(sid)), "\r", ""), "\n")
         when length(lines) > n
             set lines to slice(lines, length(lines) - n, length(lines))
         give join(lines, "\n")

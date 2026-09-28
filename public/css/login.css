@@ -1,0 +1,16 @@
+/* login.css — /login y /pair: una tarjeta centrada, pensada primero para el celular */
+body.auth { display:flex; align-items:center; justify-content:center; min-height:100vh; min-height:100dvh; padding:24px 16px calc(24px + env(safe-area-inset-bottom)); }
+.authbox { width:100%; max-width:400px; }
+.authbox .logo { display:block; margin:0 0 18px; border-radius:10px; }
+.authbox .eyebrow { font:400 11px/1 var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); margin:0 0 8px; }
+.authbox h1 { font:600 26px/1.2 var(--serif); margin:0 0 10px; }
+.authbox .lead { color:var(--ink-2); margin:0 0 22px; }
+.authbox .hint { font:400 12px/1.5 var(--mono); color:var(--ink-3); margin:18px 0 0; }
+.authbox .field { display:block; font:400 11px/1 var(--mono); color:var(--ink-3); margin:0 0 16px; }
+.authbox .field input { display:block; width:100%; margin-top:6px; padding:12px; font:400 16px var(--mono); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule-2); border-radius:var(--r); }
+.authbox .field input:focus { outline:none; border-color:var(--accent); }
+.authbox button.primary { width:100%; padding:14px; font:600 15px var(--mono); color:var(--paper); background:var(--accent); border:0; border-radius:var(--r); cursor:pointer; }
+.authbox button.primary:disabled { opacity:.55; cursor:default; }
+.authbox .msg { font:400 13px/1.5 var(--mono); margin:16px 0 0; min-height:1.5em; color:var(--ink-2); }
+.authbox .msg.err { color:var(--rubric); }
+.authbox .msg.ok { color:var(--ok); }

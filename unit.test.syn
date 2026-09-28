@@ -309,7 +309,7 @@ test "session.from_other_run + proc.resume_note: sesión de otra corrida avisa e
     assert_eq(session.from_other_run({"meta": {"run": "run-A"}, "messages": []}), false)
     assert_eq(session.from_other_run({"meta": {"run": "run-B"}, "messages": []}), true)
     assert_eq(session.from_other_run({"meta": {}, "messages": []}), true)
-    let note be proc.resume_note()
+    let note be proc.resume_note("sess-unit")
     when note != ""
         assert(starts_with(note, "[harness]") and contains(note, "do NOT survive a restart"), note)
 
@@ -601,12 +601,12 @@ test "diff: líneas cambiadas con contexto y números; archivo nuevo = todo +; e
     assert_eq(d["added"], 2)
     assert_eq(d["removed"], 1)
     -- las filas +/- van rellenadas hasta el ancho (fondo de color): comparar sin espacios finales
-    let s be join(apply((l) => replace_re(l, "\s+$", ""), d["lines"]), "\n")
+    let s be join(apply((l) => regex_replace(l, "\s+$", ""), d["lines"]), "\n")
     assert(contains(s, " 3 │ - c\n 3 │ + C") and contains(s, " 9 │ + X") and contains(s, "⋯"), s)
     assert(not contains(s, "│   f"), s)
     let n be diff.diff("", "uno\ndos", 2, false)
     assert_eq(n["removed"], 0)
-    assert_eq(join(apply((l) => replace_re(l, "\s+$", ""), n["lines"]), "\n"), "1 │ + uno\n2 │ + dos")
+    assert_eq(join(apply((l) => regex_replace(l, "\s+$", ""), n["lines"]), "\n"), "1 │ + uno\n2 │ + dos")
     -- edit → blackboard "lampson:ui:diff" con old/new (la UI lo convierte en diff; el modelo no lo ve)
     call_tool(REG["write"], {"path": "diff_t.txt", "content": "x\ny\n"})
     observe "lampson:ui:diff" as w
@@ -635,7 +635,7 @@ test "diff: corridas largas de +/- se colapsan a 4 + '⋮ ±N líneas más' + 2 
     assert_eq(big["removed"], 200)
     -- 4 + marcador + 2 por corrida, dos corridas (− y +) = 14 filas en vez de 400
     assert_eq(length(big["lines"]), 14)
-    let bs be join(apply((l) => replace_re(l, "\s+$", ""), big["lines"]), "\n")
+    let bs be join(apply((l) => regex_replace(l, "\s+$", ""), big["lines"]), "\n")
     assert(contains(bs, "⋮ −194 líneas más") and contains(bs, "⋮ +194 líneas más"), bs)
     assert(contains(bs, "- vieja 0") and contains(bs, "- vieja 199"), bs)
     assert(contains(bs, "+ nueva 0") and contains(bs, "+ nueva 199"), bs)
@@ -996,11 +996,11 @@ test "computer: open_url — la barra de direcciones se elige por etiqueta (idio
     assert(contains(computer.ACTIONS, "open_url"))
     assert(contains(computer.ACTIONS, "page_select"))
     assert(contains(computer.ACTIONS, "page_fill"))
-    assert_error(() => computer.call("page_fill", {"target_id": "t", "tab_id": "b"}), "sin fields")
-    assert_error(() => computer.call("page_fill", {"target_id": "t", "tab_id": "b", "fields": "x"}), "fields no es lista")
+    assert_error(() => computer.call("page_fill", {"target_id": "t", "tab_id": "b"}))  -- sin fields
+    assert_error(() => computer.call("page_fill", {"target_id": "t", "tab_id": "b", "fields": "x"}))  -- fields no es lista
     assert_error(() => computer.map_action("page_fill", {"target_id": "t", "tab_id": "b", "fields": []}))
-    assert_error(() => computer.call("open_url", {"pid": 1, "window_id": 2}), "sin url")
-    assert_error(() => computer.call("page_select", {"target_id": "t", "tab_id": "b", "ref": "p1:1"}), "sin option")
+    assert_error(() => computer.call("open_url", {"pid": 1, "window_id": 2}))  -- sin url
+    assert_error(() => computer.call("page_select", {"target_id": "t", "tab_id": "b", "ref": "p1:1"}))  -- sin option
     -- open_url y page_select son compuestas: no pasan por map_action
     assert_error(() => computer.map_action("open_url", {"pid": 1, "window_id": 2, "url": "https://a.b"}))
 
@@ -1104,3 +1104,50 @@ test "loop: las capturas viejas de computer_use pierden la imagen (solo la nueva
     assert(not contains(out[2], "images"), "la captura vieja pierde la imagen")
     assert(contains(out[2]["content"], "image removed"))
     assert_eq(out[3]["content"], "ok")
+
+use "./lib/auth.syn" as auth
+
+test "auth: local = loopback SIN headers de reenvío (cloudflared también llega desde 127.0.0.1)"
+    assert(auth.is_local("127.0.0.1", {"host": "localhost:8080"}))
+    assert(auth.is_local("::1", {}))
+    assert(not auth.is_local("192.168.1.20", {}), "LAN")
+    assert(not auth.is_local("127.0.0.1", {"cf-connecting-ip": "203.0.113.9"}), "túnel de Cloudflare")
+    assert(not auth.is_local("127.0.0.1", {"x-forwarded-for": "203.0.113.9"}), "otro proxy")
+    assert(not auth.is_local("127.0.0.1", {"forwarded": "for=1.2.3.4"}))
+
+test "auth: rp_id y origin salen del Host que pone el túnel"
+    let t be {"host": "abc.trycloudflare.com", "x-forwarded-proto": "https"}
+    assert_eq(auth.host_of(t), "abc.trycloudflare.com")
+    assert_eq(auth.origin_of(t), "https://abc.trycloudflare.com")
+    assert_eq(auth.host_of({"host": "localhost:8080"}), "localhost")
+    assert_eq(auth.origin_of({"host": "localhost:8080"}), "http://localhost:8080")
+    assert_eq(auth.origin_of({"host": "Lampson.Example.com"}), "https://lampson.example.com")
+    assert(auth.secure_cookie(t))
+    assert(auth.secure_cookie({"host": "localhost:8080"}))
+
+test "auth: CSRF — un POST con Origin ajena no pasa; sin Origin (script) sí"
+    let t be {"host": "abc.trycloudflare.com", "x-forwarded-proto": "https"}
+    assert(auth.same_origin(merge(t, {"origin": "https://abc.trycloudflare.com"})))
+    assert(not auth.same_origin(merge(t, {"origin": "https://evil.example"})))
+    assert(not auth.same_origin(merge(t, {"origin": "http://abc.trycloudflare.com"})), "http ≠ https")
+    assert(auth.same_origin(t))
+
+test "dominio propio: validación (lampson --domain)"
+    assert(wsp.valid_domain("lampson.midominio.com"))
+    assert(wsp.valid_domain("a-b.example.io"))
+    assert(not wsp.valid_domain("localhost"), "sin punto")
+    assert(not wsp.valid_domain("no es dominio"))
+    assert(not wsp.valid_domain("1.2.3.4"), "una IP no saca certificado de Let's Encrypt")
+    assert(not wsp.valid_domain("-mal.com"))
+
+test "auth: la sesión se renueva con el uso, con tope a los 90 días del ingreso con passkey"
+    let d be 86400
+    let rec be {"device": "x", "created": 0, "seen": 0, "hard": 90 * d, "expires": 30 * d}
+    assert_eq(auth.renewed(rec, 60), nothing, "renueva como mucho una vez por hora")
+    let r1 be auth.renewed(rec, 20 * d)
+    assert_eq(r1["expires"], 50 * d, "30 días desde el último uso")
+    assert_eq(r1["seen"], 20 * d)
+    let r2 be auth.renewed(r1, 80 * d)
+    assert_eq(r2["expires"], 90 * d, "nunca pasa el tope")
+    let old be {"device": "x", "created": 0, "expires": 30 * d}
+    assert_eq(auth.renewed(old, 10 * d)["hard"], 90 * d, "sesiones viejas sin hard/seen")

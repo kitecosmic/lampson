@@ -11,7 +11,7 @@ export task tool(pattern, path, glob, regex)
     let r be grep(c.ws(path), pattern, opts)
     let lines be []
     each m in r["matches"]
-        set lines to append(lines, c.unws(replace_text(m["file"], "\\", "/")) + ":" + text(m["line"]) + ": " + trim(m["text"]))
+        set lines to append(lines, c.unws(replace(m["file"], "\\", "/")) + ":" + text(m["line"]) + ": " + trim(m["text"]))
     when length(lines) == 0
         give "no matches"
     let out be join(lines, "\n")

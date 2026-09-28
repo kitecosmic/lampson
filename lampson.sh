@@ -3,15 +3,18 @@
 #   cd /mi/proyecto && lampson            # terminal sobre este workspace
 #   cd /mi/proyecto && lampson --web      # abre http://127.0.0.1:8080/w/<slug>/
 #   lampson --hub start|stop|status|logs|restart · --install (systemd --user) · --uninstall
+#   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS propio (opcional) · --domain off
 #   lampson --workspace /ruta [--agent plan] [--yolo|--strict|--ask] · --update
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 caller="$(pwd)"
-ws=""; web=0; hub=""; install=""
+ws=""; web=0; hub=""; install=""; domain="-"; email=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --web) web=1 ;;
         --hub|--daemon) shift; hub="${1:-status}" ;;
+        --domain) if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then shift; domain="$1"; else domain=""; fi ;;
+        --email) shift; email="${1:-}" ;;
         --install) install=install ;;
         --uninstall) install=uninstall ;;
         --workspace) shift; ws="$1" ;;
@@ -20,7 +23,7 @@ while [ $# -gt 0 ]; do
         --strict) export LAMPSON_PERMISSION=strict ;;
         --ask) export LAMPSON_PERMISSION=ask ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
-        -*) echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
+        -*) echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
         *) ws="$1" ;;
     esac
     shift
@@ -45,6 +48,11 @@ cli() { # última línea = JSON
     echo "$out" | tail -n 1
 }
 json() { node -e "const j=JSON.parse(process.argv[1]);const v=j[process.argv[2]];console.log(typeof v==='object'?JSON.stringify(v):v)" "$1" "$2" 2>/dev/null || python3 -c "import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])" "$1" "$2"; }
+# dominio propio (opcional): HTTPS automático con Let's Encrypt delante del hub
+if [ "$domain" != "-" ]; then
+    (cd "$here" && LAMPSON_CMD=domain LAMPSON_DOMAIN="$domain" LAMPSON_EMAIL="$email" synsema run cli.syn | sed '$d')
+    exit 0
+fi
 if [ -n "$hub" ]; then
     case "$hub" in
         start) cli hub-start >/dev/null; echo "hub: http://127.0.0.1:8080" ;;

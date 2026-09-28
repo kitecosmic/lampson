@@ -779,7 +779,7 @@ task grab_image(mode, path)
         set r to run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "lib/tools/img.ps1", mode, path], 60)
     otherwise
         set r to run("bash", ["lib/tools/img.sh", mode, path], 60)
-    let line be trim(replace_text(r["stdout"], "\r", ""))
+    let line be trim(replace(r["stdout"], "\r", ""))
     when line == "" or starts_with(line, "ERROR|")
         give {"error": when line == "" then trim(r["stderr"]) otherwise slice(line, 6, length(line))}
     let parts be split(line, "|")
@@ -1061,7 +1061,7 @@ while running
             print(trace.tail(sid, lines))
         otherwise when starts_with(input, "/model") or starts_with(input, "/provider") or starts_with(input, "/setup")
             -- un solo flujo (ver setup_wizard): proveedor → modelo (lista de la API) → key si falta; se guarda en config.json
-            let rest be trim(replace_re(input, "^/(model|provider|setup)", ""))
+            let rest be trim(regex_replace(input, "^/(model|provider|setup)", ""))
             when setup_from_args(rest, cfg["provider"], cfg["model"])
                 set cfg to provider.config()
         otherwise when input == "/paste"
@@ -1162,13 +1162,13 @@ while running
                 print(memo.note_read(nm))
         otherwise when input == "/todo"
             let items be todo.load(sid)
-            print(when length(items) == 0 then "  sin tareas (el agente las crea con la tool todo)" otherwise "  " + replace_text(todo.format(items), "\n", "\n  "))
+            print(when length(items) == 0 then "  sin tareas (el agente las crea con la tool todo)" otherwise "  " + replace(todo.format(items), "\n", "\n  "))
         otherwise when input == "/lsp" or starts_with(input, "/lsp ")
             let srest be trim(slice(input, 4, length(input)))
             when starts_with(srest, "add ")
                 -- /lsp add typescript [--project]   ·   /lsp add mylang cmd args… --ext .x=lang [--ext .y=lang2]
                 let sscope be when contains(srest, "--project") then "project" otherwise "global"
-                let sline be trim(replace_text(srest, "--project", ""))
+                let sline be trim(replace(srest, "--project", ""))
                 let stoks be where(split(slice(sline, 4, length(sline)), " "), (x) => x != "")
                 when length(stoks) == 0
                     print("  uso: /lsp add <" + join(keys(lsp.PRESETS), "|") + "> [--project]   ·   /lsp add <nombre> <comando…> --ext .ext=languageId")
@@ -1331,7 +1331,7 @@ while running
             when starts_with(mrest, "add ")
                 -- /mcp add <nombre> <comando…> [--project]  (env/keys: editá el mcp.json a mano, no van por terminal)
                 let mscope be when contains(mrest, "--project") then "project" otherwise "global"
-                let mline be trim(replace_text(mrest, "--project", ""))
+                let mline be trim(replace(mrest, "--project", ""))
                 let mtoks be where(split(slice(mline, 4, length(mline)), " "), (x) => x != "")
                 when length(mtoks) < 2
                     print("  uso: /mcp add <nombre> <comando…> [--project]   p.ej.: /mcp add github npx -y @modelcontextprotocol/server-github")

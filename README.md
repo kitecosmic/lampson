@@ -55,6 +55,9 @@ More ways (Docker, from source, updating): **[lampson.org/install](https://lamps
 - **Review** — `/agent review` runs the tests and reads the diff, but never edits.
 - **Run things while you're away** — "every weekday at 9, run the tests and tell me if something broke." If a
   scheduled run hits something risky, you get a link on your phone to approve or deny it.
+- **From your phone** — install it as an app, sign in with a passkey (fingerprint or face) and work on your PC or
+  your server from anywhere. A tunnel for a home PC, or `lampson --domain` for HTTPS on a VPS:
+  **[lampson.org/docs/phone](https://lampson.org/docs/phone)**.
 
 It can only touch the folder you opened it in — not your home directory, not the project next door. That isn't
 a setting: it's how the language it's written in works. Reading and editing just happen; deleting, installing,

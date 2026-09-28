@@ -4,7 +4,13 @@
 <meta charset="utf-8">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <title>Lampson · workspaces</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131412">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/layout.css">
 <link rel="stylesheet" href="/css/chat.css">
@@ -17,6 +23,7 @@
   <div class="hrow">
     <span class="brand">lampson<span class="proj">workspaces</span></span>
     <span class="spacer"></span>
+    <span class="pill" id="devicesBtn" role="button" tabindex="0">dispositivos</span>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
   </div>
 </header>
@@ -34,5 +41,8 @@
 <script src="/js/panel.js"></script>
 <script src="/js/hub.js"></script>
 <script src="/js/workspaces.js"></script>
+<script src="/vendor/qrcode.js"></script>
+<script src="/js/devices.js"></script>
+<script src="/js/pwa.js"></script>
 </body>
 </html>

@@ -25,7 +25,7 @@ export task parse(raw)
         give fail("missing URL")
     let u be trim(text(raw))
     -- "https:// host" — el modelo a veces mete un espacio tras el esquema (hermes normalize_url_for_request)
-    set u to replace_re(u, "^([A-Za-z][A-Za-z0-9+.-]*://)\\s+", "\\1")
+    set u to regex_replace(u, "^([A-Za-z][A-Za-z0-9+.-]*://)\\s+", "\\1")
     when u == ""
         give fail("missing URL")
     when length(u) > 2048
@@ -138,14 +138,14 @@ export task host_class(host)
 -- %XX → carácter (para inspeccionar una URL con secretos codificados)
 task percent_decode(s)
     let out be s
-    each m in find_all(s, "%[0-9A-Fa-f]{2}")
+    each m in regex_find_all(s, "%[0-9A-Fa-f]{2}")
         let ch be nothing
         try
             set ch to json_decode("\"\\u00" + slice(m, 1, 3) + "\"")
         recover e
             set ch to nothing
         when ch != nothing
-            set out to replace_text(out, m, ch)
+            set out to replace(out, m, ch)
     give out
 
 export task sensitive(raw)
@@ -153,7 +153,7 @@ export task sensitive(raw)
         give nothing
     let u be text(raw)
     let decoded be percent_decode(u)
-    when length(find_all(u, SECRET_RE)) > 0 or length(find_all(decoded, SECRET_RE)) > 0
+    when length(regex_find_all(u, SECRET_RE)) > 0 or length(regex_find_all(decoded, SECRET_RE)) > 0
         give "an API key or token"
     let p be parse(u)
     when not p["ok"]
@@ -212,7 +212,7 @@ export task resolve(base, href)
 
 -- nombre de archivo estable para la caché/spill de una URL: fetch-<host>-<digest>
 export task slug(host)
-    let s be replace_re(lower(text(host)), "[^a-z0-9._-]", "-")
+    let s be regex_replace(lower(text(host)), "[^a-z0-9._-]", "-")
     when length(s) > 60
         set s to slice(s, 0, 60)
     when s == ""

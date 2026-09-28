@@ -133,13 +133,13 @@ export task receipt(m)
         give out
     let status be "ok"
     when starts_with(out, "ERROR") or starts_with(out, "DENIED")
-        set status to slice(replace_text(split(out, "\n")[0], "\r", ""), 0, 120)
+        set status to slice(replace(split(out, "\n")[0], "\r", ""), 0, 120)
     otherwise
-        let codes be find_all(out, "\\[exit code [0-9]+\\]")
+        let codes be regex_find_all(out, "\\[exit code [0-9]+\\]")
         when length(codes) > 0
             let last be codes[length(codes) - 1]
             set status to slice(last, 1, length(last) - 1)
-    let saved be find_all(out, "Full result saved to [^ ]+")
+    let saved be regex_find_all(out, "Full result saved to [^ ]+")
     let where_full be when length(saved) > 0 then " · " + saved[0] otherwise ""
     give "[" + text(m["name"]) + " result pruned: " + status + " · " + text(length(split(out, "\n"))) + " lines/" + text(length(out)) + " chars" + where_full + " — re-run the tool only if you really need the content again]"
 

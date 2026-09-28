@@ -166,9 +166,47 @@ from the hub, so a hub restart never kills them. The hub is also the supervisor:
 be alive and stops what is idle (⚙ → hours of inactivity, `0` = never; a workspace with enabled scheduled tasks or
 policy «siempre vivo» stays up).
 
-On a VPS put the hub behind your domain (`synsema serve hub.syn --port 443 --domain … --tls-auto …` or your
-edge); workspace ports never leave loopback. `LAMPSON_PUBLIC_URL` = `https://host` and approval links carry
-`/w/<slug>` automatically.
+### Remote access: your phone, passkeys, your own domain
+
+Lampson is also a PWA: open it on the phone and «Add to Home Screen». Who can get in:
+
+- **This machine** (loopback, no forwarding headers) — as always, nothing to type.
+- **Anything else** (a tunnel, the LAN, a domain) — needs the session of a **paired device**. A tunnel such as
+  `cloudflared` connects from `127.0.0.1` too, so the hub tells them apart by the `X-Forwarded-*` /
+  `Cf-Connecting-Ip` headers, not by the IP. Pairing: on the machine, hub → **dispositivos** → *emparejar* shows
+  a one-time QR (5 min); the phone scans it and creates a **passkey** (fingerprint / face). After that it signs in
+  with the passkey. The session renews itself while used: it expires after 30 days unused, and the passkey is asked
+  again 90 days after the last passkey sign-in regardless (`SESSION_DAYS` / `SESSION_MAX_DAYS` in `lib/auth.syn`;
+  renewal writes at most once an hour). Removing a device in the same panel cuts it off at once.
+  A passkey is bound to the domain: if the address changes (a quick tunnel does on every run), pair again.
+- `LAMPSON_WEB_TOKEN` (Bearer) still works for scripts.
+
+State lives in `.lampson/auth/` (public keys and sign counters, session **hashes** — never the session itself).
+
+**Reaching a home PC** (no public IP, NAT, a router you can't open): a tunnel, which dials out from the PC.
+Quick, to try it — `cloudflared tunnel --url http://localhost:8080` prints a `https://….trycloudflare.com`
+address that changes on every start (pair again each time). Persistent — a named Cloudflare tunnel on your own
+domain (free account, the domain's DNS on Cloudflare): dashboard → Zero Trust → Networks → Tunnels → create
+`lampson`, run the `cloudflared service install <TOKEN>` it shows (a system service, starts with the PC), add a
+public hostname → `HTTP localhost:8080`; plus `lampson --install` so the hub starts at logon too. Step by step:
+the site's «On your phone» page. When the PC is off the tunnel still answers, with its own error page (Cloudflare
+530/1033, 502/504) or `X-Synsema-Tunnel: offline`; the service worker turns those into Lampson's «Tu PC no
+responde» screen instead.
+
+**Your own domain (optional).** On a VPS with a public IP:
+
+```
+lampson --domain lampson.example.com --email you@example.com   # HTTPS on :443, free Let's Encrypt cert, auto-renewed
+lampson --domain                                               # status
+lampson --domain off                                           # back to plain :8080, as before
+```
+
+Needs a DNS `A`/`AAAA` record pointing to the server, ports 80 and 443 open, and on Linux without root
+`sudo setcap cap_net_bind_service=+ep $(command -v synsema)`. It runs `edge.syn` (Synsema terminates TLS and
+proxies to the hub at `127.0.0.1:8080`); the hub supervisor keeps it alive (retrying every 10 min after a failure,
+Let's Encrypt rate-limits failed validations), the hub itself switches to `bind "127.0.0.1"`, and the pairing QR
+uses the domain. Without `--domain` none of this runs. Workspace ports never leave loopback either way;
+approval links use the same public URL and carry `/w/<slug>` automatically.
 
 ## Scheduled tasks and the resident process
 

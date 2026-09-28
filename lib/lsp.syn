@@ -92,13 +92,13 @@ export task servers()
 -- resuelven realpaths, así que el rootUri y los uri de los documentos tienen que ser los reales.
 export task root_path()
     require env("LAMPSON_*")
-    let r be replace_text(env("LAMPSON_WORKSPACE", "workspace"), "\\", "/")
+    let r be replace(env("LAMPSON_WORKSPACE", "workspace"), "\\", "/")
     when c.ends_with(r, "/")
         set r to slice(r, 0, length(r) - 1)
     give r
 
 export task to_uri(path)
-    let p be replace_text(replace_text(path, "\\", "/"), " ", "%20")
+    let p be replace(replace(path, "\\", "/"), " ", "%20")
     when matches(p, "[A-Za-z]:/.*")
         give "file:///" + p
     give "file://" + p
@@ -109,7 +109,7 @@ export task from_uri(uri)
         set u to slice(u, 8, length(u))
     otherwise when starts_with(u, "file://")
         set u to slice(u, 7, length(u))
-    give replace_text(replace_text(replace_text(u, "%3A", ":"), "%3a", ":"), "%20", " ")
+    give replace(replace(replace(u, "%3A", ":"), "%3a", ":"), "%20", " ")
 
 -- uri del server → ruta relativa al workspace (o absoluta si cae fuera)
 export task relativize(uri, root)
@@ -123,7 +123,7 @@ export task relativize(uri, root)
     give p
 
 task ext_of(path)
-    let parts be split(replace_text(path, "\\", "/"), "/")
+    let parts be split(replace(path, "\\", "/"), "/")
     let base be parts[length(parts) - 1]
     let segs be split(base, ".")
     when length(segs) < 2

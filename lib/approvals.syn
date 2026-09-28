@@ -101,7 +101,7 @@ task notify(meta, links)
     let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
     let sec be secret_text()
     when sec != ""
-        set headers["X-Lampson-Signature"] to "sha256=" + hmac_sha256(body, sec)
+        set headers["X-Lampson-Signature"] to "sha256=" + decode(hmac(body, sec), "hex")
     try
         let r be http_post(url, body, headers)
         when not r["ok"]
@@ -147,7 +147,7 @@ export task answer_with_token(id, tok, decision)
     observe "approval:token:" + id as want
     when want == nothing
         give {"ok": false, "why": "expired"}
-    when not verify_hmac(id, hmac_sha256(id, tok), want)
+    when not verify_hmac(id, decode(hmac(id, tok), "hex"), want)
         give {"ok": false, "why": "bad token"}
     share nothing as "approval:token:" + id
     let v be when decision then "yes" otherwise "no"

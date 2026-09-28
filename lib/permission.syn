@@ -95,7 +95,7 @@ export task evaluate(name, args, mode)
         give {"decision": "allow", "reason": "public URL"}
     when name == "write" or name == "edit"
         -- el scope file("./*") ya impide salir del workspace; aquí solo miramos secretos obvios
-        let p be when contains(args, "path") then lower(replace_text(text(args["path"]), "\\", "/")) otherwise ""
+        let p be when contains(args, "path") then lower(replace(text(args["path"]), "\\", "/")) otherwise ""
         let parts be split(p, "/")
         let base be parts[length(parts) - 1]
         when is_secret_env(base)
@@ -174,7 +174,7 @@ export task evaluate(name, args, mode)
 
 -- Resumen legible de una tool call, para mostrar al humano antes de aprobar / en el log.
 task one_line(s, max)
-    let t be replace_text(replace_text(s, "\r", ""), "\n", " ⏎ ")
+    let t be replace(replace(s, "\r", ""), "\n", " ⏎ ")
     when length(t) > max
         give slice(t, 0, max) + "…"
     give t

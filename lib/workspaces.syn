@@ -18,6 +18,7 @@
 use "./tools/bash.syn" as t_bash
 use "./tools/proc.syn" as proc
 use "./settings.syn" as settings
+use "./auth.syn" as auth
 
 export let ROOT be ".lampson/ws"
 export let REGISTRY be ".lampson/workspaces.json"
@@ -47,11 +48,11 @@ export task home()
     let r be sh("pwd -W 2>/dev/null || pwd -P", 10)
     let p be trim(text(r["stdout"]))
     when is_win()
-        give replace_text(p, "/", "\\")
+        give replace(p, "/", "\\")
     give p
 
 export task norm(p)
-    let s be lower(replace_text(trim(text(p)), "\\", "/"))
+    let s be lower(replace(trim(text(p)), "\\", "/"))
     when matches(s, "/[a-z]/.*")
         set s to slice(s, 1, 2) + ":" + slice(s, 2, length(s))
     while length(s) > 1 and slice(s, length(s) - 1, length(s)) == "/"
@@ -64,7 +65,7 @@ export task slug_of(path)
     let n be norm(path)
     let parts be where(split(n, "/"), (x) => x != "")
     let base be when length(parts) > 0 then parts[length(parts) - 1] otherwise "workspace"
-    let runs be find_all(base, "[a-z0-9]+")
+    let runs be regex_find_all(base, "[a-z0-9]+")
     let clean be when length(runs) == 0 then "project" otherwise join(runs, "-")
     give clean + "-" + slice(decode(sha256(n), "hex"), 0, 8)
 
@@ -167,14 +168,14 @@ export task dir_of(slug)
 
 task link(where_, target)
     when is_win()
-        let r be run("cmd", ["/c", "mklink", "/J", replace_text(where_, "/", "\\"), replace_text(target, "/", "\\")], 15)
+        let r be run("cmd", ["/c", "mklink", "/J", replace(where_, "/", "\\"), replace(target, "/", "\\")], 15)
         give r["exit_code"] == 0
     let r be run("ln", ["-s", target, where_], 10)
     give r["exit_code"] == 0
 
 task unlink(where_)
     when is_win()
-        run("cmd", ["/c", "rmdir", replace_text(where_, "/", "\\")], 10)
+        run("cmd", ["/c", "rmdir", replace(where_, "/", "\\")], 10)
     otherwise
         run("rm", ["-f", where_], 10)
     give true
@@ -187,7 +188,7 @@ task ensure_dir(p)
     when is_win()
         -- argumentos separados, como mklink: una línea entera con comillas dentro de `cmd /c` se rompe al citarla.
         -- mkdir de cmd crea los intermedios y falla (sin daño) si ya existe.
-        run("cmd", ["/c", "mkdir", replace_text(p, "/", "\\")], 10)
+        run("cmd", ["/c", "mkdir", replace(p, "/", "\\")], 10)
     otherwise
         run("mkdir", ["-p", p], 10)
     give true
@@ -254,7 +255,7 @@ task migrate(w, d)
                 recover err
                     set doc to nothing
                 when doc != nothing and contains(doc, "meta") and contains(doc["meta"], "project") and doc["meta"]["project"] == slug
-                    let id be replace_text(e["name"], ".json", "")
+                    let id be replace(e["name"], ".json", "")
                     sh("mkdir -p '" + d + "/.lampson/sessions' '" + d + "/.lampson/trace' && mv -f '.lampson/sessions/" + e["name"] + "' '" + d + "/.lampson/sessions/' && mv -f .lampson/trace/" + id + ".* '" + d + "/.lampson/trace/' 2>/dev/null; true", 20)
                     set moved to moved + 1
     recover err
@@ -313,7 +314,7 @@ export task ensure(path)
             let port be doc["next_port"]
             set doc["next_port"] to port + 1
             save_reg(doc)
-            let parts be where(split(replace_text(text(path), "\\", "/"), "/"), (x) => x != "")
+            let parts be where(split(replace(text(path), "\\", "/"), "/"), (x) => x != "")
             set w to {"slug": slug, "name": parts[length(parts) - 1], "path": text(path), "port": port, "policy": "auto", "created": now(), "last_used": now()}
         put(w)
         when regen_hub() and hub_alive()
@@ -350,8 +351,10 @@ export task remove(slug)
 task hub_routes(w)
     let base be "http://127.0.0.1:" + text(w["port"])
     let lines be []
+    -- el API pide auth en el hub: el proceso del workspace ve 127.0.0.1 y confía en todo lo que le llega.
+    -- Los links de aprobación no: llevan su propio token de un solo uso.
     each m in ["GET", "POST"]
-        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/api/*path\"\n        proxy to \"" + base + "\"")
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/api/*path\" requires auth\n        proxy to \"" + base + "\"")
     set lines to append(lines, "    route \"GET /w/" + w["slug"] + "/approve/*path\"\n        proxy to \"" + base + "\"")
     give join(lines, "\n")
 
@@ -365,7 +368,10 @@ export task regen_hub()
     let blocks be []
     each w in all()
         set blocks to append(blocks, hub_routes(w))
-    let body be replace_text(tpl, "    -- @workspaces", when length(blocks) == 0 then "    -- (sin workspaces registrados todavía)" otherwise join(blocks, "\n"))
+    let body be replace(tpl, "    -- @workspaces", when length(blocks) == 0 then "    -- (sin workspaces registrados todavía)" otherwise join(blocks, "\n"))
+    -- con dominio propio, de afuera se entra SOLO por el edge (:443, TLS): el hub deja de escuchar en la red
+    when domain_cfg() != nothing
+        set body to replace(body, "    -- @bind", "    bind \"127.0.0.1\"   -- dominio activo (lampson --domain): de afuera se entra por el edge HTTPS")
     let cur be ""
     try
         set cur to read_file(HUB_FILE)
@@ -384,8 +390,8 @@ task spawn_detached(cwd, cmdline, envs)
     when is_win()
         -- WorkingDirectory absoluto: el relativo se resolvería contra el cwd del PowerShell (que ya es `cwd`)
         let h be home()
-        let abs be when cwd == "." then h otherwise h + "\\" + replace_text(cwd, "/", "\\")
-        let ps be "Start-Process -FilePath cmd -ArgumentList '/c', '" + replace_text(cmdline, "'", "''") + "' -WorkingDirectory '" + replace_text(abs, "'", "''") + "' -WindowStyle Hidden"
+        let abs be when cwd == "." then h otherwise h + "\\" + replace(cwd, "/", "\\")
+        let ps be "Start-Process -FilePath cmd -ArgumentList '/c', '" + replace(cmdline, "'", "''") + "' -WorkingDirectory '" + replace(abs, "'", "''") + "' -WindowStyle Hidden"
         let p be proc_spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], {"cwd": cwd, "env": envs, "process_group": false})
         proc_wait(p, 15)
         proc_close(p)
@@ -529,6 +535,125 @@ export task stop_hub()
         proc.kill_pid(l["pid"])
     give length(victims) > 0
 
+-- ---------- dominio propio (opcional): edge HTTPS en :443 ----------
+-- `lampson --domain lampson.midominio.com --email yo@midominio.com` guarda .lampson/domain.json; desde ahí el
+-- supervisor mantiene vivo edge.syn (TLS de Let's Encrypt) y el hub pasa a escuchar solo en 127.0.0.1.
+-- `lampson --domain off` lo quita y todo vuelve a ser como antes. Sin dominio, nada de esto corre.
+export let EDGE_FILE be "edge.syn"
+let DOMAIN_FILE be ".lampson/domain.json"
+-- tras un arranque fallido no reintentar enseguida: Let's Encrypt limita las validaciones fallidas por hora
+let EDGE_RETRY_S be 600
+
+task edge_port()
+    give int(env("LAMPSON_EDGE_PORT", "443"))
+
+export task domain_cfg()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    try
+        when file_exists(DOMAIN_FILE)
+            let d be json_decode(read_file(DOMAIN_FILE))
+            -- ojo: este módulo define su propia task `get(slug)`, que tapa el builtin get(mapa, clave, default)
+            when type_of(d) == "map" and contains(d, "domain") and text(d["domain"]) != ""
+                give d
+    recover err
+        give nothing
+    give nothing
+
+export task valid_domain(d)
+    give matches(d, "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+") and not matches(d, "[0-9.]+")
+
+-- guarda el dominio; el email (contacto de Let's Encrypt) se pide la primera vez y después se recuerda
+export task set_domain(domain, email)
+    require file(".lampson")
+    require file(".lampson/*")
+    require env("LAMPSON_*")
+    let d be lower(trim(text(domain)))
+    set d to regex_replace(d, "^https?://", "")
+    set d to regex_replace(d, "/.*$", "")
+    when not valid_domain(d)
+        raise "«" + text(domain) + "» no parece un dominio (ej.: lampson.midominio.com)"
+    let prev be domain_cfg()
+    let em be trim(text(email))
+    when em == "" and prev != nothing
+        set em to when contains(prev, "email") then text(prev["email"]) otherwise ""
+    when not contains(em, "@")
+        raise "falta el email para Let's Encrypt (avisos de vencimiento del certificado): --email vos@dominio.com"
+    write_file(DOMAIN_FILE, json_encode({"domain": d, "email": em, "since": now()}))
+    -- el QR de emparejamiento apunta al dominio
+    auth.set_public_url("https://" + d)
+    give {"domain": d, "email": em}
+
+export task clear_domain()
+    require file(".lampson")
+    require file(".lampson/*")
+    require env("LAMPSON_*")
+    let prev be domain_cfg()
+    write_file(DOMAIN_FILE, "{}")
+    when prev != nothing and auth.public_url() == "https://" + prev["domain"]
+        auth.set_public_url("")
+    give prev != nothing
+
+export task edge_alive()
+    require exec
+    require time
+    require env("OS")
+    give length(where(proc.listeners(), (l) => l["port"] == edge_port())) > 0
+
+export task start_edge()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    let cfg be domain_cfg()
+    when cfg == nothing
+        give false
+    write_file(".lampson/edge.last", text(now()))
+    let exe be env("LAMPSON_SYNSEMA", "synsema")
+    let cmd be exe + " serve " + EDGE_FILE + " --port " + text(edge_port()) + " --domain " + cfg["domain"] + " --tls-auto " + cfg["email"] + " > .lampson/edge.log 2>&1"
+    spawn_detached(".", cmd, {"LAMPSON_HOME": home()})
+    give true
+
+export task stop_edge()
+    require exec
+    require time
+    require env("OS")
+    let victims be where(proc.listeners(), (l) => l["port"] == edge_port())
+    each l in victims
+        proc.kill_pid(l["pid"])
+    give length(victims) > 0
+
+-- lo llama el tick: dominio configurado + edge caído → levantarlo (con espera tras un intento fallido)
+export task keep_edge()
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file(".lampson")
+    require file(".lampson/*")
+    when domain_cfg() == nothing or edge_alive()
+        give false
+    let last be 0
+    try
+        set last to number(read_file(".lampson/edge.last"))
+    recover err
+        set last to 0
+    when now() - last < EDGE_RETRY_S
+        give false
+    give start_edge()
+
+-- últimas líneas del log del edge (para diagnosticar desde la CLI)
+export task edge_log(n)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    try
+        let lines be where(split(replace(read_file(".lampson/edge.log"), "\r", ""), "\n"), (l) => trim(l) != "")
+        give slice(lines, max(0, length(lines) - n), length(lines))
+    recover err
+        give []
+
 -- ---------- política y supervisor (tick del hub) ----------
 export task idle_hours()
     require file.read(".lampson")
@@ -587,6 +712,7 @@ export task tick()
     require file.read("chat.syn")
     when migrate_ports() and hub_alive()
         restart_hub_later()
+    keep_edge()
     let started be []
     let stopped be []
     let list be all()
@@ -669,14 +795,14 @@ export task browse(path)
     require env("LAMPSON_*")
     require env("OS")
     let p be when path == nothing or trim(text(path)) == "" then env("HOME", env("USERPROFILE", "/")) otherwise text(path)
-    let r be sh("cd \"" + replace_text(p, "\"", "") + "\" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P) && ls -1 -d -- */ 2>/dev/null", 10)
-    let lines be where(split(replace_text(text(r["stdout"]), "\r", ""), "\n"), (x) => trim(x) != "")
+    let r be sh("cd \"" + replace(p, "\"", "") + "\" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P) && ls -1 -d -- */ 2>/dev/null", 10)
+    let lines be where(split(replace(text(r["stdout"]), "\r", ""), "\n"), (x) => trim(x) != "")
     when length(lines) == 0
         give {"path": p, "dirs": [], "error": "no existe o no se puede leer"}
     let here be lines[0]
     when is_win()
-        set here to replace_text(here, "/", "\\")
-    let dirs be apply(slice(lines, 1, length(lines)), (d) => replace_text(d, "/", ""))
-    let parts be where(split(replace_text(here, "\\", "/"), "/"), (x) => x != "")
+        set here to replace(here, "/", "\\")
+    let dirs be apply(slice(lines, 1, length(lines)), (d) => replace(d, "/", ""))
+    let parts be where(split(replace(here, "\\", "/"), "/"), (x) => x != "")
     let parent be when length(parts) > 1 then join(slice(parts, 0, length(parts) - 1), when is_win() then "\\" otherwise "/") otherwise (when is_win() then parts[0] + "\\" otherwise "/")
     give {"path": here, "parent": parent, "dirs": where(dirs, (d) => not starts_with(d, "."))}

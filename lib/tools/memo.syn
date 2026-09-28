@@ -33,10 +33,10 @@ task valid_name(name)
 export task slug()
     require env("LAMPSON_*")
     let ws be env("LAMPSON_WORKSPACE", "workspace")
-    let norm be replace_text(lower(ws), "\\", "/")
+    let norm be replace(lower(ws), "\\", "/")
     let parts be where(split(norm, "/"), (x) => x != "")
     let base be when length(parts) > 0 then parts[length(parts) - 1] otherwise "workspace"
-    let runs be find_all(base, "[a-z0-9]+")
+    let runs be regex_find_all(base, "[a-z0-9]+")
     let clean be when length(runs) == 0 then "project" otherwise join(runs, "-")
     let h be slice(decode(sha256(norm), "hex"), 0, 8)
     give clean + "-" + h
@@ -61,7 +61,7 @@ export task list()
                 let title be ""
                 each line in split(read_file(path(name)), "\n")
                     when title == "" and trim(line) != ""
-                        set title to trim(replace_text(line, "#", ""))
+                        set title to trim(replace(line, "#", ""))
                 set out to append(out, {"name": name, "title": when length(title) > 120 then slice(title, 0, 120) otherwise title})
     recover err
         -- el runtime lanza "Not a directory: …" (mayúscula) cuando memory/<slug> aún no existe

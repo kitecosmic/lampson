@@ -38,7 +38,7 @@ task path(name, ext)
     give DIR + "/" + name + "." + ext
 
 task tail_lines(content, n)
-    let lines be split(replace_text(content, "\r", ""), "\n")
+    let lines be split(replace(content, "\r", ""), "\n")
     when length(lines) > n
         set lines to slice(lines, length(lines) - n, length(lines))
     give join(lines, "\n")
@@ -211,7 +211,7 @@ export task resume_note(sid)
     give "[harness] This session was resumed after a lampson restart. Managed processes do NOT survive a restart — anything this conversation started earlier is gone unless listed as running below. Current real state:\n" + join(lines, "\n") + "\nOld logs remain in " + DIR + "/<name>.log. Start a process again with the `process` tool only if it is needed now; do not assume any server is up."
 
 task first_line_of(s)
-    let t be replace_text(text(s), "\r", "")
+    let t be replace(text(s), "\r", "")
     give split(t, "\n")[0]
 
 -- {run, session} actuales (blackboard "lampson:run" / "lampson:session"; vacíos fuera de un entry)
@@ -258,7 +258,7 @@ export task listeners()
     try
         let r be run(shell(), ["lib/tools/proc.sh", "ports"], 20, {"cwd": "."})
         let seen be {}
-        each line in split(replace_text(r["stdout"], "\r", ""), "\n")
+        each line in split(replace(r["stdout"], "\r", ""), "\n")
             let parts be where(split(trim(line), " "), (x) => x != "")
             when length(parts) >= 2
                 let port be floor(number(parts[0]))
@@ -276,7 +276,7 @@ export task listeners()
         when not contains(cmds, key)
             try
                 let r be run(shell(), ["lib/tools/proc.sh", "info", key], 15, {"cwd": "."})
-                set cmds[key] to trim(replace_text(r["stdout"], "\n", " "))
+                set cmds[key] to trim(replace(r["stdout"], "\n", " "))
             recover err
                 set cmds[key] to ""
         set l["command"] to when length(cmds[key]) > 300 then slice(cmds[key], 0, 300) + "…" otherwise cmds[key]

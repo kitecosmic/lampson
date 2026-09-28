@@ -27,7 +27,7 @@ export task shell_config()
 let SERVER_RE be ".*((npm|pnpm|yarn|bun)( run)? (dev|start|serve|watch|preview)|npx (next|vite|nodemon|serve|http-server)|next (dev|start)|vite( |$)|nodemon|synsema serve|uvicorn|gunicorn|flask run|manage\\.py runserver|python3? -m http\\.server|rails s(erver)?|php -S|ng serve|cargo (run|watch)|go run|dotnet (run|watch)|tail -f).*"
 
 export task looks_like_server(command)
-    let cmd be trim(lower(replace_text(command, "\n", " ")))
+    let cmd be trim(lower(replace(command, "\n", " ")))
     when matches(cmd, "timeout [0-9]+.*")
         give false
     give matches(cmd, SERVER_RE)

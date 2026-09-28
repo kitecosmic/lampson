@@ -8,7 +8,9 @@
 --   GET  /w/<slug>/approve/…  links de aprobación de ese workspace
 --   /api/workspaces…          registro, crear (diálogo nativo o explorador), start/stop/quitar, política
 -- Supervisor: cada 15 s arranca los workspaces que deben vivir y apaga los inactivos (política en ⚙ → idle_hours).
--- Solo loopback puede usar la API del hub (misma regla que web.syn); LAMPSON_WEB_TOKEN para scripts remotos.
+-- Acceso: esta PC (loopback directo) entra sin nada; lo remoto — túnel, LAN, VPS — necesita la sesión de un
+-- dispositivo emparejado con passkey (lib/auth.syn), o LAMPSON_WEB_TOKEN para scripts. Las rutas proxy al API de
+-- cada workspace también piden auth: el proceso del workspace confía en todo lo que le llega del hub.
 
 intent: "Lampson hub: workspaces registry, supervisor and reverse proxy to one process per workspace"
 
@@ -29,34 +31,134 @@ require file.read("hub.tpl.syn")
 require file("hub.syn")
 require file.read("public")
 require file.read("public/*")
+require random
 
 use "./lib/workspaces.syn" as ws
 use "./lib/settings.syn" as settings
+use "./lib/auth.syn" as auth
 
+-- local → {local:true}; remoto con sesión de un dispositivo → {local:false, device}; con LAMPSON_WEB_TOKEN → script
 task check_client(token, request)
-    let ip be text(ip of request)
-    when ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
+    let h be headers of request
+    when auth.is_local(text(ip of request), h)
         give {"local": true}
     let want be env("LAMPSON_WEB_TOKEN", "")
     when want != "" and token == want
-        give {"local": false}
-    give nothing
+        give {"local": false, "device": nothing}
+    let s be auth.session_for(get(request.cookies, auth.COOKIE, nothing))
+    when s == nothing
+        give nothing
+    when method of request != "GET" and not auth.same_origin(h)
+        give nothing
+    give {"local": false, "device": s["device"]}
+
+-- las páginas (no el API): un remoto sin sesión va a /login
+task page_allowed(request)
+    give check_client(nothing, request) != nothing
+
+task with_session(resp, request, sid)
+    give set_cookie(resp, auth.COOKIE, sid, {"max_age": auth.SESSION_MAX_DAYS * 86400, "secure": auth.secure_cookie(headers of request), "same_site": "Lax"})
 
 task hub_tick()
     give ws.tick()
 cron_every(15, hub_tick)
 
 serve on 8080
+    -- @bind
     max_streams 200
     auth with check_client
     static "./public"
 
     route "GET /"
+        when not page_allowed(request)
+            give redirect("/login", 302)
         give html(read_file("public/hub.html"))
+
+    -- ---- acceso remoto: páginas públicas de login/emparejar y su API ----
+    route "GET /login"
+        give html(read_file("public/login.html"))
+    route "GET /pair"
+        give html(read_file("public/login.html"))
+
+    -- ¿quién soy? (la UI decide si muestra «Dispositivos» o «cerrar sesión»)
+    route "GET /api/auth/me"
+        let u be check_client(nothing, request)
+        give {"authenticated": u != nothing, "local": u != nothing and u["local"], "device": when u == nothing then nothing otherwise get(u, "device", nothing), "has_devices": length(auth.devices()) > 0}
+
+    -- código de emparejamiento para el QR: SOLO desde esta PC
+    route "POST /api/auth/pair" requires auth
+        when not request.user["local"]
+            give fail(403, "el emparejamiento se inicia desde la PC donde corre lampson")
+        let p be auth.new_pairing()
+        give {"code": p["code"], "expires_in": p["expires_in"], "public_url": auth.public_url()}
+
+    route "GET /api/auth/public-url" requires auth
+        give {"public_url": auth.public_url()}
+    route "POST /api/auth/public-url" requires auth
+        when not request.user["local"]
+            give fail(403, "solo desde la PC")
+        expect body {url: text}
+        try
+            give {"public_url": auth.set_public_url(text((json of request)["url"]))}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/auth/register/options"
+        rate_limit 20 per minute
+        expect body {code: text, name: text}
+        let b be json of request
+        when not auth.pairing_valid(text(b["code"]))
+            give fail(400, "el código de emparejamiento venció o ya se usó — generá otro desde la PC")
+        give auth.register_options(headers of request, text(b["name"]))
+
+    route "POST /api/auth/register"
+        rate_limit 20 per minute
+        let b be json of request
+        try
+            let r be auth.register(headers of request, get(b, "code", nothing), get(b, "challenge_id", nothing), get(b, "name", ""), get(b, "credential", {}))
+            give with_session(ok({"ok": true, "device": r["device"]}), request, r["sid"])
+        recover err
+            give fail(400, text(err))
+
+    route "POST /api/auth/login/options"
+        rate_limit 30 per minute
+        give auth.login_options(headers of request)
+
+    route "POST /api/auth/login"
+        rate_limit 30 per minute
+        let b be json of request
+        let r be nothing
+        try
+            set r to auth.login(headers of request, get(b, "challenge_id", nothing), get(b, "credential", {}))
+        recover err
+            give fail(400, text(err))
+        when r == nothing
+            give fail(401, "la passkey no coincide con un dispositivo emparejado de este dominio")
+        give with_session(ok({"ok": true, "device": r["device"]}), request, r["sid"])
+
+    route "POST /api/auth/logout"
+        let sid be get(request.cookies, auth.COOKIE, nothing)
+        when sid != nothing
+            auth.drop_session(sid)
+        give clear_cookie(ok({"ok": true}), auth.COOKIE)
+
+    route "GET /api/auth/devices" requires auth
+        give {"devices": auth.public_devices(get(request.user, "device", nothing)), "local": request.user["local"], "public_url": auth.public_url()}
+
+    route "POST /api/auth/devices/remove" requires auth
+        expect body {id: text}
+        give {"ok": auth.remove_device(text((json of request)["id"]))}
+
+    route "POST /api/auth/devices/rename" requires auth
+        expect body {id: text, name: text}
+        let b be json of request
+        give {"ok": auth.rename_device(text(b["id"]), text(b["name"]))}
 
     -- la UI de un workspace: el mismo index.html; el frontend deduce /w/<slug> de la URL (BASE en js/core.js).
     -- Sin barra final: el runtime normaliza "/w/x/" → "/w/x" (301), así que la ruta canónica es esta
     route "GET /w/:slug"
+        when not page_allowed(request)
+            give redirect("/login", 302)
         -- entrar a un workspace apagado lo enciende (y levanta la pausa manual): si alguien abre la URL es para usarlo
         let w be ws.get(params.slug)
         when w != nothing and ws.health(w) == nothing

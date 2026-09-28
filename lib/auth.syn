@@ -1,0 +1,310 @@
+-- lib/auth.syn — quién puede entrar al hub desde afuera (celular por túnel, VPS): dispositivos con passkey.
+--
+-- Local (esta PC) entra sin nada, como siempre. Remoto = una IP que no es loopback O una petición con headers de
+-- reenvío: `cloudflared` (y cualquier proxy) se conecta desde 127.0.0.1, así que la IP sola NO distingue un túnel.
+-- Un remoto necesita la cookie de sesión de un dispositivo emparejado:
+--   1. emparejar (solo desde local): POST /api/auth/pair → código de un solo uso, 5 min, que viaja en el QR
+--      (<url pública>/pair#<código> — en el fragmento, para que no quede en logs de proxies);
+--   2. el celular abre /pair, registra una passkey (webauthn_register) con el código → dispositivo + sesión;
+--   3. después, /login con la passkey (webauthn_verify, contador incluido) → sesión nueva.
+-- Una passkey queda atada al dominio (rp_id): si la URL del túnel cambia, hay que emparejar de nuevo.
+--
+-- Archivos (.lampson/auth/, gitignored por .lampson): devices.json {devices: [...]} con la clave PÚBLICA y el
+-- contador; sessions.json {<sha256(sid)>: {device, created, expires}} — el sid nunca se guarda, solo su hash.
+-- Códigos y desafíos viven en state_* (memoria del hub): un reinicio los invalida, y está bien.
+-- Módulo sin `require`: los declara hub.syn.
+
+export let DIR be ".lampson/auth"
+export let COOKIE be "lampson_sid"
+-- sesión renovable: vence tras SESSION_DAYS sin usarla; pase lo que pase, la passkey se pide de nuevo a los
+-- SESSION_MAX_DAYS del último ingreso con passkey (la cookie vive eso mismo: el server decide antes)
+export let SESSION_DAYS be 30
+export let SESSION_MAX_DAYS be 90
+-- renovar escribe sessions.json: como mucho una vez cada RENEW_EVERY segundos por sesión
+let RENEW_EVERY be 3600
+export let PAIR_TTL be 300
+export let CHALLENGE_TTL be 300
+
+let FORWARD_HEADERS be ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "x-real-ip", "forwarded"]
+
+-- ---- quién es ----
+
+export task is_loopback(ip)
+    give ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
+
+-- local = loopback directo, sin rastro de haber pasado por un proxy o túnel
+export task is_local(ip, headers)
+    when not is_loopback(ip)
+        give false
+    each h in FORWARD_HEADERS
+        when contains(headers, h)
+            give false
+    give true
+
+-- host sin puerto, en minúsculas (rp_id de WebAuthn); el Host lo pone el túnel con el dominio público
+export task host_of(headers)
+    let h be lower(text(get(headers, "x-forwarded-host", get(headers, "host", ""))))
+    set h to trim(split(h, ",")[0])
+    when starts_with(h, "[")
+        give split(slice(h, 1, length(h)), "]")[0]
+    give split(h, ":")[0]
+
+export task origin_of(headers)
+    let h be lower(text(get(headers, "x-forwarded-host", get(headers, "host", ""))))
+    set h to trim(split(h, ",")[0])
+    let proto be lower(trim(split(text(get(headers, "x-forwarded-proto", "")), ",")[0]))
+    when proto == ""
+        set proto to when host_of(headers) == "localhost" then "http" otherwise "https"
+    give proto + "://" + h
+
+-- una cookie Secure en http://localhost la aceptan los navegadores; en otro http no
+export task secure_cookie(headers)
+    give starts_with(origin_of(headers), "https://") or host_of(headers) == "localhost"
+
+-- CSRF: un POST remoto con cookie tiene que venir de la misma origin (SameSite=Lax ya frena los formularios de
+-- otros sitios; esto cierra el resto). Sin header Origin (scripts con bearer) no hay navegador que engañar.
+export task same_origin(headers)
+    when not contains(headers, "origin")
+        give true
+    give lower(text(headers["origin"])) == lower(origin_of(headers))
+
+-- ---- archivos ----
+
+task read_json(path, fallback)
+    try
+        when file_exists(path)
+            give json_decode(read_file(path))
+    recover err
+        give fallback
+    give fallback
+
+task devices_path()
+    give DIR + "/devices.json"
+
+task sessions_path()
+    give DIR + "/sessions.json"
+
+export task devices()
+    let doc be read_json(devices_path(), {"devices": []})
+    give get(doc, "devices", [])
+
+task save_devices(list)
+    write_file(devices_path(), json_encode({"devices": list}))
+
+-- lo que ve la UI: sin clave pública
+export task public_devices(current)
+    let out be []
+    each d in devices()
+        set out to append(out, {"id": d["id"], "name": d["name"], "rp_id": d["rp_id"], "created": d["created"], "last_used": get(d, "last_used", nothing), "current": d["id"] == current})
+    give out
+
+export task find_device(id)
+    each d in devices()
+        when d["id"] == id
+            give d
+    give nothing
+
+-- ---- sesiones ----
+
+task sid_hash(sid)
+    give decode(sha256("lampson-session:" + sid), "hex")
+
+task load_sessions()
+    give read_json(sessions_path(), {})
+
+-- crea una sesión para el dispositivo → el sid (va SOLO en la cookie)
+export task new_session(device_id)
+    let sid be token()
+    let h be sid_hash(sid)
+    let t be now()
+    let rec be {"device": device_id, "created": t, "seen": t, "hard": t + SESSION_MAX_DAYS * 86400, "expires": t + SESSION_DAYS * 86400}
+    let all be load_sessions()
+    -- de paso, barrer las vencidas
+    let keep be {}
+    each k in keys(all)
+        when all[k]["expires"] > t
+            set keep[k] to all[k]
+    set keep[h] to rec
+    write_file(sessions_path(), json_encode(keep))
+    state_set("auth:sess:" + h, rec)
+    give sid
+
+-- usar la sesión la renueva: vence SESSION_DAYS después del último uso, nunca después de `hard`
+export task renewed(rec, t)
+    let hard be when contains(rec, "hard") then rec["hard"] otherwise rec["created"] + SESSION_MAX_DAYS * 86400
+    let seen be when contains(rec, "seen") then rec["seen"] otherwise rec["created"]
+    when t - seen < RENEW_EVERY
+        give nothing
+    let out be merge(rec, {"seen": t, "hard": hard, "expires": min(t + SESSION_DAYS * 86400, hard)})
+    give out
+
+-- la sesión de este sid (con su dispositivo todavía emparejado) o nothing. Caché en state_* para no leer el
+-- archivo en cada petición (el hub proxyea todo el API y el SSE); un miss (hub reiniciado) cae al archivo.
+export task session_for(sid)
+    when sid == nothing or text(sid) == ""
+        give nothing
+    let h be sid_hash(text(sid))
+    let rec be state_get("auth:sess:" + h, nothing)
+    when rec == nothing
+        set rec to get(load_sessions(), h, nothing)
+        when rec == nothing
+            give nothing
+        state_set("auth:sess:" + h, rec)
+    when rec["expires"] <= now()
+        drop_session(sid)
+        give nothing
+    when state_get("auth:gone:" + rec["device"], false) == true
+        give nothing
+    let nr be renewed(rec, now())
+    when nr != nothing
+        let all be load_sessions()
+        when contains(all, h)
+            set all[h] to nr
+            write_file(sessions_path(), json_encode(all))
+        state_set("auth:sess:" + h, nr)
+        set rec to nr
+    give rec
+
+export task drop_session(sid)
+    let h be sid_hash(text(sid))
+    let all be load_sessions()
+    when contains(all, h)
+        write_file(sessions_path(), json_encode(remove(all, h)))
+    state_delete("auth:sess:" + h)
+
+-- ---- URL pública (la que va en el QR: el túnel o el dominio del VPS) ----
+
+export task public_url()
+    let cfg be read_json(DIR + "/config.json", {})
+    let u be text(get(cfg, "public_url", ""))
+    when u == ""
+        set u to env("LAMPSON_PUBLIC_URL", "")
+    give u
+
+export task set_public_url(u)
+    let v be trim(text(u))
+    when v != "" and not (starts_with(v, "https://") or starts_with(v, "http://localhost"))
+        raise "la URL pública tiene que ser https:// (las passkeys solo andan en https o en localhost)"
+    when ends_with(v, "/")
+        set v to slice(v, 0, length(v) - 1)
+    write_file(DIR + "/config.json", json_encode({"public_url": v}))
+    give v
+
+-- ---- emparejar ----
+
+export task new_pairing()
+    let code be token()
+    state_set("auth:pair:" + code, {"expires": now() + PAIR_TTL})
+    give {"code": code, "expires_in": PAIR_TTL}
+
+export task pairing_valid(code)
+    when code == nothing or text(code) == ""
+        give false
+    let p be state_get("auth:pair:" + text(code), nothing)
+    give p != nothing and p["expires"] > now()
+
+-- ---- desafíos WebAuthn ----
+
+-- {id, challenge}: challenge en base64url (32 bytes), el navegador lo decodifica a bytes
+export task new_challenge(kind, extra)
+    let id be token()
+    let ch be token()
+    state_set("auth:chal:" + id, {"kind": kind, "challenge": ch, "expires": now() + CHALLENGE_TTL, "extra": extra})
+    give {"id": id, "challenge": ch}
+
+-- de un solo uso: se borra al leerlo
+export task take_challenge(id, kind)
+    when id == nothing or text(id) == ""
+        give nothing
+    let c be state_get("auth:chal:" + text(id), nothing)
+    state_delete("auth:chal:" + text(id))
+    when c == nothing or c["kind"] != kind or c["expires"] <= now()
+        give nothing
+    give c
+
+-- opciones para navigator.credentials.create (los binarios en base64url; pair.js los pasa a bytes)
+export task register_options(headers, device_name)
+    let user_id be token()
+    let c be new_challenge("register", {"user_id": user_id})
+    give {"challenge_id": c["id"], "publicKey": {"challenge": c["challenge"], "rp": {"id": host_of(headers), "name": "Lampson"}, "user": {"id": user_id, "name": device_name, "displayName": "Lampson · " + device_name}, "pubKeyCredParams": [{"type": "public-key", "alg": -7}, {"type": "public-key", "alg": -8}, {"type": "public-key", "alg": -257}], "authenticatorSelection": {"residentKey": "preferred", "userVerification": "required"}, "attestation": "none", "timeout": 120000}}
+
+-- registra la passkey (consume el código) → {device, sid} | error con el motivo
+export task register(headers, code, challenge_id, name, credential)
+    when not pairing_valid(code)
+        raise "el código de emparejamiento venció o ya se usó — generá otro desde la PC"
+    let c be take_challenge(challenge_id, "register")
+    when c == nothing
+        raise "el desafío venció — volvé a intentar"
+    let reg be webauthn_register(credential, {"rp_id": host_of(headers), "origin": origin_of(headers), "challenge": c["challenge"], "user_verification": "required"})
+    when reg == nothing
+        raise "el navegador devolvió una passkey que no se pudo verificar"
+    state_delete("auth:pair:" + text(code))
+    let nm be trim(text(name))
+    when nm == ""
+        set nm to "dispositivo"
+    let dev be {"id": reg["id"], "public_key": reg["public_key"], "alg": reg["alg"], "sign_count": reg["sign_count"], "user_handle": c["extra"]["user_id"], "name": slice(nm, 0, 60), "rp_id": host_of(headers), "created": now(), "last_used": now()}
+    let list be where(devices(), (d) => d["id"] != dev["id"])
+    save_devices(append(list, dev))
+    state_delete("auth:gone:" + dev["id"])
+    give {"device": dev["id"], "sid": new_session(dev["id"])}
+
+-- opciones para navigator.credentials.get: solo las passkeys de ESTE dominio
+export task login_options(headers)
+    let rp be host_of(headers)
+    let creds be []
+    each d in devices()
+        when d["rp_id"] == rp
+            set creds to append(creds, {"type": "public-key", "id": d["id"]})
+    let c be new_challenge("login", {})
+    give {"challenge_id": c["id"], "known": length(creds), "publicKey": {"challenge": c["challenge"], "rpId": rp, "allowCredentials": creds, "userVerification": "required", "timeout": 120000}}
+
+-- verifica la firma contra la clave y el contador guardados → {device, sid} | nothing
+export task login(headers, challenge_id, credential)
+    let c be take_challenge(challenge_id, "login")
+    when c == nothing
+        give nothing
+    let dev be find_device(text(get(credential, "id", "")))
+    when dev == nothing or dev["rp_id"] != host_of(headers)
+        give nothing
+    let stored be {"id": dev["id"], "public_key": dev["public_key"], "alg": dev["alg"], "sign_count": dev["sign_count"], "user_handle": dev["user_handle"]}
+    let v be webauthn_verify(credential, stored, {"rp_id": dev["rp_id"], "origin": origin_of(headers), "challenge": c["challenge"], "user_verification": "required"})
+    when v == nothing
+        give nothing
+    let list be []
+    each d in devices()
+        when d["id"] == dev["id"]
+            set d["sign_count"] to v["sign_count"]
+            set d["last_used"] to now()
+        set list to append(list, d)
+    save_devices(list)
+    give {"device": dev["id"], "sid": new_session(dev["id"])}
+
+-- quitar un dispositivo corta sus sesiones al instante (la marca en state_* gana a la caché)
+export task remove_device(id)
+    let before be devices()
+    let list be where(before, (d) => d["id"] != id)
+    when length(list) == length(before)
+        give false
+    save_devices(list)
+    let all be load_sessions()
+    let keep be {}
+    each k in keys(all)
+        when all[k]["device"] != id
+            set keep[k] to all[k]
+        otherwise
+            state_delete("auth:sess:" + k)
+    write_file(sessions_path(), json_encode(keep))
+    state_set("auth:gone:" + id, true)
+    give true
+
+export task rename_device(id, name)
+    let found be false
+    let list be []
+    each d in devices()
+        when d["id"] == id
+            set d["name"] to slice(trim(text(name)), 0, 60)
+            set found to true
+        set list to append(list, d)
+    when found
+        save_devices(list)
+    give found

@@ -5,6 +5,7 @@
 #   lampson --workspace C:\otro\proyecto        # elegir la carpeta explícitamente
 #   lampson --hub start|stop|status|logs        # el servicio residente (workspaces + tareas programadas)
 #   lampson --install | --uninstall             # arrancar el hub al iniciar sesión (Tarea Programada)
+#   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS con tu dominio (opcional) · --domain off
 #   lampson --agent plan · --yolo|--strict|--ask · --update · --help
 #
 # Cómo funciona (ver SPEC-WORKSPACES.md): .lampson\ws\<slug>\ es el cwd del proceso del workspace, con una junction
@@ -15,13 +16,15 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $caller = (Get-Location).Path
 
 # --- args: acepta --flag y -Flag, sin distinguir mayúsculas ---
-$Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Hub = ""; $Install = ""
+$Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Hub = ""; $Install = ""; $Domain = $null; $Email = ""
 $i = 0
 while ($i -lt $args.Count) {
     $a = [string]$args[$i]
     switch -Regex ($a.ToLower()) {
         '^--?(web|w)$'          { $Web = $true }
         '^--?(hub|daemon|d)$'   { $i++; $Hub = if ($i -lt $args.Count) { ([string]$args[$i]).ToLower() } else { "status" } }
+        '^--?domain$'           { if ($i + 1 -lt $args.Count -and -not ([string]$args[$i + 1]).StartsWith("-")) { $i++; $Domain = [string]$args[$i] } else { $Domain = "" } }
+        '^--?email$'            { $i++; $Email = [string]$args[$i] }
         '^--?install$'          { $Install = "install" }
         '^--?uninstall$'        { $Install = "uninstall" }
         '^--?(workspace|ws)$'   { $i++; $Workspace = [string]$args[$i] }
@@ -69,6 +72,12 @@ function Invoke-Cli([string]$cmd, [string]$ws) {
 Push-Location $here
 try {
     $env:LAMPSON_HOME = $here
+    # --- dominio propio (opcional): lampson --domain [dominio|off] [--email vos@dominio] ---
+    if ($null -ne $Domain) {
+        $env:LAMPSON_DOMAIN = $Domain; $env:LAMPSON_EMAIL = $Email
+        $r = Invoke-Cli "domain" ""
+        exit 0
+    }
     # --- hub / servicio ---
     if ($Hub -ne "") {
         switch ($Hub) {

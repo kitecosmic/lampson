@@ -25,7 +25,7 @@ write_file("workspace/src/b.ts", "// b\nexport function foo(): number {\n  const
 check(length(lsp.servers()) == 2, "config: 2 servers")
 check(lsp.server_for("src/a.ts")["server"]["name"] == "mock" and lsp.server_for("x.py") == nothing, "server_for por extensión")
 check(lsp.to_uri("C:\\Users\\x y\\p") == "file:///C:/Users/x%20y/p" and lsp.from_uri("file:///c%3A/Users/x%20y/p") == "c:/Users/x y/p", "uri ida y vuelta (Windows, espacios, %3A)")
-check(lsp.relativize("file:///" + replace_text(lsp.root_path(), ":", "%3A") + "/src/b.ts", lsp.root_path()) == "src/b.ts", "relativize contra la raíz real (case-insensitive)")
+check(lsp.relativize("file:///" + replace(lsp.root_path(), ":", "%3A") + "/src/b.ts", lsp.root_path()) == "src/b.ts", "relativize contra la raíz real (case-insensitive)")
 
 -- todo lo que arranca servers va en try: si algo falla, apagarlos igual (si no, el proceso no termina)
 try

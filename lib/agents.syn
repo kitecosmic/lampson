@@ -176,7 +176,7 @@ task write_json(id, m)
     write_file(path(id, "json"), json_encode(m))
 
 task one_line(s, max)
-    let t be replace_text(replace_text(text(s), "\r", ""), "\n", " ⏎ ")
+    let t be replace(replace(text(s), "\r", ""), "\n", " ⏎ ")
     when length(t) > max
         give slice(t, 0, max) + "…"
     give t

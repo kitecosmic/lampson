@@ -165,7 +165,7 @@ task ensure_global_mount()
     run(shell_exe(), ["-c", when is_win then win otherwise unix], 30, {"cwd": "."})
 
 task tail_out(s)
-    let t be strip_ansi(replace_text(s, "\r", ""))
+    let t be strip_ansi(replace(s, "\r", ""))
     when length(t) > 3000
         give slice(t, length(t) - 3000, length(t))
     give t
