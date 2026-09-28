@@ -105,7 +105,7 @@ export task grant_profile()
 -- ---------- el driver: dónde está, cómo está ----------
 
 task first_line(s)
-    let t be trim(replace_text(text(s), "\r", ""))
+    let t be trim(replace(text(s), "\r", ""))
     when t == ""
         give ""
     give trim(split(t, "\n")[0])
@@ -366,11 +366,11 @@ export task canon_combo(keys)
     let parts be []
     when type_of(keys) == "list"
         each k in keys
-            each piece in split(replace_text(text(k), "-", "+"), "+")
+            each piece in split(replace(text(k), "-", "+"), "+")
                 when trim(piece) != ""
                     set parts to append(parts, alias(piece))
     otherwise
-        each piece in split(replace_text(text(keys), "-", "+"), "+")
+        each piece in split(replace(text(keys), "-", "+"), "+")
             when trim(piece) != ""
                 set parts to append(parts, alias(piece))
     give join(sort_by(parts, (x) => x), "+")
@@ -398,6 +398,21 @@ export task combo_kind(keys)
 export task own_window()
     observe "computer:own_window" as w
     give w
+
+-- la ventana propia quedó registrada de una corrida anterior pero ya no existe (el usuario la cerró): olvidarla —
+-- si no, ctrl+n se rechazaba y open_url/prepare apuntaban a una ventana muerta (2026-09-06). Necesita el driver.
+task forget_dead_own_window()
+    let ow be own_window()
+    when ow == nothing
+        give false
+    let alive be false
+    each w in window_list()
+        when w["pid"] == ow["pid"] and w["window_id"] == ow["window_id"]
+            set alive to true
+    when not alive
+        share nothing as "computer:own_window"
+        give true
+    give false
 
 task same_window(w, a)
     when w == nothing
@@ -499,7 +514,7 @@ task mods(a)
         each k in m
             set out to append(out, alias(k))
     otherwise
-        each piece in split(replace_text(text(m), "-", "+"), "+")
+        each piece in split(replace(text(m), "-", "+"), "+")
             when trim(piece) != ""
                 set out to append(out, alias(piece))
     give out
@@ -598,7 +613,7 @@ export task map_action(act, a)
             each k in a["keys"]
                 set ks to append(ks, alias(k))
         otherwise
-            each piece in split(replace_text(text(a["keys"]), "-", "+"), "+")
+            each piece in split(replace(text(a["keys"]), "-", "+"), "+")
                 when trim(piece) != ""
                     set ks to append(ks, alias(piece))
         when length(ks) < 2
@@ -778,6 +793,7 @@ task open_url(a)
     when not starts_with(lower(url), "http://") and not starts_with(lower(url), "https://") and not starts_with(lower(url), "data:") and not starts_with(lower(url), "about:")
         set url to "https://" + url
     ensure_started()
+    forget_dead_own_window()
     let lg be live_guard("set_value", a)
     when lg != nothing
         give lg
@@ -961,16 +977,25 @@ task page_select(a)
     let ck be first["res"]
     when ck["is_error"]
         give "ERROR: " + ck["text"] + hint_for(ck["text"])
-    sleep(0.5)
+    -- la lista tarda en pintarse (y la página puede estar reacomodándose tras un clic anterior): esperar y sondear
+    sleep(0.8)
     let hit be nothing
     let names be []
-    each q in [text(a["option"]), "option"]
-        when hit == nothing
-            let snap be tab_snapshot(t, q)
-            set hit to pick_option(snap["refs"], want)
-            when q == "option"
-                each r in option_refs(snap["refs"])
-                    set names to append(names, field(r, "name", "?"))
+    let tries be 0
+    while hit == nothing and tries < 3
+        each q in [text(a["option"]), "option"]
+            when hit == nothing
+                let snap be tab_snapshot(t, q)
+                set hit to pick_option(snap["refs"], want)
+                when q == "option"
+                    set names to []
+                    each r in option_refs(snap["refs"])
+                        set names to append(names, field(r, "name", "?"))
+        set tries to tries + 1
+        when hit == nothing and length(names) == 0 and tries < 3
+            sleep(0.6)
+        otherwise when hit == nothing
+            set tries to 3
     when hit == nothing
         -- cerrar la lista que quedó abierta (Escape en la ventana del navegador, si la conocemos)
         let w be window_of_target(t["target_id"])
@@ -1339,7 +1364,7 @@ export task describe(a)
     when has(a, "url")
         set parts to append(parts, text(a["url"]))
     when has(a, "text")
-        let t be replace_text(text(a["text"]), "\n", "⏎")
+        let t be replace(text(a["text"]), "\n", "⏎")
         set parts to append(parts, "\"" + (when length(t) > 40 then slice(t, 0, 40) + "…" otherwise t) + "\"")
     when has(a, "name")
         set parts to append(parts, text(a["name"]))
@@ -1405,6 +1430,11 @@ export task call(action, a)
             set args["window_id"] to dw["window_id"]
     when has(args, "pid") and has(args, "window_id")
         share {"pid": int(args, "pid"), "window_id": int(args, "window_id")} as "computer:last_window"
+    -- ctrl+n con una ventana propia registrada: comprobar que siga viva antes de rechazarlo
+    when act == "hotkey" and has(args, "keys")
+        when combo_kind(args["keys"]) == "own_window" and own_window() != nothing
+            ensure_started()
+            forget_dead_own_window()
     let g be guard(act, args)
     when g != nothing
         give g
@@ -1416,6 +1446,7 @@ export task call(action, a)
         give page_fill(args)
     let m be map_action(act, args)
     ensure_started()
+    forget_dead_own_window()
     let lg be live_guard(act, args)
     when lg != nothing
         give lg
@@ -1447,6 +1478,12 @@ export task call(action, a)
             set res to parse_result(rpc_call(iso["tool"], iso["args"]))
             set m to iso
             set note to note + "\n(attaching to the user's open browser was refused: " + slice(why, 0, 160) + " — an isolated browser was launched instead; if the task needs their logins, tell the user)"
+    -- tras un clic o un scroll la página se reacomoda (un banner que desaparece, scroll suave): un snapshot inmediato
+    -- trae coordenadas viejas y el siguiente clic cae en el vacío (2026-09-06: «opened no list» al primer intento)
+    when act == "page_click" and not res["is_error"]
+        sleep(0.5)
+    when act == "page_scroll" and not res["is_error"]
+        sleep(0.6)
     -- navigate: esperar a que la página pinte algo (apps React tardan varios segundos; antes devolvía y el modelo
     -- gastaba wait + page)
     when act == "navigate" and not res["is_error"]
@@ -1579,8 +1616,10 @@ export task prompt_line()
     require env("OS")
     require file.read(".lampson")
     require file.read(".lampson/*")
+    -- apagada: una sola línea que dice cómo encenderla — y nada más (2026-09-06: con la tool ENCENDIDA, una frase
+    -- fija del prompt «if you have no computer_use tool…» hizo que el modelo asegurara que no la tenía)
     when not available()
-        give ""
+        give "\n- Computer use (driving the user's screen, apps or browser) is OFF in this session. If the user asks for it, tell them how to turn it on in THEIR UI — web: ⚙ configuración → «Computer use» (and install the driver it points to); terminal: /computer-use on — and stop there."
     let grant be when grant_profile() then " The user ALLOWED attaching to their open browser: for web pages open your own window in it (hotkey ctrl+n app=\"chrome\"), prepare(pid, window_id=<your window>, profile=\"existing\") and use the exact page route (page / page_type / page_select) with their logins." otherwise " Attaching to the user's open browser is off: page work goes to an isolated browser (prepare launches it); their own browser only natively (open_url, page_text, see)."
     give "\n- computer_use: the user's desktop and browser, driven in the BACKGROUND (their mouse, focus and virtual desktop are untouched). Load the `computer-use` skill BEFORE the first call and follow it: windows → see → act by element index (capture_after=true verifies in the same call) → act again; web pages through the exact page route (prepare → browser → page → page_type/page_click/page_select), never by mapping a web app with `see`; never touch the tab the user is using (the Lampson chat tab is protected); searches through fetch, never by typing into Google." + grant
 
