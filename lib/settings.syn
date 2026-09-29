@@ -85,8 +85,11 @@ export task set_default(name, model)
 
 -- valores de configuración generales (rueda de la UI): tz, public_url, webhook_url, webhook_secret…
 -- Vacío = borrar la clave. Nunca se devuelven secretos al navegador: `values()` marca webhook_secret como has_*.
--- computer_*: la tool computer_use (lib/computer.syn) — "1" enciende; max_tabs y grant_profile son sus knobs
-export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret", "idle_hours", "computer_use", "computer_max_tabs", "computer_grant_profile"]
+-- computer_*: la tool computer_use (lib/computer.syn) — "1" enciende; max_tabs y grant_profile son sus knobs.
+-- judge = off | jev | laya: el juez de decisión de Lampson (lib/judge.syn), una credencial propia que usa computer
+-- use y puede usar cualquier otra parte; judge_model = con laya, la carpeta del checkpoint; con jev, un id para
+-- pinear (opcional). computer_judge / computer_judge_model: los nombres del primer día (2026-09-28), solo se leen.
+export let KEYS be ["tz", "public_url", "webhook_url", "webhook_secret", "idle_hours", "computer_use", "computer_max_tabs", "computer_grant_profile", "judge", "judge_model", "computer_judge", "computer_judge_model"]
 
 -- el archivo REAL, ignorando LAMPSON_NO_CONFIG: escribir con el doc en blanco de los tests pisaría provider/keys
 -- (pasó el 2026-08-29 probando la rueda con un web de test)
@@ -138,3 +141,57 @@ export task values()
                 set out[k] to e
                 set out[k + "_from_env"] to true
     give out
+
+-- el juez de computer use como ENTORNO para el runtime: Synsema lee SYNSEMA_JUDGE_* y TYPESAFE_API_KEY del proceso
+-- (o del .env) al arrancar, y un programa no puede cambiarlos en caliente. Lo usan quienes lanzan procesos: el
+-- workspace web (workspaces.start_ws) y la terminal (cli.syn ensure → lampson.ps1|sh). {} = no tocar nada.
+-- La key de TypeSafe se guarda con set_key("typesafe", …) como las de los proveedores.
+export task judge_env()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let js be judge_setting()
+    let mode be lower(trim(text(js["mode"])))
+    let model be trim(text(js["model"]))
+    when mode == "jev" or mode == "typesafe"
+        let out be {"SYNSEMA_JUDGE_PROVIDER": "typesafe"}
+        let k be raw_key("typesafe")
+        when k != ""
+            set out["TYPESAFE_API_KEY"] to k
+        when model != ""
+            set out["SYNSEMA_JUDGE_MODEL"] to model
+        give out
+    when mode == "laya" or mode == "local"
+        let out be {"SYNSEMA_JUDGE_PROVIDER": "laya"}
+        when model != ""
+            set out["SYNSEMA_JUDGE_MODEL"] to model
+        give out
+    give {}
+
+-- el juez configurado → {mode, model, from_env}: `judge` / `judge_model` (LAMPSON_JUDGE en .env gana), y si no, los
+-- nombres viejos computer_judge / computer_judge_model
+export task judge_setting()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let v be values()
+    let m be trim(text(v["judge"]))
+    let mo be trim(text(v["judge_model"]))
+    when m == ""
+        set m to trim(text(v["computer_judge"]))
+    when mo == ""
+        set mo to trim(text(v["computer_judge_model"]))
+    give {"mode": m, "model": mo, "from_env": contains(v, "judge_from_env")}
+
+-- guardar el juez con los nombres nuevos y borrar los viejos (una sola fuente de verdad)
+export task set_judge(mode, model)
+    require file(".lampson")
+    require file(".lampson/*")
+    require env("LAMPSON_*")
+    set_value("judge", when mode == "off" then "" otherwise mode)
+    when model != nothing
+        set_value("judge_model", text(model))
+    set_value("computer_judge", "")
+    when model != nothing
+        set_value("computer_judge_model", "")
+    give true

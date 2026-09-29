@@ -100,4 +100,9 @@ if [ "$web" = 1 ]; then
 fi
 cd "$here/$dir"
 export LAMPSON_WORKSPACE="$ws" LAMPSON_WS="$slug" LAMPSON_PORT="$port"
+# juez de computer use (⚙ → Computer use): el runtime lo lee del entorno al arrancar
+jp="$(json "$r" judge_provider)"; jm="$(json "$r" judge_model)"; jk="$(json "$r" judge_key)"
+[ -n "$jp" ] && export SYNSEMA_JUDGE_PROVIDER="$jp"
+[ -n "$jm" ] && export SYNSEMA_JUDGE_MODEL="$jm"
+[ -n "$jk" ] && export TYPESAFE_API_KEY="$jk"
 if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" chat.syn; else exec synsema run chat.syn; fi

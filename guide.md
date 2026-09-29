@@ -34,7 +34,11 @@ the short version of these pages also lives at [lampson.org/docs](https://lampso
   the accessibility tree of any window, clicks, types and navigates without moving your mouse or stealing
   focus. It runs on a separate driver you install yourself (`⚙ → Computer use` in the web UI and
   `/computer-use` in the terminal show the command); one browser tab, a tab budget and no destructive
-  shortcuts are enforced by the harness, not just requested in the prompt.
+  shortcuts are enforced by the harness, not just requested in the prompt. With "use my open browser" on, it
+  works in your signed-in Chrome/Edge, in a window of its own.
+- **Decision judge** (optional): a small model that answers with probabilities — Jev (TypeSafe, cloud, ~0.3 s)
+  or Laya (local). Computer use's `act` lets it pick the control to click without spending a turn of the main
+  model; submit/delete/buy/close are never offered to it. Its own setting: `⚙ → Juez de decisión`, `/judge`.
 - **Plugins** (your own tools): a folder with a `plugin.json` manifest plus code — a Synsema program that runs
   under a capability ceiling, or any executable (js, py, sh…). Global in `lampson/plugins/<name>/`, per
   project in `.lampson/plugins/<name>/` (the agent can write those). **Off by default**: you turn them on
@@ -423,6 +427,43 @@ is found (`LAMPSON_COMPUTER_DRIVER` overrides the lookup; `LAMPSON_COMPUTER_USE=
 - Permissions: reading (windows, trees, screenshots, page text) never asks; `launch`, `raise` and `prepare`
   ask every time; every other action asks once per run (yolo allows, strict denies). The driver's telemetry
   is switched off through its environment.
+- `act(goal, pid+window_id | target_id+tab_id[, text, enter, steps, query])` — the "jev-use" recipe from
+  trycua/cua (`lib/computer_judge.syn`, pure and unit-tested): the harness observes, builds a CLOSED list of
+  candidates (known role classes — button, checkbox, radio, popup, menu item, link, tab, text field, option —
+  enabled, sized, labelled, label ≠ value, outside the title bar; readable stable ids like `button Guardar`,
+  never indices; a cap of 32 ranked by overlap with the goal) plus the reserved `reobserve` / `abstain`, asks
+  the [decision judge](#the-decision-judge) one `choose … or nothing`, and runs the pick only past a gate
+  (p ≥ 0.6 and a 0.15 margin over the runner-up). Otherwise it hands the model its best candidates with their
+  `element=N` / `ref`. Controls whose label reads delete/send/buy/close (English and Spanish, whole words)
+  are never offered — the model does those by hand, through the normal approval. Text always comes from the
+  model (`text`), never from the judge; `enter=true` presses Enter after a text field (search boxes). On a
+  page, when the judge hesitates or sees nothing, `act` looks once more with `query=<the goal's keyword>`:
+  the full snapshot leaves out what is far from the viewport and sometimes whole fields. The judge never
+  decides that the task is done; every result says so and names what it picked and how sure it was.
+  `page_select` also asks the judge when no option matches the requested text.
+- Measured on 2026-09-28 (Windows, Spanish UI): Jev picked right 30/30 across English and Spanish goals at
+  ~0.3 s; searching MercadoLibre was one `act` call (100 %, 0.4 s) and each field of a Google Form ~0.3 s.
+  Synsema's local `laya` backend (the `english` checkpoint) chooses by the option's ID and ignores its
+  description — hence readable ids — and on a Spanish UI it was wrong with 100 % confidence, so the gate
+  does not protect there. `navigate` waits 1.5 s more after refs appear: React pages re-render on
+  hydration and swallowed what was typed right away.
+
+### The decision judge
+
+`lib/judge.syn` — a System One model that answers typed questions with probabilities (Synsema's `judge`
+block: `whether` / `choose` / `rate`), configured like a provider credential, not as part of any tool:
+`judge` = `off | jev | laya` and `judge_model` in `config.json` (`LAMPSON_JUDGE`, `LAMPSON_JUDGE_MODEL` in
+`.env`; the first-day names `computer_judge*` are still read), the TypeSafe key as `keys.typesafe` (or
+`TYPESAFE_API_KEY`). Set it in ⚙ → Juez de decisión (`GET/POST /w/:slug/api/judge`) or with
+`/judge [off|jev|laya] [folder]` in the terminal, which asks for the key or the checkpoint folder.
+
+Synsema reads `SYNSEMA_JUDGE_PROVIDER` / `SYNSEMA_JUDGE_MODEL` / `TYPESAFE_API_KEY` from the process
+environment when it starts, and a program cannot change them afterwards, so `settings.judge_env()` turns the
+setting into environment for whoever launches a process: `workspaces.start_ws` (the web) and `cli.syn
+ensure` → `lampson.ps1|sh` (the terminal). Saving in the web restarts the workspace by itself
+(`workspaces.restart_ws_later` → `cli.syn ws-restart`, detached); the terminal applies it on the next
+start. `judge.status()` tells configured from live (`restart: true` when they differ). Anything in Lampson
+can gate on `judge.on()` and ask with `require judge`; today only computer use does.
 
 ### LSP (language servers)
 

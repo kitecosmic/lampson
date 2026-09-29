@@ -420,6 +420,10 @@ export task start_ws(w)
     let sep be when is_win() then "\\" otherwise "/"
     let envf be h + sep + ".env"
     let envs be {"LAMPSON_WS": w["slug"], "LAMPSON_WORKSPACE": w["path"], "LAMPSON_PORT": text(w["port"]), "LAMPSON_HOME": h}
+    -- el juez de computer use (⚙ → Computer use): el runtime lo lee del entorno al arrancar — por eso aplica al reiniciar
+    let je be settings.judge_env()
+    each k in keys(je)
+        set envs[k] to je[k]
     let exe be env("LAMPSON_SYNSEMA", "synsema")
     -- el .env de la instalación (cwd = home; la capability es relativa, la ruta que se pasa al hijo es absoluta)
     let cmd be exe + " serve web.syn --port " + text(w["port"]) + " --bind 127.0.0.1" + (when file_exists(".env") then " --env-file \"" + envf + "\"" otherwise "") + " > .lampson/web.log 2>&1"
@@ -523,6 +527,20 @@ export task restart_hub_later()
     require env("OS")
     let exe be env("LAMPSON_SYNSEMA", "synsema")
     spawn_detached(".", exe + " run cli.syn > .lampson/hub-restart.log 2>&1", {"LAMPSON_HOME": home(), "LAMPSON_CMD": "hub-restart"})
+    give true
+
+-- reiniciar UN workspace desde adentro (su propio proceso va a morir en el medio): un helper desacoplado
+-- (cli.syn ws-restart) lo para y lo vuelve a arrancar con el entorno nuevo — el juez de computer use se lee al
+-- arrancar el proceso (settings.judge_env), así que cambiarlo en ⚙ necesita esto (2026-09-28)
+export task restart_ws_later(slug)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    let exe be env("LAMPSON_SYNSEMA", "synsema")
+    -- cwd = la instalación: en Windows spawn_detached resuelve "." contra home(); en unix hay que dársela absoluta
+    let cwd be when is_win() then "." otherwise home()
+    spawn_detached(cwd, exe + " run cli.syn > .lampson/ws-restart.log 2>&1", {"LAMPSON_HOME": home(), "LAMPSON_CMD": "ws-restart", "LAMPSON_WS": slug})
     give true
 
 export task stop_hub()

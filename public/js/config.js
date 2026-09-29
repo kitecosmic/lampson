@@ -12,10 +12,28 @@ const CFG_SECTIONS = [
   { id: 'general', name: 'General', meta: 'zona horaria' },
   { id: 'approvals', name: 'Aprobaciones a distancia', meta: 'URL pública · webhook' },
   { id: 'computer', name: 'Computer use', meta: 'escritorio y navegador · driver aparte' },
+  { id: 'judge', name: 'Juez de decisión', meta: 'Jev · Laya · decisiones rápidas con probabilidades' },
   { id: 'provider', name: 'Proveedor', meta: 'modelo · API key' }
 ];
 function cfgField(v, key, label, placeholder, ds, type) {
   return `<label class="col">${label}<input name="${key}" type="${type || 'text'}" spellcheck="false" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(v[key] || '')}" ${v[key + '_from_env'] ? 'disabled title="fijado en .env (LAMPSON_' + key.toUpperCase() + '): editalo ahí"' : ''}><span class="ds">${ds}</span></label>`;
+}
+// juez de decisión (lib/judge.syn): un modelo System One que contesta con probabilidades — una credencial de
+// Lampson, no de computer use (hoy lo usa la acción `act`). Jev (TypeSafe, nube, key) o Laya (local, carpeta).
+function judgeMode(v) { const m = (v.judge || v.computer_judge || '').toLowerCase(); return m === 'jev' || m === 'laya' ? m : 'off'; }
+function judgeHtml(v) {
+  const mode = judgeMode(v);
+  const opt = (val, txt) => `<option value="${val}" ${mode === val ? 'selected' : ''}>${txt}</option>`;
+  return `<label class="col">juez<select name="judge" ${v.judge_from_env ? 'disabled title="fijado en .env (LAMPSON_JUDGE): editalo ahí"' : ''}>${opt('off', 'apagado')}${opt('jev', 'Jev — TypeSafe, en la nube (~0,3 s por decisión, con API key)')}${opt('laya', 'Laya — local, sin red ni costo (~1-2 s por decisión en CPU)')}</select><span class="ds">Jev es rápido, entiende español e inglés y necesita una API key de <a href="https://console.typesafe.ai/" target="_blank" rel="noopener">TypeSafe</a> · Laya corre en tu máquina sin mandar nada afuera, pero es chico: con interfaces en español se equivoca más</span></label>
+    <div class="jd-jev" ${mode === 'jev' ? '' : 'hidden'}><label class="col">API key de TypeSafe<input name="typesafe_key" type="password" spellcheck="false" autocomplete="off" placeholder="${v.has_typesafe_key ? '● guardada — pegá una nueva para cambiarla' : 'pegala acá (console.typesafe.ai)'}"><span class="ds">queda en <code>lampson/.lampson/config.json</code> con las demás keys; nunca vuelve al navegador</span></label></div>
+    <div class="jd-laya" ${mode === 'laya' ? '' : 'hidden'}><label class="col">carpeta del checkpoint de Laya<input name="judge_model" type="text" spellcheck="false" autocomplete="off" placeholder="C:\\Users\\vos\\models\\laya" value="${esc(v.judge_model || v.computer_judge_model || '')}"><span class="ds">la carpeta con <code>model.safetensors</code>, <code>encoder/</code> y <code>tokenizer/</code> (~840 MB, <a href="https://huggingface.co/convaiinnovations/laya" target="_blank" rel="noopener">convaiinnovations/laya</a>) · Lampson no la descarga</span></label></div>
+    <div class="ds" id="jdStatus"></div>`;
+}
+function judgeStatusHtml(j) {
+  if (!j) return '';
+  if (j.mode === 'off') return '○ sin juez';
+  if (j.live && !j.restart) return `● juez ${esc(j.mode)} activo${j.provider_model ? ' · ' + esc(j.provider_model) : ''}`;
+  return `▲ configurado (${esc(j.mode)}) pero este proceso todavía no lo tiene — tocá Guardar (el workspace se reinicia solo)${j.mode === 'jev' && !j.has_key ? ' · falta la API key' : ''}${j.mode === 'laya' && !j.model_setting ? ' · falta la carpeta del checkpoint' : ''}`;
 }
 // interruptor visible (pill con perilla): el texto cambia con el estado; fijado en .env queda deshabilitado
 function toggleHtml(name, on, fromEnv, envName, onText, offText) {
@@ -48,7 +66,11 @@ async function openCfg(section, onboarding) {
           <div class="cu-status" id="cuStatus"><span class="ds">comprobando el driver…</span></div>`
           + cfgField(v, 'computer_max_tabs', 'pestañas como máximo', '5', 'cuántas pestañas distintas puede manejar el agente por corrida · los atajos que abren pestañas (ctrl+t…) se rechazan siempre: navega en la misma pestaña, y busca en la web con fetch (sin abrir nada)')
           + `<div class="trow">${toggleHtml('computer_grant_profile', v.computer_grant_profile, v.computer_grant_profile_from_env, 'LAMPSON_COMPUTER_GRANT_PROFILE', 'usa mi navegador abierto (sesión iniciada)', 'navegador aparte, sin mis cookies')}<span class="ds">encendido (recomendado): el agente se ata a tu Chrome/Edge abierto y maneja páginas con precisión (formularios, desplegables) con tus sesiones; abre su propia ventana y no toca tus pestañas — puede ver páginas, cookies y sesiones de ese perfil · apagado: navegador aparte con perfil propio, sin tus cookies · aplica al reiniciar Lampson</span></div>`
+          + `<div class="trow"><span class="ds">juez de decisión (acción «act»: elige los clics con probabilidades, sin gastar turnos del modelo): <span id="cuJudge">…</span> · se configura en <a href="#" data-goto-judge>⚙ Juez de decisión</a></span></div>`
           + `<div class="pfoot"><button class="primary" data-save-computer>Guardar</button><span class="derr"></span></div></div>`;
+        if (s.id === 'judge') return `<div class="dhead"><span class="nm serif">Juez de decisión</span></div><div class="dform"><p class="lead">Un modelo chico que contesta <b>con probabilidades, no con texto</b>: elige una opción de una lista, dice si algo aplica o puntúa en una escala, en menos de un segundo. Es una credencial de Lampson, como el proveedor: hoy la usa <b>computer use</b> (elige en qué control hacer clic sin gastar un turno del modelo principal) y la van a poder usar otras partes que necesiten decidir rápido.</p>`
+          + judgeHtml(v)
+          + `<div class="pfoot"><button class="primary" data-save-judge>Guardar</button><span class="derr"></span></div></div>`;
         // proveedor / modelo / key
         setupSel = cfg.provider || (cfg.providers || [])[0]?.name || '';
         const rows = (cfg.providers || []).map(p => `<div class="pr ${p.name === setupSel ? 'on' : ''}" data-name="${esc(p.name)}"><b>${esc(p.name)}</b><span class="dm">${esc(p.model)}</span><span class="k ${p.has_key ? '' : 'no'}">${p.name === 'ollama' ? 'sin key' : (p.has_key ? '● key guardada' : '○ sin key')}</span></div>`).join('');
@@ -87,6 +109,7 @@ async function openCfg(section, onboarding) {
                 + `<p class="ds">${st.running ? 'conectado' : 'arranca con la primera acción del agente'} · ${st.enabled ? 'la tool está en el catálogo del agente' : 'apagado: el agente no ve la tool'}${st.driver_error ? ' · ' + esc(st.driver_error) : ''}</p><button class="hbtn sm" data-recheck>comprobar de nuevo</button>`;
             }
             const rc = el.querySelector('[data-recheck]'); if (rc) rc.onclick = () => load();
+            const jd = box.querySelector('#cuJudge'); if (jd && st.judge) jd.innerHTML = judgeStatusHtml(st.judge);
           };
           const load = async () => { try { const r = await fetch(BASE + '/api/computer'); if (!r.ok) { paintStatus(null, r.status); return; } paintStatus(await r.json()); } catch (e) { paintStatus(null, 0); } };
           load();
@@ -102,6 +125,7 @@ async function openCfg(section, onboarding) {
           };
           const gp = box.querySelector('[name="computer_grant_profile"]');
           if (gp) gp.onchange = () => paintToggle(gp.closest('label'));
+          const gj = box.querySelector('[data-goto-judge]'); if (gj) gj.onclick = (e) => { e.preventDefault(); openCfg('judge'); };
           saveC.onclick = async () => {
             const body = {};
             const mt = box.querySelector('[name="computer_max_tabs"]'); if (mt && !mt.disabled) { if (mt.value.trim() && !/^[0-9]+$/.test(mt.value.trim())) { err('pestañas: un número entero'); return; } body.max_tabs = mt.value.trim(); }
@@ -114,6 +138,38 @@ async function openCfg(section, onboarding) {
               if (body.max_tabs !== undefined) v.computer_max_tabs = body.max_tabs;
               err('✓ guardado'); paintStatus(r2.data.status);
             } catch (e) { err(e.message); } finally { saveC.disabled = false; }
+          };
+        }
+        const saveJ = box.querySelector('[data-save-judge]');
+        if (saveJ) {
+          const js = box.querySelector('[name="judge"]');
+          const paintJ = (j) => { const el = box.querySelector('#jdStatus'); if (el) el.innerHTML = judgeStatusHtml(j); if (j) { v.has_typesafe_key = j.has_key; const tk = box.querySelector('[name="typesafe_key"]'); if (tk) tk.placeholder = j.has_key ? '● guardada — pegá una nueva para cambiarla' : 'pegala acá (console.typesafe.ai)'; } };
+          fetch(BASE + '/api/judge').then(r => r.ok ? r.json() : null).then(paintJ).catch(() => {});
+          if (js) js.onchange = () => { box.querySelector('.jd-jev').hidden = js.value !== 'jev'; box.querySelector('.jd-laya').hidden = js.value !== 'laya'; };
+          saveJ.onclick = async () => {
+            const body = {};
+            if (js && !js.disabled) body.mode = js.value;
+            const jmod = box.querySelector('[name="judge_model"]'); if (jmod && js && js.value === 'laya') body.model = jmod.value.trim();
+            const tkey = box.querySelector('[name="typesafe_key"]'); if (tkey && tkey.value.trim()) body.typesafe_key = tkey.value.trim();
+            if (body.mode === 'laya' && !body.model) { err('Laya: poné la carpeta del checkpoint'); return; }
+            if (body.mode === 'jev' && !v.has_typesafe_key && !body.typesafe_key) { err('Jev: pegá la API key de TypeSafe'); return; }
+            const changed = body.mode !== judgeMode(v) || !!body.typesafe_key || (body.model !== undefined && body.model !== (v.judge_model || v.computer_judge_model || ''));
+            if (!changed) { err('sin cambios'); return; }
+            err('guardando…'); saveJ.disabled = true;
+            try {
+              const r2 = await api(BASE + '/api/judge', body);
+              if (!r2.ok) { err(r2.data.error || ('error ' + r2.status)); return; }
+              v.judge = body.mode === 'off' ? '' : body.mode; if (body.model !== undefined) v.judge_model = body.model;
+              if (tkey) tkey.value = '';
+              if (r2.data.restarting) {
+                // el juez se lee al arrancar: el workspace se reinicia solo; esperar a que vuelva y recargar
+                err('✓ guardado · reiniciando el workspace para aplicarlo…'); add('meta', '⚙ juez de decisión: ' + body.mode + ' · reiniciando el workspace');
+                const t0 = Date.now(); await new Promise(r => setTimeout(r, 3500));
+                while (Date.now() - t0 < 30000) { try { const r = await fetch(BASE + '/api/judge'); if (r.ok) { location.reload(); return; } } catch (e) {} await new Promise(r => setTimeout(r, 1000)); }
+                err('el workspace tarda en volver: recargá la página'); return;
+              }
+              err('✓ guardado'); paintJ(r2.data.status);
+            } catch (e) { err(e.message); } finally { saveJ.disabled = false; }
           };
         }
         const saveP = box.querySelector('[data-save-provider]');

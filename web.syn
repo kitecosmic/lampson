@@ -30,6 +30,7 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require judge
 require file("workspace")
 require file("workspace/*")
 require file.read("skills")
@@ -67,6 +68,8 @@ use "./lib/approvals.syn" as approvals
 use "./lib/permission.syn" as permission
 use "./lib/term.syn" as term
 use "./lib/computer.syn" as computer
+use "./lib/workspaces.syn" as workspaces
+use "./lib/judge.syn" as jdg
 
 let APPROVAL_TIMEOUT be 180
 
@@ -488,6 +491,29 @@ serve on 8080
             when contains(b, "grant_profile")
                 settings.set_value("computer_grant_profile", when b["grant_profile"] == true then "1" otherwise "")
             give {"ok": true, "status": computer.status()}
+        recover err
+            give fail(400, text(err))
+
+    -- el juez de decisión (lib/judge.syn): una credencial de Lampson, no de computer use. El runtime lo lee al
+    -- arrancar el proceso, así que cambiarlo reinicia este workspace solo en ~3 s (la UI espera y recarga).
+    route "GET /w/:slug/api/judge" requires auth
+        give jdg.status()
+
+    route "POST /w/:slug/api/judge" requires auth
+        let b be json of request
+        try
+            let cur be jdg.status()
+            let m be when contains(b, "mode") then text(b["mode"]) otherwise cur["mode"]
+            let model be when contains(b, "model") then text(b["model"]) otherwise nothing
+            let key be when contains(b, "typesafe_key") then text(b["typesafe_key"]) otherwise nothing
+            let r be jdg.configure(m, model, key)
+            when not r["ok"]
+                give fail(400, r["error"])
+            let restarting be false
+            when env("LAMPSON_WS", "") != ""
+                workspaces.restart_ws_later(env("LAMPSON_WS", ""))
+                set restarting to true
+            give {"ok": true, "status": jdg.status(), "restarting": restarting}
         recover err
             give fail(400, text(err))
 

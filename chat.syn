@@ -18,6 +18,7 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require judge
 require file("workspace")
 require file("workspace/*")
 require file.read("skills")
@@ -56,6 +57,7 @@ use "./lib/schedule.syn" as schedule
 use "./lib/sched_run.syn" as sched_run
 use "./lib/approvals.syn" as approvals
 use "./lib/computer.syn" as computer
+use "./lib/judge.syn" as jdg
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -352,6 +354,7 @@ let COMMANDS be [
     ["/plugins", "[on <nombre> | off <nombre> | run <plugin> <tool> [json] | remove <nombre>]", "plugins (tools propias, en cualquier lenguaje): listar, encender o apagar (global: lampson/plugins/ · proyecto: .lampson/plugins/)"],
     ["/lsp", "[add <typescript|python|rust|go|css|html> [--project] | add <nombre> <comando…> --ext .x=lang | remove <nombre>]", "language servers (navegación semántica: symbols/definition/references/hover); arrancan en la primera consulta"],
     ["/computer-use", "[on|off]", "computer use: el agente maneja tu escritorio y navegador en segundo plano (driver aparte, apagado por defecto); sin argumento muestra el estado y, si falta el driver, cómo instalarlo"],
+    ["/judge", "[off|jev|laya]", "juez de decisión: un modelo chico que decide con probabilidades (hoy lo usa computer use para elegir los clics) — jev = TypeSafe en la nube (pide la API key), laya = local (pide la carpeta del checkpoint); sin argumento muestra el estado"],
     ["/schedule", "[add <json> | run <id> | on <id> | off <id> | remove <id> | log <id>]", "tareas programadas (cada 6h, todos los días a las 9…): plugin, comando o corrida del agente; corren mientras lampson esté abierto (o con lampson --daemon start, sin nada abierto)"],
     ["/approve", "<id> [yes|no]", "responder una aprobación pendiente de una tarea programada que corre en background (sin yes|no la pregunta con el menú ↑↓)"],
     ["/out", "[n]", "resultado completo de la última tool del turno (n = contar hacia atrás: /out 2 es la anteúltima)"],
@@ -416,6 +419,10 @@ task complete_args(cmd, head, last)
     when cmd == "/computer-use"
         when first
             give ["on", "off"]
+        give []
+    when cmd == "/judge"
+        when first
+            give ["off", "jev", "laya"]
         give []
     when cmd == "/approve"
         when first
@@ -571,7 +578,51 @@ task computer_lines()
         when s["driver_error"] != nothing
             set out to append(out, "    " + red(text(s["driver_error"])))
         set out to append(out, dim("  " + (when s["running"] then "conectado" otherwise "arranca con la primera acción del agente") + " · pestañas máx " + text(s["max_tabs"]) + " · navegador abierto del usuario: " + (when s["grant_profile"] then "permitido" otherwise "no (abre uno aparte)") + " · también en la web: ⚙ → Computer use"))
+    -- el juez de decisión (lib/judge.syn) lo usa la acción act; se configura aparte con /judge
+    set out to append(out, dim("  juez de decisión (acción act): ") + judge_short(s["judge"]))
     give out
+
+-- una línea del estado del juez (para /computer-use y /judge)
+task judge_short(j)
+    when j["mode"] == "off"
+        give dim("apagado — ") + cyan("/judge jev") + dim(" o ") + cyan("/judge laya")
+    when j["live"] and not j["restart"]
+        give green("● " + j["mode"] + " activo") + dim(when j["provider_model"] != "" then " · " + j["provider_model"] otherwise "")
+    give yellow("▲ " + j["mode"] + " configurado, esta sesión no lo tiene") + dim(" — /exit y volvé a entrar" + (when j["mode"] == "jev" and not j["has_key"] then " · falta la API key" otherwise "") + (when j["mode"] == "laya" and j["model_setting"] == "" then " · falta la carpeta del checkpoint" otherwise ""))
+
+-- /judge [off|jev|laya [carpeta]]: el juez de decisión, una credencial de Lampson (no de computer use). jev pide
+-- la API key de TypeSafe si falta; laya, la carpeta del checkpoint. El runtime lo lee al arrancar: /exit y volver.
+task judge_command(rest)
+    let args be where(split(rest, " "), (x) => x != "")
+    when length(args) > 0
+        let jm be lower(args[0])
+        when jm != "off" and jm != "jev" and jm != "laya"
+            print("  uso: /judge [off|jev|laya] — laya acepta la carpeta del checkpoint: /judge laya C:\\models\\laya")
+            give false
+        let st be jdg.status()
+        let model be when length(args) > 1 then join(slice(args, 1, length(args)), " ") otherwise nothing
+        when jm == "laya" and model == nothing and st["model_setting"] == ""
+            let ans be read_line("  carpeta del checkpoint de Laya (model.safetensors, encoder/, tokenizer/): ")
+            when ans == nothing or trim(ans) == ""
+                print("  (sin cambios: Laya necesita la carpeta)")
+                give false
+            set model to trim(ans)
+        let key be nothing
+        when jm == "jev" and not st["has_key"]
+            print("  " + dim("la key se guarda en lampson/.lampson/config.json (solo en esta máquina) · console.typesafe.ai"))
+            let k be read_line("  API key de TypeSafe: ")
+            when k == nothing or trim(k) == ""
+                print("  (sin cambios: Jev necesita la API key)")
+                give false
+            set key to trim(k)
+        let r be jdg.configure(jm, model, key)
+        when not r["ok"]
+            print("  " + red(r["error"]))
+            give false
+        print("  " + green("juez de decisión: " + jm) + dim(" — se aplica al volver a entrar: /exit y abrí lampson de nuevo (la web lo aplica sola al guardar en ⚙)"))
+    print("  juez de decisión: " + judge_short(jdg.status()))
+    print(dim("  un modelo chico que decide con probabilidades · hoy lo usa computer use (acción act: elige los clics sin gastar turnos del modelo)"))
+    give true
 
 -- sugerencias para un comando desconocido: por prefijo
 task suggest(input)
@@ -1375,6 +1426,8 @@ while running
             set mode to slice(input, 1, length(input))
             set opts to opts_for(profile, mode)
             print("permisos=" + opts["permission_mode"])
+        otherwise when input == "/judge" or starts_with(input, "/judge ")
+            judge_command(trim(slice(input, 6, length(input))))
         otherwise when input == "/computer-use" or starts_with(input, "/computer-use ")
             let crest be lower(trim(slice(input, 13, length(input))))
             when crest == "on" or crest == "true" or crest == "off" or crest == "false"
@@ -1387,6 +1440,8 @@ while running
                 set system_msg to system_for(profile)
                 set messages to [system_msg] + slice(messages, 1, length(messages))
                 set opts to opts_for(profile, mode)
+            otherwise when starts_with(crest, "judge")
+                print("  " + yellow("el juez ahora es una configuración propia: ") + cyan("/judge off|jev|laya"))
             otherwise when crest != ""
                 print("  uso: /computer-use [on|off]")
             each l in computer_lines()

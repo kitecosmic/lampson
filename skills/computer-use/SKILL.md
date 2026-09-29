@@ -66,6 +66,32 @@ previous window restored) and tells you in the result. Pass `delivery_mode="fore
 only when a result explicitly asks for it. Clicks and `set_value` work in the background. If a click
 is refused as `window_minimized`, `raise(pid, window_id)` restores the window, then `see` again.
 
+## Fast path: `act` (only when the decision judge is on)
+
+When the system prompt says a decision judge is ON, a small System One model (Jev or the local Laya)
+can pick the next control for you from a CLOSED list the harness builds from the window's controls
+(buttons, checkboxes, radios, menus, links, tabs, text fields) — in about a second, without you
+reading the tree. It answers with probabilities; the harness runs the pick only when it is clearly
+ahead. Prefer it for every ordinary step once you know the window or the tab:
+
+- `act(goal="press Save", pid, window_id)` — native window (or `app="notepad"`).
+- `act(goal="open the Settings tab", target_id, tab_id)` — a page, on the exact page route.
+- `act(goal="set the Title field", text="Quarterly report", …)` — a text field: YOU supply the text,
+  the judge only picks the field. Add `enter=true` for a search box (types, then presses Enter).
+- `act(goal="press + to raise the counter", steps=3, …)` — a repetitive step, up to 6 in a row.
+- `query="…"` narrows a huge window before the judge looks; `capture_after=true` returns the fresh
+  tree or refs in the same result.
+
+Write `goal` as ONE concrete step, not the whole task, and **with the words the screen uses, in its
+language**: on a Spanish UI write `goal="presionar Guardar"` or `goal="presionar siete"`, not "press
+Save" / "press 7" — the local judge matches wording and can be confidently wrong across languages. The result lists each action
+with the judge's probability. If the judge is unsure or sees nothing that fits, you get its best
+guesses with `element=N` / `ref` — pick one and act by hand, or capture again. Controls whose labels
+delete, send, submit, buy or close are **never offered to the judge** (the result names them): do
+those by hand with `click element=N` / `page_click ref`, and only when the user asked for exactly that.
+The judge never decides that the task is finished — verify it yourself before reporting. With the
+judge off, `act` says so: use the capture → index route below.
+
 ## Web pages: the exact page route
 
 Your Playwright: exact refs, one call per action, one call per whole form. Never map a web app
@@ -96,7 +122,8 @@ with `see`.
 3. Overlays first: a cookie/consent banner intercepts clicks on everything behind it. If a page has
    one, `page(query="Reject")` (or "Accept"), `page_click` it, then continue.
 4. `page_click(ref)` · `page_type(ref, text, replace=true)` · `page_select(ref or name, option)` for
-   a dropdown/combobox (opens it, finds the option by text, clicks it — one call) · `page_scroll`.
+   a dropdown/combobox (opens it, finds the option by text, clicks it — one call; with the judge on,
+   an option worded differently — "6 to 10 people" vs "6-10" — is matched by the judge) · `page_scroll`.
    Add `capture_after=true` (with `query` to keep it small) to get fresh refs in the same result.
 5. Forms and multi-field edits: one `page` to map the fields, then **one `page_fill` call**:
    `page_fill(target_id, tab_id, fields=[{"ref": "p3:0", "text": "…"}, {"name": "Country",

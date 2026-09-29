@@ -1,0 +1,78 @@
+-- lib/judge.syn — el juez de decisión de Lampson: un modelo System One que contesta preguntas tipadas con
+-- probabilidades (el bloque `judge` de Synsema: whether / choose / rate), no con texto
+--
+-- Es una credencial/configuración de Lampson, como el proveedor del LLM — no de una tool. Hoy lo usan:
+--   * computer_use: la acción `act` (elige el próximo control de una lista cerrada) y page_select (elige la opción
+--     de un desplegable cuando el texto no coincide) — lib/computer.syn + lib/computer_judge.syn
+-- y cualquier parte de Lampson que necesite una decisión calibrada y barata puede usarlo con `require judge` y
+-- judge.on() como compuerta (clasificar, rutear, validar, decidir si algo aplica…).
+--
+-- Backends (se elige en ⚙ → Juez de decisión, /judge en la terminal):
+--   jev   TypeSafe Jev, en la nube: rápido (~0,3 s por decisión), multilingüe, necesita API key (keys.typesafe)
+--   laya  Laya local (ModernBERT, ~840 MB en disco): sin red ni costo, ~1-2 s por decisión en CPU; medido
+--         2026-09-28: con interfaces en español el checkpoint `english` se equivoca con confianza alta
+--   off   sin juez
+-- El runtime lee el proveedor del ENTORNO al arrancar el proceso (settings.judge_env): cambiarlo reinicia el
+-- workspace (web) o pide salir y volver a entrar (terminal).
+
+use "./settings.syn" as settings
+
+export let MODES be ["off", "jev", "laya"]
+
+export task norm_mode(v)
+    let t be lower(trim(text(when v == nothing then "" otherwise v)))
+    when t == "jev" or t == "typesafe"
+        give "jev"
+    when t == "laya" or t == "local"
+        give "laya"
+    give "off"
+
+-- el modo configurado (config.json / .env), esté vivo o no en este proceso
+export task mode()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    give norm_mode(settings.judge_setting()["mode"])
+
+-- encendido en la configuración Y con un proveedor vivo en este proceso: la compuerta de quien lo use
+export task on()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    when mode() == "off"
+        give false
+    give judge_available()
+
+-- {mode, model_setting, has_key, live, provider_model, restart, from_env}: lo que ven la UI y /judge
+export task status()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    require env("LAMPSON_*")
+    let js be settings.judge_setting()
+    let m be norm_mode(js["mode"])
+    let live be judge_available()
+    let pm be judge_model()
+    -- el proceso corre otro proveedor que el configurado (o ninguno): hace falta reiniciar
+    let restart be false
+    when m != "off" and not live
+        set restart to true
+    when m == "laya" and pm != nothing and not starts_with(text(pm), "laya:")
+        set restart to true
+    when m == "jev" and pm != nothing and starts_with(text(pm), "laya:")
+        set restart to true
+    give {"mode": m, "model_setting": text(js["model"]), "has_key": settings.raw_key("typesafe") != "", "live": live, "provider_model": when pm == nothing then "" otherwise text(pm), "restart": restart, "from_env": js["from_env"]}
+
+-- guardar el modo (y opcionalmente el modelo / la key de TypeSafe) → {ok, error}
+export task configure(m, model, key)
+    require file(".lampson")
+    require file(".lampson/*")
+    require env("LAMPSON_*")
+    let nm be lower(trim(text(m)))
+    when not contains(MODES, nm) and nm != "typesafe" and nm != "local"
+        give {"ok": false, "error": "judge: off, jev or laya"}
+    set nm to norm_mode(nm)
+    when key != nothing
+        when trim(text(key)) != ""
+            settings.set_key("typesafe", trim(text(key)))
+    settings.set_judge(nm, model)
+    give {"ok": true, "error": nothing}

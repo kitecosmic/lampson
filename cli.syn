@@ -24,6 +24,7 @@ require file.read("hub.tpl.syn")
 require file("hub.syn")
 
 use "./lib/workspaces.syn" as ws
+use "./lib/settings.syn" as settings
 
 let cmd be env("LAMPSON_CMD", "ensure")
 
@@ -40,7 +41,9 @@ when cmd == "ensure"
         ws.wait_ready(w, 10)
         set hc to ws.health(w)
     ws.touch(w["slug"])
-    print(json_encode({"slug": w["slug"], "port": w["port"], "dir": ws.dir_of(w["slug"]), "url": "http://127.0.0.1:" + text(ws.HUB_PORT) + "/w/" + w["slug"], "alive": hc != nothing, "hub": ws.hub_alive()}))
+    -- judge_*: el juez de computer use para la terminal (lampson.ps1|sh lo exportan antes de chat.syn; ver settings.judge_env)
+    let je be settings.judge_env()
+    print(json_encode({"slug": w["slug"], "port": w["port"], "dir": ws.dir_of(w["slug"]), "url": "http://127.0.0.1:" + text(ws.HUB_PORT) + "/w/" + w["slug"], "alive": hc != nothing, "hub": ws.hub_alive(), "judge_provider": when contains(je, "SYNSEMA_JUDGE_PROVIDER") then je["SYNSEMA_JUDGE_PROVIDER"] otherwise "", "judge_model": when contains(je, "SYNSEMA_JUDGE_MODEL") then je["SYNSEMA_JUDGE_MODEL"] otherwise "", "judge_key": when contains(je, "TYPESAFE_API_KEY") then je["TYPESAFE_API_KEY"] otherwise ""}))
 otherwise when cmd == "hub-status"
     print(json_encode({"alive": ws.hub_alive(), "workspaces": ws.summary()}))
 otherwise when cmd == "hub-start"
@@ -120,6 +123,20 @@ otherwise when cmd == "hub-restart"
     when not ws.hub_alive()
         ws.start_hub()
     print(json_encode({"restarted": true}))
+otherwise when cmd == "ws-restart"
+    -- lanzado desacoplado por workspaces.restart_ws_later desde el propio workspace: espera a que conteste el
+    -- request que lo pidió, lo para y lo arranca de nuevo (con el entorno del juez al día)
+    let w be ws.get(env("LAMPSON_WS", ""))
+    when w == nothing
+        raise("unknown workspace " + env("LAMPSON_WS", ""))
+    sleep(1.5)
+    ws.stop_ws(w)
+    let deadline be now() + 8
+    while now() < deadline and ws.health(w) != nothing
+        sleep(0.4)
+    ws.start_ws(w)
+    ws.wait_ready(w, 15)
+    print(json_encode({"restarted": w["slug"], "alive": ws.health(w) != nothing}))
 otherwise when cmd == "list"
     each w in ws.summary()
         print((when w["alive"] then "● " otherwise "○ ") + w["slug"] + "  " + w["path"] + "  :" + text(w["port"]) + "  " + w["policy"])

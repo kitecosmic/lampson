@@ -1,0 +1,410 @@
+-- lib/computer_judge.syn — «jev-use» para computer_use: un modelo System One (Jev de TypeSafe, o Laya local) elige
+-- la próxima acción de una lista CERRADA de candidatos, en vez de que el LLM lea el árbol entero y elija un índice
+--
+-- De dónde sale (2026-09-28): la receta jev-use de trycua/cua (libs/cua-driver/examples/jev-use, RFC 4268). Lo que
+-- se copió porque allá está medido:
+--   * el modelo nunca inventa: elige UN id de una tabla que arma el harness; el id se resuelve a la acción ya
+--     armada (elemento + snapshot, o ref de página). El texto a tipear sale del LLM (`text`), nunca del juez.
+--   * MEDIDO ACÁ (2026-09-28, Calculadora de Windows en español, Laya local = checkpoint `english`): el backend
+--     local elige por el ID de la opción, no por su descripción ("press 7" con ids b0…b29 → b7; idéntico con
+--     etiquetas en inglés o en español). Por eso el id ES legible: «button Siete». Y con la interfaz en español el
+--     checkpoint inglés se equivoca con confianza 100% («presionar 7» → «Tres»): la compuerta no protege ahí; el
+--     objetivo tiene que venir con las palabras de la pantalla y el LLM verifica siempre.
+--   * candidatos: solo controles con clase conocida (button, checkbox, radio, popup, menu_item, link, tab,
+--     text_input, toggle, option), habilitados, con tamaño, con etiqueta (y etiqueta ≠ value: así el contenido
+--     tipeado nunca termina en un id), fuera de la barra de título. Ids ESTABLES (clase + etiqueta), nunca índices.
+--     Tope 32 + los reservados `reobserve` y `abstain` (Jev eligió bien 220/220 con 3-7 candidatos; con más de
+--     12 no está medido — por eso, pasado el tope, se ordena por parecido con el objetivo antes de cortar). El
+--     24 de cua viene del límite de 26 letras de Cua-S1; una Calculadora ya trae 29 controles útiles.
+--   * riesgo por palabra entera (borrar, enviar, comprar, cerrar): esos controles NO se ofrecen — el LLM los hace
+--     a mano con element=N / ref, y pasan por la aprobación normal. Es una guarda contra accidentes, no autorización.
+--   * el modelo NO decide si la tarea terminó (Jev contesta «listo» en el paso 0): eso lo verifica el LLM.
+--   * cua no pone umbral (lo deja al que llama): acá hay compuerta de probabilidad Y de margen sobre el segundo.
+--
+-- Puro: sin driver ni juez; lo usa lib/computer.syn (acción `act`, y page_select cuando el texto no coincide).
+
+-- clase → acción. Roles de Windows UIA, macOS AX (sin el prefijo AX), Linux AT-SPI y ARIA (página), normalizados
+-- (minúsculas, solo letras y dígitos). UIA "Text" es texto estático (AT-SPI "text" es editable, pero en Linux la
+-- ruta nativa todavía no se probó): no entra.
+export let ROLE_CLASS be {
+    "button": "button", "splitbutton": "button", "pushbutton": "button", "menubutton": "popup",
+    "checkbox": "checkbox", "menuitemcheckbox": "checkbox",
+    "radiobutton": "radio", "radio": "radio", "menuitemradio": "radio",
+    "switch": "toggle", "togglebutton": "toggle",
+    "combobox": "popup", "popupbutton": "popup", "listbox": "popup",
+    "menuitem": "menu_item", "menubaritem": "menu_item",
+    "hyperlink": "link", "link": "link",
+    "tabitem": "tab", "tab": "tab", "pagetab": "tab",
+    "edit": "text_input", "textbox": "text_input", "searchbox": "text_input", "textfield": "text_input", "textarea": "text_input", "searchfield": "text_input", "entry": "text_input", "spinbutton": "text_input",
+    "option": "option", "listitem": "option", "treeitem": "option"
+}
+
+export let CLASS_ACTION be {"button": "press", "checkbox": "toggle", "radio": "select", "toggle": "toggle", "popup": "open_menu", "menu_item": "press", "link": "press", "tab": "press", "text_input": "set_text", "option": "select"}
+
+-- palabra entera, sin distinguir mayúsculas; en inglés y en español (las etiquetas vienen en el idioma del usuario)
+export let RISK_WORDS be {
+    "destructive": ["delete", "remove", "erase", "trash", "discard", "clear all", "format", "reset", "eliminar", "borrar", "quitar", "vaciar", "descartar", "restablecer", "formatear", "papelera"],
+    "send": ["send", "submit", "post", "publish", "share", "reply", "enviar", "publicar", "compartir", "responder"],
+    "purchase": ["buy", "purchase", "pay", "checkout", "order", "subscribe", "comprar", "pagar", "suscribirse", "suscribir", "pedido", "finalizar compra"],
+    "close_unsaved": ["close", "quit", "exit", "don't save", "discard changes", "cerrar", "salir", "no guardar", "descartar cambios"]
+}
+
+export let MAX_CANDIDATES be 32
+export let MAX_HISTORY be 16
+export let MAX_ELEMENTS_IN_STATE be 64
+-- compuerta: probabilidad del elegido y margen sobre el segundo (cua documenta que el llamador debe ponerlas)
+export let MIN_P be 0.6
+export let MIN_MARGIN be 0.15
+export let MAX_STEPS be 6
+
+export let RESERVED be {
+    "reobserve": "Take no action and obtain a fresh observation of the window, because the current observation looks stale, incomplete, or contradicts the goal's progress.",
+    "abstain": "Stop without acting if none of the proposed actions is safe or moves toward the goal."
+}
+
+export let INSTRUCTION be "Which single action should run next to move toward the goal?"
+
+-- "AXButton" | "Button" | "push button" → "button"
+export task norm_role(r)
+    let low be regex_replace(lower(text(r)), "[^a-z0-9]", "")
+    when starts_with(low, "ax") and length(low) > 2
+        set low to slice(low, 2, length(low))
+    give low
+
+export task role_class(r)
+    let n be norm_role(r)
+    when contains(ROLE_CLASS, n)
+        give ROLE_CLASS[n]
+    give nothing
+
+task squash(s)
+    give trim(regex_replace(replace(text(s), "’", "'"), "\\s+", " "))
+
+-- categoría de riesgo de una etiqueta, o nothing (palabra entera: «Resetear» no es «reset», «Guardar» no es «guardar como»)
+export task risk_of(label)
+    let low be " " + regex_replace(lower(squash(label)), "[^a-z0-9áéíóúñü' ]", " ") + " "
+    each cat in keys(RISK_WORDS)
+        each w in RISK_WORDS[cat]
+            when contains(low, " " + w + " ")
+                give cat
+    give nothing
+
+-- id legible de un candidato: «button Guardar», «text_input Nombre de archivo» (el modelo lee el id: ver arriba)
+export task readable_id(cls, label)
+    let l be squash(label)
+    when length(l) > 48
+        set l to trim(slice(l, 0, 48))
+    give cls + " " + l
+
+-- slug ASCII de 32 como máximo; sin nada ASCII → 8 hex del sha256
+let TRANSLIT be {"á": "a", "à": "a", "ä": "a", "â": "a", "ã": "a", "é": "e", "è": "e", "ë": "e", "ê": "e", "í": "i", "ì": "i", "ï": "i", "î": "i", "ó": "o", "ò": "o", "ö": "o", "ô": "o", "õ": "o", "ú": "u", "ù": "u", "ü": "u", "û": "u", "ñ": "n", "ç": "c"}
+
+task ascii_fold(s)
+    let out be lower(text(s))
+    each k in keys(TRANSLIT)
+        set out to replace(out, k, TRANSLIT[k])
+    give out
+
+export task slug(label)
+    let s be regex_replace(ascii_fold(squash(label)), "[^a-z0-9]+", "-")
+    set s to regex_replace(s, "^-+|-+$", "")
+    when length(s) > 32
+        set s to regex_replace(slice(s, 0, 32), "-+$", "")
+    when s == ""
+        give slice(hex(sha256(text(label))), 2, 10)
+    give s
+
+task short(s, n)
+    let t be squash(s)
+    give when length(t) > n then slice(t, 0, n) + "…" otherwise t
+
+-- descripción que lee el modelo (las de cua, literales donde se pudo)
+export task describe_candidate(cls, label, state, text_value)
+    -- comillas a mano: json_encode escapa lo no ASCII (ú) y el modelo leería «Menú»
+    let q be "\"" + replace(short(label, 60), "\"", "'") + "\""
+    when cls == "text_input"
+        let st be when state == "" then "" otherwise " The field currently reports " + state + "."
+        give "Set the text field " + q + " to the text the task supplies" + (when text_value != nothing then " (\"" + replace(short(text_value, 40), "\"", "'") + "\")" otherwise "") + ", replacing its contents." + st
+    when cls == "checkbox" or cls == "toggle"
+        give "Toggle the " + (when cls == "checkbox" then "checkbox " otherwise "switch ") + q + "." + (when state != "" then " It is currently " + state + "." otherwise "")
+    when cls == "radio"
+        give "Select the radio option " + q + "." + (when state != "" then " It is currently " + state + "." otherwise "")
+    when cls == "popup"
+        give "Open the pop-up menu " + q + ". Its options become candidates on the next observation."
+    when cls == "option"
+        give "Select the option " + q + "." + (when state != "" then " It is currently " + state + "." otherwise "")
+    when cls == "menu_item"
+        give "Press the menu item labeled " + q + "."
+    when cls == "tab"
+        give "Switch to the tab labeled " + q + "."
+    when cls == "link"
+        give "Follow the link labeled " + q + "."
+    give "Press the button labeled " + q + "."
+
+task num_or(m, k, d)
+    when not contains(m, k)
+        give d
+    when m[k] == nothing
+        give d
+    try
+        give number(text(m[k]))
+    recover err
+        give d
+
+task txt(m, k)
+    when not contains(m, k)
+        give ""
+    when m[k] == nothing
+        give ""
+    give text(m[k])
+
+-- estado sin values (nunca viaja el contenido de un campo): empty / has_text / contains_required_value …
+task native_state(e, cls, want_text)
+    when cls == "text_input"
+        let v be txt(e, "value")
+        when trim(v) == ""
+            give "empty"
+        when want_text != nothing and trim(v) == trim(text(want_text))
+            give "contains_required_value"
+        give "has_text"
+    when cls == "checkbox" or cls == "toggle"
+        when contains(e, "selected")
+            give when e["selected"] == true then "checked" otherwise "unchecked"
+        let v be lower(txt(e, "value"))
+        when v == "on" or v == "true" or v == "1" or v == "checked"
+            give "checked"
+        when v == "off" or v == "false" or v == "0" or v == "unchecked"
+            give "unchecked"
+        give ""
+    when cls == "radio" or cls == "option"
+        when contains(e, "selected")
+            give when e["selected"] == true then "selected" otherwise "not selected"
+        give ""
+    give ""
+
+-- ¿cuelga de la barra de título? (Minimizar/Maximizar/Cerrar/menú de sistema no son candidatos)
+task in_title_bar(e, by_index)
+    let cur be e
+    let hops be 0
+    while cur != nothing and hops < 40
+        when norm_role(txt(cur, "role")) == "titlebar"
+            give true
+        let pi be num_or(cur, "parent_index", -1)
+        set cur to when pi >= 0 and contains(by_index, text(floor(pi))) then by_index[text(floor(pi))] otherwise nothing
+        set hops to hops + 1
+    give false
+
+-- botones de ventana que no cuelgan de un TitleBar (apps UWP en ApplicationFrameHost: «Minimizar Calculadora»)
+let CHROME_WORDS be ["minimize", "maximize", "restore", "minimizar", "maximizar", "restaurar"]
+
+task is_chrome_label(label)
+    let first be lower(split(squash(label) + " ", " ")[0])
+    give contains(CHROME_WORDS, first)
+
+-- palabras del objetivo (3+ letras) que aparecen en la etiqueta: para ordenar cuando hay más candidatos que el tope
+task goal_words(goal)
+    let out be []
+    each w in split(regex_replace(lower(text(goal)), "[^a-z0-9áéíóúñü]+", " "), " ")
+        when length(w) >= 3 and not contains(out, w)
+            set out to append(out, w)
+    give out
+
+task overlap(words, label)
+    let low be lower(text(label))
+    let n be 0
+    each w in words
+        when contains(low, w)
+            set n to n + 1
+    give n
+
+-- palabra clave del objetivo para filtrar un snapshot (query): la más larga que no sea un verbo de acción ni un
+-- sustantivo genérico de interfaz. «aplicar el filtro Con control de temperatura» → «temperatura»; «completar el
+-- correo» → «correo». nothing si no queda ninguna.
+let QUERY_STOP be ["completar", "presionar", "escribir", "buscar", "aplicar", "seleccionar", "elegir", "marcar", "abrir", "cerrar", "hacer", "click", "clic", "clickear", "responder", "poner", "ingresar", "llenar", "rellenar", "tocar", "ir", "press", "type", "fill", "open", "select", "choose", "enter", "search", "apply", "tick", "check", "click", "write", "set", "the", "field", "campo", "botón", "boton", "button", "filtro", "filter", "opción", "opcion", "option", "link", "enlace", "menu", "menú", "para", "con", "del", "los", "las", "una", "uno", "que", "sobre", "with", "into", "from", "that", "this"]
+
+export task goal_query(goal)
+    let best be nothing
+    each w in split(regex_replace(lower(text(goal)), "[^a-z0-9áéíóúñü@._-]+", " "), " ")
+        when length(w) >= 4 and not contains(QUERY_STOP, w)
+            when best == nothing or length(w) > length(best)
+                set best to w
+    give best
+
+-- ids únicos: el segundo con la misma base lleva « (2)» (estable entre observaciones iguales)
+task unique_id(base, seen)
+    when not contains(seen, base)
+        give base
+    let k be 2
+    while contains(seen, base + " (" + text(k) + ")")
+        set k to k + 1
+    give base + " (" + text(k) + ")"
+
+-- recorte al tope: si sobran, primero los que comparten palabras con el objetivo (orden estable dentro de cada grupo)
+task cap_ranked(cands, goal)
+    when length(cands) <= MAX_CANDIDATES
+        give {"cands": cands, "dropped": 0}
+    let words be goal_words(goal)
+    let scored be []
+    let i be 0
+    each c in cands
+        set scored to append(scored, {"c": c, "s": overlap(words, c["label"]), "i": i})
+        set i to i + 1
+    let ranked be sort_by(scored, (x) => (0 - x["s"]) * 100000 + x["i"])
+    let out be []
+    each x in slice(ranked, 0, MAX_CANDIDATES)
+        set out to append(out, x["c"])
+    -- de vuelta al orden de pantalla: el modelo lee la lista como está en la ventana
+    give {"cands": sort_by(out, (c) => c["order"]), "dropped": length(cands) - MAX_CANDIDATES}
+
+-- elementos de get_window_state → {cands: [{id, desc, cls, action, label, state, element}], excluded: {motivo: n},
+-- risky: [etiquetas], dropped, elements: [{role_class, label, state}]}. `want_text` = el texto que el LLM pasó
+-- (sin él no hay candidatos set_text).
+export task native_candidates(elements, goal, want_text)
+    let by_index be {}
+    each e in elements
+        when contains(e, "element_index")
+            set by_index[text(floor(number(text(e["element_index"]))))] to e
+    let cands be []
+    let seen be []
+    let excluded be {}
+    let risky be []
+    let summary be []
+    let order be 0
+    each e in elements
+        let cls be role_class(txt(e, "role"))
+        let why be nothing
+        let label be squash(txt(e, "label"))
+        when cls == nothing
+            set why to "unknown_role"
+        otherwise when contains(e, "enabled") and e["enabled"] == false
+            set why to "disabled"
+        otherwise when not contains(e, "element_index")
+            set why to "no_index"
+        otherwise when label == ""
+            set why to "unlabelled"
+        otherwise when cls != "text_input" and label == squash(txt(e, "value"))
+            set why to "label_is_value"
+        otherwise when cls == "text_input" and trim(txt(e, "value")) != "" and label == squash(txt(e, "value"))
+            set why to "label_is_value"
+        otherwise when contains(e, "frame") and e["frame"] != nothing and (num_or(e["frame"], "w", 1) <= 0 or num_or(e["frame"], "h", 1) <= 0)
+            set why to "off_screen"
+        otherwise when in_title_bar(e, by_index) or is_chrome_label(label)
+            set why to "window_chrome"
+        otherwise when cls == "text_input" and want_text == nothing
+            set why to "no_text_supplied"
+        when why == nothing
+            let rk be risk_of(label)
+            when rk != nothing
+                set why to "risk_" + rk
+                set risky to append(risky, label)
+        when why != nothing
+            set excluded[why] to (when contains(excluded, why) then excluded[why] otherwise 0) + 1
+        otherwise
+            let state be native_state(e, cls, want_text)
+            let id be unique_id(readable_id(cls, label), seen)
+            set seen to append(seen, id)
+            set cands to append(cands, {"id": id, "desc": describe_candidate(cls, label, state, want_text), "cls": cls, "action": CLASS_ACTION[cls], "label": label, "state": state, "element": floor(number(text(e["element_index"]))), "order": order})
+            set order to order + 1
+            when length(summary) < MAX_ELEMENTS_IN_STATE
+                set summary to append(summary, {"role_class": cls, "label": short(label, 60), "state": state})
+    let capped be cap_ranked(cands, goal)
+    give {"cands": capped["cands"], "excluded": excluded, "risky": risky, "dropped": capped["dropped"], "elements": summary}
+
+-- refs de un snapshot de página (semantic_v2: {ref, role, name, actions, visibility}) → la misma forma, con `ref`
+export task page_candidates(refs, goal, want_text)
+    let cands be []
+    let seen be []
+    let excluded be {}
+    let risky be []
+    let summary be []
+    let order be 0
+    each r in refs
+        let cls be role_class(txt(r, "role"))
+        -- en la web un combobox suele ser un campo con autocompletado (el buscador de MercadoLibre): con texto para
+        -- escribir va como campo; describirlo como «abrir menú» bajó a Jev al 59% (2026-09-28)
+        when cls == "popup" and want_text != nothing and norm_role(txt(r, "role")) == "combobox"
+            set cls to "text_input"
+        let label be squash(txt(r, "name"))
+        let why be nothing
+        when cls == nothing
+            set why to "unknown_role"
+        otherwise when label == ""
+            set why to "unlabelled"
+        otherwise when txt(r, "ref") == ""
+            set why to "no_ref"
+        otherwise when cls == "text_input" and want_text == nothing
+            set why to "no_text_supplied"
+        otherwise when lower(txt(r, "visibility")) == "hidden"
+            set why to "hidden"
+        when why == nothing
+            let rk be risk_of(label)
+            when rk != nothing
+                set why to "risk_" + rk
+                set risky to append(risky, label)
+        when why != nothing
+            set excluded[why] to (when contains(excluded, why) then excluded[why] otherwise 0) + 1
+        otherwise
+            let id be unique_id(readable_id(cls, label), seen)
+            set seen to append(seen, id)
+            set cands to append(cands, {"id": id, "desc": describe_candidate(cls, label, "", want_text), "cls": cls, "action": CLASS_ACTION[cls], "label": label, "state": "", "ref": txt(r, "ref"), "order": order})
+            set order to order + 1
+            when length(summary) < MAX_ELEMENTS_IN_STATE
+                set summary to append(summary, {"role_class": cls, "label": short(label, 60), "state": ""})
+    let capped be cap_ranked(cands, goal)
+    give {"cands": capped["cands"], "excluded": excluded, "risky": risky, "dropped": capped["dropped"], "elements": summary}
+
+-- criteria del `choose`: {id: descripción} con los reservados al final
+export task criteria(cands)
+    let m be {}
+    each c in cands
+        set m[c["id"]] to c["desc"]
+    each k in keys(RESERVED)
+        set m[k] to RESERVED[k]
+    give m
+
+-- estado que ve el juez: objetivo, dónde, historial acotado. Sin la lista de elementos: las opciones YA son los
+-- controles, y Laya tiene 512 tokens de contexto (estado + pregunta + opciones) — lo que sobra se trunca por el final
+export task decision_state(goal, where, elements, history)
+    let h be history
+    when length(h) > MAX_HISTORY
+        set h to slice(h, length(h) - MAX_HISTORY, length(h))
+    let st be {"goal": short(goal, 600), "where": where}
+    when length(h) > 0
+        set st["history"] to h
+    give st
+
+-- compuerta sobre una respuesta `choose` del bloque judge →
+-- {verdict: "act" | "reobserve" | "abstain" | "unsure" | "offline", id, p, margin, top: [{id, p}]}
+export task gate(answer, min_p, min_margin)
+    when answer == nothing
+        give {"verdict": "offline", "id": nothing, "p": 0, "margin": 0, "top": []}
+    when not contains(answer, "available") or answer["available"] != true
+        give {"verdict": "offline", "id": nothing, "p": 0, "margin": 0, "top": []}
+    let probs be when contains(answer, "probabilities") then answer["probabilities"] otherwise {}
+    let pairs be []
+    each k in keys(probs)
+        set pairs to append(pairs, {"id": k, "p": number(text(probs[k]))})
+    let ranked be sort_by(pairs, (x) => 0 - x["p"])
+    let top be slice(ranked, 0, when length(ranked) < 4 then length(ranked) otherwise 4)
+    when length(ranked) == 0
+        give {"verdict": "unsure", "id": nothing, "p": 0, "margin": 0, "top": []}
+    let best be ranked[0]
+    let second be when length(ranked) > 1 then ranked[1]["p"] otherwise 0
+    let margin be best["p"] - second
+    -- `none` (la opción de escape de `or nothing`) o el reservado abstain: el juez no ve nada que sirva
+    when best["id"] == "none" or best["id"] == "abstain"
+        give {"verdict": "abstain", "id": best["id"], "p": best["p"], "margin": margin, "top": top}
+    -- empate arriba: no es accionable (cua: «a tied top score is not actionable»)
+    when margin <= 0
+        give {"verdict": "unsure", "id": best["id"], "p": best["p"], "margin": margin, "top": top}
+    when best["p"] < min_p or margin < min_margin
+        give {"verdict": "unsure", "id": best["id"], "p": best["p"], "margin": margin, "top": top}
+    when best["id"] == "reobserve"
+        give {"verdict": "reobserve", "id": best["id"], "p": best["p"], "margin": margin, "top": top}
+    give {"verdict": "act", "id": best["id"], "p": best["p"], "margin": margin, "top": top}
+
+export task find(cands, id)
+    each c in cands
+        when c["id"] == id
+            give c
+    give nothing

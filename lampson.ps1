@@ -125,6 +125,10 @@ try {
         $env:LAMPSON_WORKSPACE = $target; $env:LAMPSON_WS = $r.slug; $env:LAMPSON_PORT = [string]$r.port
         if ($Agent -ne "") { $env:LAMPSON_AGENT = $Agent }
         if ($Perm -ne "") { $env:LAMPSON_PERMISSION = $Perm }
+        # juez de computer use (⚙ → Computer use): el runtime lo lee del entorno al arrancar
+        if ($r.judge_provider) { $env:SYNSEMA_JUDGE_PROVIDER = $r.judge_provider }
+        if ($r.judge_model) { $env:SYNSEMA_JUDGE_MODEL = $r.judge_model }
+        if ($r.judge_key) { $env:TYPESAFE_API_KEY = $r.judge_key }
         $envFile = Join-Path $here ".env"
         if (Test-Path -LiteralPath $envFile) { synsema run --env-file $envFile chat.syn } else { synsema run chat.syn }
     } finally { Pop-Location }
