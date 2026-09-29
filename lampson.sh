@@ -4,16 +4,18 @@
 #   cd /mi/proyecto && lampson --web      # abre http://127.0.0.1:8080/w/<slug>/
 #   lampson --hub start|stop|status|logs|restart · --install (systemd --user) · --uninstall
 #   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS propio (opcional) · --domain off
+#   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --workspace /ruta [--agent plan] [--yolo|--strict|--ask] · --update
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 caller="$(pwd)"
-ws=""; web=0; hub=""; install=""; domain="-"; email=""
+ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
 while [ $# -gt 0 ]; do
     case "$1" in
         --web) web=1 ;;
         --hub|--daemon) shift; hub="${1:-status}" ;;
         --domain) if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then shift; domain="$1"; else domain=""; fi ;;
+        --pair) if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then shift; pair_url="$1"; else pair_url=""; fi ;;
         --email) shift; email="${1:-}" ;;
         --install) install=install ;;
         --uninstall) install=uninstall ;;
@@ -23,7 +25,7 @@ while [ $# -gt 0 ]; do
         --strict) export LAMPSON_PERMISSION=strict ;;
         --ask) export LAMPSON_PERMISSION=ask ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
-        -*) echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
+        -*) echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
         *) ws="$1" ;;
     esac
     shift
@@ -51,6 +53,23 @@ json() { node -e "const j=JSON.parse(process.argv[1]);const v=j[process.argv[2]]
 # dominio propio (opcional): HTTPS automático con Let's Encrypt delante del hub
 if [ "$domain" != "-" ]; then
     (cd "$here" && LAMPSON_CMD=domain LAMPSON_DOMAIN="$domain" LAMPSON_EMAIL="$email" synsema run cli.syn | sed '$d')
+    exit 0
+fi
+# emparejar un celular desde la terminal (VPS por SSH): lampson --pair [https://tu-dominio]
+if [ "$pair_url" != "-" ]; then
+    r="$(cd "$here" && LAMPSON_CMD=pair LAMPSON_PAIR_URL="$pair_url" synsema run cli.syn)" || { echo "$r" >&2; exit 1; }
+    echo "$r" | sed '$d'
+    r="$(echo "$r" | tail -n 1)"
+    link="$(json "$r" link)"
+    case "$link" in https://*|http://*) ;; *) exit 1 ;; esac
+    secs="$(json "$r" expires_in)"
+    echo ""
+    echo "Apuntá la cámara del celular a este QR y tocá «Crear passkey» (vale $(( ${secs%.*} / 60 )) minutos, un solo uso):"
+    echo ""
+    if command -v node >/dev/null 2>&1; then node "$here/lib/tools/qr.js" "$link"; else echo "  (sin Node no puedo dibujar el QR: abrí el link de abajo en el celular)"; fi
+    echo ""
+    echo "  o abrí en el celular: $link"
+    echo "  después entrás con la huella en $(json "$r" public_url)"
     exit 0
 fi
 if [ -n "$hub" ]; then

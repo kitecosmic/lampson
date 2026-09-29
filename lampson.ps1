@@ -1,4 +1,4 @@
-# lampson.ps1 — launcher Windows. Cada proyecto es un WORKSPACE con su propio proceso; un hub en :8080 los sirve a todos.
+﻿# lampson.ps1 — launcher Windows. Cada proyecto es un WORKSPACE con su propio proceso; un hub en :8080 los sirve a todos.
 #
 #   cd C:\mi\proyecto ; lampson                 # terminal sobre este workspace (lo registra y lo arranca si hace falta)
 #   cd C:\mi\proyecto ; lampson --web           # abre http://127.0.0.1:8080/w/<slug>/ en el navegador
@@ -6,6 +6,7 @@
 #   lampson --hub start|stop|status|logs        # el servicio residente (workspaces + tareas programadas)
 #   lampson --install | --uninstall             # arrancar el hub al iniciar sesión (Tarea Programada)
 #   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS con tu dominio (opcional) · --domain off
+#   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --agent plan · --yolo|--strict|--ask · --update · --help
 #
 # Cómo funciona (ver SPEC-WORKSPACES.md): .lampson\ws\<slug>\ es el cwd del proceso del workspace, con una junction
@@ -16,7 +17,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $caller = (Get-Location).Path
 
 # --- args: acepta --flag y -Flag, sin distinguir mayúsculas ---
-$Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Hub = ""; $Install = ""; $Domain = $null; $Email = ""
+$Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Hub = ""; $Install = ""; $Domain = $null; $Email = ""; $Pair = $null
 $i = 0
 while ($i -lt $args.Count) {
     $a = [string]$args[$i]
@@ -25,6 +26,7 @@ while ($i -lt $args.Count) {
         '^--?(hub|daemon|d)$'   { $i++; $Hub = if ($i -lt $args.Count) { ([string]$args[$i]).ToLower() } else { "status" } }
         '^--?domain$'           { if ($i + 1 -lt $args.Count -and -not ([string]$args[$i + 1]).StartsWith("-")) { $i++; $Domain = [string]$args[$i] } else { $Domain = "" } }
         '^--?email$'            { $i++; $Email = [string]$args[$i] }
+        '^--?pair$'             { if ($i + 1 -lt $args.Count -and -not ([string]$args[$i + 1]).StartsWith("-")) { $i++; $Pair = [string]$args[$i] } else { $Pair = "" } }
         '^--?install$'          { $Install = "install" }
         '^--?uninstall$'        { $Install = "uninstall" }
         '^--?(workspace|ws)$'   { $i++; $Workspace = [string]$args[$i] }
@@ -69,6 +71,10 @@ function Invoke-Cli([string]$cmd, [string]$ws) {
     return ($lines[-1] | ConvertFrom-Json)
 }
 
+# synsema escribe UTF-8; PowerShell decodifica lo que CAPTURA (Invoke-Cli) con la página de códigos de la consola
+# (CP850 en Windows en español): «dirección» salía «direcci├│n». UTF-8 mientras corre el script, y se restaura al salir.
+$prevOutEnc = [Console]::OutputEncoding
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 Push-Location $here
 try {
     $env:LAMPSON_HOME = $here
@@ -76,6 +82,21 @@ try {
     if ($null -ne $Domain) {
         $env:LAMPSON_DOMAIN = $Domain; $env:LAMPSON_EMAIL = $Email
         $r = Invoke-Cli "domain" ""
+        exit 0
+    }
+    # --- emparejar un celular desde la terminal (VPS por SSH): lampson --pair [https://tu-dominio] ---
+    if ($null -ne $Pair) {
+        $env:LAMPSON_PAIR_URL = $Pair
+        $r = Invoke-Cli "pair" ""
+        if ($r.error) { exit 1 }
+        $mins = [math]::Round([double]$r.expires_in / 60)
+        Write-Host ""
+        Write-Host "Apuntá la cámara del celular a este QR y tocá «Crear passkey» (vale $mins minutos, un solo uso):"
+        Write-Host ""
+        if (Get-Command node -ErrorAction SilentlyContinue) { node (Join-Path $here "lib\tools\qr.js") $r.link } else { Write-Host "  (sin Node no puedo dibujar el QR: abrí el link de abajo en el celular)" }
+        Write-Host ""
+        Write-Host ("  o abrí en el celular: " + $r.link)
+        Write-Host ("  después entrás con la huella en " + $r.public_url)
         exit 0
     }
     # --- hub / servicio ---
@@ -134,4 +155,5 @@ try {
     } finally { Pop-Location }
 } finally {
     Pop-Location
+    try { [Console]::OutputEncoding = $prevOutEnc } catch {}
 }

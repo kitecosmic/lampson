@@ -212,6 +212,12 @@ Let's Encrypt rate-limits failed validations), the hub itself switches to `bind 
 uses the domain. Without `--domain` none of this runs. Workspace ports never leave loopback either way;
 approval links use the same public URL and carry `/w/<slug>` automatically.
 
+**Pairing from a terminal.** A VPS has no browser on "this PC", and pairing is only started from loopback.
+`lampson --pair [https://public-url]` (over SSH) asks the hub for a code through `127.0.0.1` (`cli.syn pair` →
+`POST /api/auth/pair`; with a URL it first saves it as the public one) and draws the QR in the terminal with
+`lib/tools/qr.js` — the web's own `public/vendor/qrcode.js` under Node, half blocks with forced black-on-white
+colours so a camera reads it on light and dark themes alike; the link is printed below it.
+
 ## Scheduled tasks and the resident process
 
 Lampson can run things with nobody at the keyboard. Scheduled tasks run inside the workspace's process (the hub

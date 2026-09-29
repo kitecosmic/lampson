@@ -5,12 +5,15 @@
 --   LAMPSON_CMD=hub-status  → {alive}
 --   LAMPSON_CMD=hub-start | hub-stop
 --   LAMPSON_CMD=list
+--   LAMPSON_CMD=pair  [LAMPSON_PAIR_URL=https://…]   código para emparejar un celular (lampson --pair dibuja el QR)
 --   LAMPSON_CMD=domain  LAMPSON_DOMAIN=<dominio>|off|""  [LAMPSON_EMAIL=<email>]   dominio propio con HTTPS (opcional)
 -- La salida útil va en la ÚLTIMA línea (JSON) para que el launcher la parsee.
 
 require exec
 require time
 require net("127.0.0.1")
+-- lampson --pair comprueba que la dirección pública (túnel o dominio) responda antes de dibujar un QR inútil
+require net
 require env("LAMPSON_*")
 require env("OS")
 require env("HOME")
@@ -137,6 +140,57 @@ otherwise when cmd == "ws-restart"
     ws.start_ws(w)
     ws.wait_ready(w, 15)
     print(json_encode({"restarted": w["slug"], "alive": ws.health(w) != nothing}))
+otherwise when cmd == "pair"
+    -- lampson --pair [URL]: emparejar un celular desde la terminal — en un VPS por SSH no hay navegador en «esta
+    -- PC». Se le pide el código al hub por 127.0.0.1 (el emparejamiento solo se inicia desde local); el lanzador
+    -- dibuja el QR con lib/tools/qr.js. Con URL, primero la guarda como pública (la del túnel o el dominio).
+    when not ws.hub_alive()
+        ws.start_hub()
+        let deadline be now() + 15
+        while now() < deadline and not ws.hub_alive()
+            sleep(0.5)
+    let base be "http://127.0.0.1:" + text(ws.HUB_PORT)
+    let hdr be {"Content-Type": "application/json"}
+    let bad be nothing
+    let want be trim(env("LAMPSON_PAIR_URL", ""))
+    when want != ""
+        let ru be http_post(base + "/api/auth/public-url", json_encode({"url": want}), hdr, 15)
+        when contains(ru, "error")
+            set bad to "el hub no responde en " + base
+        otherwise when status of ru != 200
+            set bad to "no pude guardar la URL: " + slice(body of ru, 0, 300)
+    -- ¿la dirección pública responde? Un túnel rápido de cloudflare (*.trycloudflare.com) muere al cerrar
+    -- cloudflared y la dirección guardada queda vieja: el QR llevaría a «sin conexión» (2026-09-28, en el celular)
+    when bad == nothing
+        let cur be http_get(base + "/api/auth/public-url", {"timeout": 10})
+        let pub0 be ""
+        when not contains(cur, "error")
+            when status of cur == 200
+                set pub0 to text(json_decode(body of cur)["public_url"])
+        when pub0 != "" and pub0 != "nothing"
+            let probe be http_get(pub0 + "/api/auth/me", {"timeout": 8})
+            let alive be false
+            when not contains(probe, "error")
+                set alive to status of probe == 200 and contains(body of probe, "authenticated")
+            when not alive
+                let tunnel be contains(pub0, "trycloudflare.com")
+                set bad to "la dirección pública " + pub0 + " no responde" + (when tunnel then ": ese túnel de cloudflare ya no existe (mueren al cerrar cloudflared y cada uno trae una dirección nueva). Levantá uno con «cloudflared tunnel --url http://localhost:8080» y corré lampson --pair <la https nueva que imprime>" otherwise " — ¿está el dominio apuntando a este servidor y el edge HTTPS arriba? (lampson --domain muestra el estado)")
+    when bad == nothing
+        let r be http_post(base + "/api/auth/pair", "{}", hdr, 15)
+        when contains(r, "error")
+            set bad to "el hub no responde en " + base + " — lampson --hub start"
+        otherwise when status of r != 200
+            set bad to "el hub rechazó el pedido (" + text(status of r) + "): " + slice(body of r, 0, 300)
+        otherwise
+            let j be json_decode(body of r)
+            let pub be text(j["public_url"])
+            when pub == "" or pub == "nothing"
+                set bad to "falta la dirección pública por la que entra el celular: lampson --pair https://tu-dominio (o configurá el dominio con lampson --domain)"
+            otherwise
+                print(json_encode({"link": pub + "/pair#" + text(j["code"]), "expires_in": j["expires_in"], "public_url": pub}))
+    when bad != nothing
+        print("✗ " + bad)
+        print(json_encode({"error": bad}))
 otherwise when cmd == "list"
     each w in ws.summary()
         print((when w["alive"] then "● " otherwise "○ ") + w["slug"] + "  " + w["path"] + "  :" + text(w["port"]) + "  " + w["policy"])
