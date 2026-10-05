@@ -174,10 +174,13 @@ policy «siempre vivo» stays up).
 
 Lampson is also a PWA: open it on the phone and «Add to Home Screen». Who can get in:
 
-- **This machine** (loopback, no forwarding headers) — as always, nothing to type.
-- **Anything else** (a tunnel, the LAN, a domain) — needs the session of a **paired device**. A tunnel such as
-  `cloudflared` connects from `127.0.0.1` too, so the hub tells them apart by the `X-Forwarded-*` /
-  `Cf-Connecting-Ip` headers, not by the IP. Pairing: on the machine, hub → **dispositivos** → *emparejar* shows
+- **This machine** — as always, nothing to type. It is *proven*, never assumed from what is missing: the peer is
+  loopback, the request went through no proxy, and the raw `Host` is `localhost` / `127.0.0.1` / `[::1]`
+  (`lib/origin.syn`). A tunnel connects from `127.0.0.1` too, but it brings forwarding headers and the public `Host`.
+- **Another origin in the browser** — never, local or remote: a request whose `Origin` is not its own origin is
+  refused by the hub and by every workspace. That closes CSRF, a WebSocket to the terminal opened from another
+  page, and DNS rebinding.
+- **Anything else** (a tunnel, the LAN, a domain) — needs the session of a **paired device**. Pairing: on the machine, hub → **dispositivos** → *emparejar* shows
   a one-time QR (5 min); the phone scans it and creates a **passkey** (fingerprint / face). After that it signs in
   with the passkey. The session renews itself while used: it expires after 30 days unused, and the passkey is asked
   again 90 days after the last passkey sign-in regardless (`SESSION_DAYS` / `SESSION_MAX_DAYS` in `lib/auth.syn`;
@@ -188,6 +191,14 @@ Lampson is also a PWA: open it on the phone and «Add to Home Screen». Who can 
 State lives in `.lampson/auth/` (public keys and sign counters, session **hashes** — never the session itself).
 
 **Reaching a home PC** (no public IP, NAT, a router you can't open): a tunnel, which dials out from the PC.
+Recommended — a Synsema tunnel (`syn`, the platform CLI, signed in once): `syn tunnel 8080 --name lampson
+--service` gives the hub a fixed `https://<id>-tunnel.synsema.app` (Pro: `--subdomain`) and keeps it up with the
+computer (Startup folder on Windows, systemd on Linux, LaunchAgent on macOS; log in `~/.synsema/tunnels/`).
+Tunnels, cloudflared and the `--domain` edge reach the hub over loopback; since engine v0.6.42 `serve` drops their
+`X-Forwarded-*` unless the peer is trusted, so the hub declares `trust proxy ["127.0.0.1", "::1"]` and each workspace
+binds `127.0.0.1` and declares the same `trust proxy` (the hub's proxy keeps the real origin for it). Lampson
+therefore needs engine **0.6.42+**; the launchers check it. Tunnel the hub, never a workspace port (a workspace
+refuses a public `Host`), and never a raw TCP tunnel (`ssh -R`, `ngrok tcp`): it leaves no trace to tell it apart.
 Quick, to try it — `cloudflared tunnel --url http://localhost:8080` prints a `https://….trycloudflare.com`
 address that changes on every start (pair again each time). Persistent — a named Cloudflare tunnel on your own
 domain (free account, the domain's DNS on Cloudflare): dashboard → Zero Trust → Networks → Tunnels → create

@@ -1,7 +1,6 @@
 -- lib/auth.syn — quién puede entrar al hub desde afuera (celular por túnel, VPS): dispositivos con passkey.
 --
--- Local (esta PC) entra sin nada, como siempre. Remoto = una IP que no es loopback O una petición con headers de
--- reenvío: `cloudflared` (y cualquier proxy) se conecta desde 127.0.0.1, así que la IP sola NO distingue un túnel.
+-- Local (esta PC) entra sin nada, como siempre; qué cuenta como local y qué origin vale lo decide lib/origin.syn.
 -- Un remoto necesita la cookie de sesión de un dispositivo emparejado:
 --   1. emparejar (solo desde local): POST /api/auth/pair → código de un solo uso, 5 min, que viaja en el QR
 --      (<url pública>/pair#<código> — en el fragmento, para que no quede en logs de proxies);
@@ -14,6 +13,8 @@
 -- Códigos y desafíos viven en state_* (memoria del hub): un reinicio los invalida, y está bien.
 -- Módulo sin `require`: los declara hub.syn.
 
+use "./origin.syn" as origin
+
 export let DIR be ".lampson/auth"
 export let COOKIE be "lampson_sid"
 -- sesión renovable: vence tras SESSION_DAYS sin usarla; pase lo que pase, la passkey se pide de nuevo a los
@@ -25,48 +26,11 @@ let RENEW_EVERY be 3600
 export let PAIR_TTL be 300
 export let CHALLENGE_TTL be 300
 
-let FORWARD_HEADERS be ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "x-real-ip", "forwarded"]
-
--- ---- quién es ----
-
-export task is_loopback(ip)
-    give ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
-
--- local = loopback directo, sin rastro de haber pasado por un proxy o túnel
-export task is_local(ip, headers)
-    when not is_loopback(ip)
-        give false
-    each h in FORWARD_HEADERS
-        when contains(headers, h)
-            give false
-    give true
-
--- host sin puerto, en minúsculas (rp_id de WebAuthn); el Host lo pone el túnel con el dominio público
-export task host_of(headers)
-    let h be lower(text(get(headers, "x-forwarded-host", get(headers, "host", ""))))
-    set h to trim(split(h, ",")[0])
-    when starts_with(h, "[")
-        give split(slice(h, 1, length(h)), "]")[0]
-    give split(h, ":")[0]
-
-export task origin_of(headers)
-    let h be lower(text(get(headers, "x-forwarded-host", get(headers, "host", ""))))
-    set h to trim(split(h, ",")[0])
-    let proto be lower(trim(split(text(get(headers, "x-forwarded-proto", "")), ",")[0]))
-    when proto == ""
-        set proto to when host_of(headers) == "localhost" then "http" otherwise "https"
-    give proto + "://" + h
+-- ---- quién es: lib/origin.syn (local, origin, Host) ----
 
 -- una cookie Secure en http://localhost la aceptan los navegadores; en otro http no
 export task secure_cookie(headers)
-    give starts_with(origin_of(headers), "https://") or host_of(headers) == "localhost"
-
--- CSRF: un POST remoto con cookie tiene que venir de la misma origin (SameSite=Lax ya frena los formularios de
--- otros sitios; esto cierra el resto). Sin header Origin (scripts con bearer) no hay navegador que engañar.
-export task same_origin(headers)
-    when not contains(headers, "origin")
-        give true
-    give lower(text(headers["origin"])) == lower(origin_of(headers))
+    give starts_with(origin.origin_of(headers), "https://") or origin.public_host(headers) == "localhost"
 
 -- ---- archivos ----
 
@@ -226,7 +190,7 @@ export task take_challenge(id, kind)
 export task register_options(headers, device_name)
     let user_id be token()
     let c be new_challenge("register", {"user_id": user_id})
-    give {"challenge_id": c["id"], "publicKey": {"challenge": c["challenge"], "rp": {"id": host_of(headers), "name": "Lampson"}, "user": {"id": user_id, "name": device_name, "displayName": "Lampson · " + device_name}, "pubKeyCredParams": [{"type": "public-key", "alg": -7}, {"type": "public-key", "alg": -8}, {"type": "public-key", "alg": -257}], "authenticatorSelection": {"residentKey": "preferred", "userVerification": "required"}, "attestation": "none", "timeout": 120000}}
+    give {"challenge_id": c["id"], "publicKey": {"challenge": c["challenge"], "rp": {"id": origin.public_host(headers), "name": "Lampson"}, "user": {"id": user_id, "name": device_name, "displayName": "Lampson · " + device_name}, "pubKeyCredParams": [{"type": "public-key", "alg": -7}, {"type": "public-key", "alg": -8}, {"type": "public-key", "alg": -257}], "authenticatorSelection": {"residentKey": "preferred", "userVerification": "required"}, "attestation": "none", "timeout": 120000}}
 
 -- registra la passkey (consume el código) → {device, sid} | error con el motivo
 export task register(headers, code, challenge_id, name, credential)
@@ -235,14 +199,14 @@ export task register(headers, code, challenge_id, name, credential)
     let c be take_challenge(challenge_id, "register")
     when c == nothing
         raise "el desafío venció — volvé a intentar"
-    let reg be webauthn_register(credential, {"rp_id": host_of(headers), "origin": origin_of(headers), "challenge": c["challenge"], "user_verification": "required"})
+    let reg be webauthn_register(credential, {"rp_id": origin.public_host(headers), "origin": origin.origin_of(headers), "challenge": c["challenge"], "user_verification": "required"})
     when reg == nothing
         raise "el navegador devolvió una passkey que no se pudo verificar"
     state_delete("auth:pair:" + text(code))
     let nm be trim(text(name))
     when nm == ""
         set nm to "dispositivo"
-    let dev be {"id": reg["id"], "public_key": reg["public_key"], "alg": reg["alg"], "sign_count": reg["sign_count"], "user_handle": c["extra"]["user_id"], "name": slice(nm, 0, 60), "rp_id": host_of(headers), "created": now(), "last_used": now()}
+    let dev be {"id": reg["id"], "public_key": reg["public_key"], "alg": reg["alg"], "sign_count": reg["sign_count"], "user_handle": c["extra"]["user_id"], "name": slice(nm, 0, 60), "rp_id": origin.public_host(headers), "created": now(), "last_used": now()}
     let list be where(devices(), (d) => d["id"] != dev["id"])
     save_devices(append(list, dev))
     state_delete("auth:gone:" + dev["id"])
@@ -250,7 +214,7 @@ export task register(headers, code, challenge_id, name, credential)
 
 -- opciones para navigator.credentials.get: solo las passkeys de ESTE dominio
 export task login_options(headers)
-    let rp be host_of(headers)
+    let rp be origin.public_host(headers)
     let creds be []
     each d in devices()
         when d["rp_id"] == rp
@@ -264,10 +228,10 @@ export task login(headers, challenge_id, credential)
     when c == nothing
         give nothing
     let dev be find_device(text(get(credential, "id", "")))
-    when dev == nothing or dev["rp_id"] != host_of(headers)
+    when dev == nothing or dev["rp_id"] != origin.public_host(headers)
         give nothing
     let stored be {"id": dev["id"], "public_key": dev["public_key"], "alg": dev["alg"], "sign_count": dev["sign_count"], "user_handle": dev["user_handle"]}
-    let v be webauthn_verify(credential, stored, {"rp_id": dev["rp_id"], "origin": origin_of(headers), "challenge": c["challenge"], "user_verification": "required"})
+    let v be webauthn_verify(credential, stored, {"rp_id": dev["rp_id"], "origin": origin.origin_of(headers), "challenge": c["challenge"], "user_verification": "required"})
     when v == nothing
         give nothing
     let list be []

@@ -1,9 +1,10 @@
 -- edge.syn — HTTPS con TU dominio delante del hub. OPCIONAL: solo corre si configuraste uno (`lampson --domain …`).
 --
 -- Synsema termina TLS acá (certificado gratis de Let's Encrypt, renovación automática, :80 → :443) y pasa todo al hub
--- en 127.0.0.1:8080, que sigue igual que siempre. El edge agrega X-Forwarded-For/-Proto/-Host: para el hub eso es
--- una visita REMOTA, así que pide la passkey de un dispositivo emparejado (lib/auth.syn). SSE y WebSocket (chat,
--- terminal) cruzan el edge.
+-- en 127.0.0.1:8080, que sigue igual que siempre. El edge agrega X-Forwarded-For/-Proto/-Host y el hub, que confía
+-- en loopback (`trust proxy`), los ve: para él es una visita REMOTA con el dominio público, así que pide la passkey
+-- de un dispositivo emparejado (lib/origin.syn, lib/auth.syn). El edge NO confía en nadie: lo que un cliente mande
+-- como X-Forwarded-* lo borra el motor. SSE y WebSocket (chat, terminal) cruzan el edge.
 --
 -- Lo lanza el supervisor del hub (lib/workspaces.syn start_edge) con:
 --   synsema serve edge.syn --port 443 --domain <dominio> --tls-auto <email>

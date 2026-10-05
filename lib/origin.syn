@@ -1,0 +1,67 @@
+-- lib/origin.syn — de dónde viene una petición HTTP: la usan el hub (hub.tpl.syn, lib/auth.syn) y cada workspace (web.syn).
+--
+-- «Local» (esta PC, entra sin passkey) se PRUEBA con las tres cosas a la vez, nunca se deduce de lo que falta:
+--   1. el peer es loopback;
+--   2. no pasó por ningún proxy (sin X-Forwarded-*, Forwarded ni los headers de cloudflared);
+--   3. el Host CRUDO es un nombre de loopback. Un túnel (syn tunnel, cloudflared, ngrok) o el edge de --domain
+--      traen el Host público; una página con DNS rebinding trae el suyo.
+-- Desde el motor v0.6.42 los X-Forwarded-* de un peer que no está en `trust proxy` se borran antes del programa. El
+-- hub y los workspaces confían en loopback (`trust proxy` / `--trust-proxy`): ahí conectan los túneles, el edge y el
+-- proxy del hub, así que lo que dicen llega y `ip of request` es el cliente real. Sin eso, un syn tunnel entraba
+-- como «esta PC» (2026-10-05). Un túnel TCP crudo (ssh -R, ngrok tcp) no deja rastro y no se puede distinguir:
+-- nunca se apunta uno al hub.
+--
+-- Otra origin en el navegador — CSRF, un WebSocket abierto desde otra página, DNS rebinding — se rechaza siempre,
+-- local o remoto: un navegador manda Origin en todo POST, en todo WebSocket y en los fetch entre origins, y tiene
+-- que coincidir con la origin de la propia petición. Sin Origin (curl, scripts, navegación) no hay sitio ajeno.
+-- Módulo puro: sin require.
+
+let FORWARD_HEADERS be ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip", "cf-connecting-ip", "cf-ray"]
+let LOOPBACK_NAMES be ["localhost", "127.0.0.1", "::1"]
+
+export task is_loopback(ip)
+    give ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
+
+-- valor de Host (o X-Forwarded-Host) → nombre sin puerto ni corchetes, en minúsculas
+export task host_name(value)
+    let h be trim(split(lower(text(value)), ",")[0])
+    when starts_with(h, "[")
+        give split(slice(h, 1, length(h)), "]")[0]
+    give split(h, ":")[0]
+
+-- "host[:puerto]" como lo vio el navegador: el que puso el proxy de confianza, o el Host si no hubo proxy
+task authority(headers)
+    give trim(split(lower(text(get(headers, "x-forwarded-host", get(headers, "host", "")))), ",")[0])
+
+-- el Host que llegó a ESTE servidor (un proxy lo reescribe al suyo; el de afuera queda en X-Forwarded-Host)
+export task raw_host(headers)
+    give host_name(get(headers, "host", ""))
+
+-- el dominio que ve el usuario: rp_id de WebAuthn
+export task public_host(headers)
+    give host_name(authority(headers))
+
+-- la origin que ve el navegador. Lampson no termina TLS en el hub ni en los workspaces: sin un proxy de confianza
+-- que diga https (el edge, un túnel), es http
+export task origin_of(headers)
+    let proto be lower(trim(split(text(get(headers, "x-forwarded-proto", "")), ",")[0]))
+    when proto == ""
+        set proto to "http"
+    give proto + "://" + authority(headers)
+
+export task forwarded(headers)
+    each h in FORWARD_HEADERS
+        when contains(headers, h)
+            give true
+    give false
+
+export task loopback_host(headers)
+    give contains(LOOPBACK_NAMES, raw_host(headers))
+
+export task cross_site(headers)
+    when not contains(headers, "origin")
+        give false
+    give lower(trim(text(headers["origin"]))) != origin_of(headers)
+
+export task is_local(ip, headers)
+    give is_loopback(ip) and not forwarded(headers) and loopback_host(headers)

@@ -8,9 +8,9 @@
 --   GET  /w/<slug>/approve/…  links de aprobación de ese workspace
 --   /api/workspaces…          registro, crear (diálogo nativo o explorador), start/stop/quitar, política
 -- Supervisor: cada 15 s arranca los workspaces que deben vivir y apaga los inactivos (política en ⚙ → idle_hours).
--- Acceso: esta PC (loopback directo) entra sin nada; lo remoto — túnel, LAN, VPS — necesita la sesión de un
--- dispositivo emparejado con passkey (lib/auth.syn), o LAMPSON_WEB_TOKEN para scripts. Las rutas proxy al API de
--- cada workspace también piden auth: el proceso del workspace confía en todo lo que le llega del hub.
+-- Acceso: esta PC entra sin nada; lo remoto — túnel, LAN, VPS — necesita la sesión de un dispositivo emparejado con
+-- passkey (lib/auth.syn), o LAMPSON_WEB_TOKEN para scripts. Qué es «esta PC» y qué origin vale: lib/origin.syn. Las
+-- rutas proxy al API de cada workspace también piden auth: el proceso del workspace confía en lo que le llega del hub.
 
 intent: "Lampson hub: workspaces registry, supervisor and reverse proxy to one process per workspace"
 
@@ -36,19 +36,21 @@ require random
 use "./lib/workspaces.syn" as ws
 use "./lib/settings.syn" as settings
 use "./lib/auth.syn" as auth
+use "./lib/origin.syn" as origin
 
 -- local → {local:true}; remoto con sesión de un dispositivo → {local:false, device}; con LAMPSON_WEB_TOKEN → script
 task check_client(token, request)
     let h be headers of request
-    when auth.is_local(text(ip of request), h)
+    -- un navegador en otra origin (CSRF, WebSocket abierto desde otra página, DNS rebinding) no pasa, local o remoto
+    when origin.cross_site(h)
+        give nothing
+    when origin.is_local(text(ip of request), h)
         give {"local": true}
     let want be env("LAMPSON_WEB_TOKEN", "")
     when want != "" and token == want
         give {"local": false, "device": nothing}
     let s be auth.session_for(get(request.cookies, auth.COOKIE, nothing))
     when s == nothing
-        give nothing
-    when method of request != "GET" and not auth.same_origin(h)
         give nothing
     give {"local": false, "device": s["device"]}
 
@@ -65,6 +67,9 @@ cron_every(15, hub_tick)
 
 serve on 8080
     -- @bind
+    -- túneles (syn tunnel, cloudflared) y el edge de --domain llegan por loopback: así sus X-Forwarded-* llegan y
+    -- ip of request es el cliente real (lib/origin.syn)
+    trust proxy ["127.0.0.1", "::1"]
     max_streams 200
     auth with check_client
     static "./public"
@@ -137,6 +142,8 @@ serve on 8080
         give with_session(ok({"ok": true, "device": r["device"]}), request, r["sid"])
 
     route "POST /api/auth/logout"
+        when origin.cross_site(headers of request)
+            give fail(403, "otra origin")
         let sid be get(request.cookies, auth.COOKIE, nothing)
         when sid != nothing
             auth.drop_session(sid)

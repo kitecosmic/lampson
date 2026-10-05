@@ -70,16 +70,25 @@ use "./lib/term.syn" as term
 use "./lib/computer.syn" as computer
 use "./lib/workspaces.syn" as workspaces
 use "./lib/judge.syn" as jdg
+use "./lib/origin.syn" as origin
 
 let APPROVAL_TIMEOUT be 180
 
--- Quién puede usar la API (chat con tools, terminal, matar procesos): `serve` escucha en 0.0.0.0, así que
--- sin esto cualquiera en la LAN tendría una shell en tu proyecto. Política: SOLO loopback. Opt-in para
--- clientes remotos: LAMPSON_WEB_TOKEN en .env + header `Authorization: Bearer <token>` (la UI web no lo
--- manda; es para scripts). `auth with` corre ANTES del upgrade WebSocket, así que cubre /api/term.
+-- Quién puede usar la API (chat con tools, terminal, matar procesos). `auth with` corre ANTES del upgrade
+-- WebSocket, así que cubre /api/term. Reglas en lib/origin.syn:
+--   * otra origin en el navegador (CSRF, WebSocket desde otra página, DNS rebinding) → fuera, siempre;
+--   * bajo el hub (LAMPSON_WS): el proceso escucha solo en 127.0.0.1 (--bind) y confía en el proxy del hub
+--     (`trust proxy` en el serve de abajo), que ya autenticó al cliente y reescribe el Host a 127.0.0.1:<puerto>.
+--     Un Host público = un túnel apuntado a este puerto en vez de al hub → fuera;
+--   * solo (docker, `synsema serve web.syn`): esta PC (lib/origin.syn is_local).
+-- Opt-in para scripts remotos: LAMPSON_WEB_TOKEN en .env + `Authorization: Bearer <token>`.
 task check_client(token, request)
-    let ip be text(ip of request)
-    when ip == "127.0.0.1" or ip == "::1" or ip == "::ffff:127.0.0.1"
+    let h be headers of request
+    when origin.cross_site(h)
+        give nothing
+    when env("LAMPSON_WS", "") != "" and origin.loopback_host(h)
+        give {"local": true}
+    when env("LAMPSON_WS", "") == "" and origin.is_local(text(ip of request), h)
         give {"local": true}
     let want be env("LAMPSON_WEB_TOKEN", "")
     when want != "" and token == want
@@ -125,6 +134,10 @@ share {"id": text(now())} as "lampson:run"
 share {"kind": "web"} as "lampson:ui"
 
 serve on 8080
+    -- el proxy del hub (y nada más) conecta por loopback: sus X-Forwarded-* traen la origin real (check_client).
+    -- Acá y no como flag de start_ws: el web.syn se copia al arrancar, y un hub viejo en memoria lo lanzaba sin el
+    -- flag → toda origin parecía ajena y la terminal no conectaba (2026-10-05)
+    trust proxy ["127.0.0.1", "::1"]
     max_streams 50
     auth with check_client
     static "./public"

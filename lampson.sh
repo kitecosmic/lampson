@@ -31,6 +31,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 export LAMPSON_HOME="$here"
+# motor mínimo: el hub y los workspaces declaran `trust proxy` (Synsema 0.6.42+; ver lib/origin.syn)
+min_engine="0.6.42"
+engine="$(synsema --version 2>/dev/null | sed 's/^[^0-9]*//')"
+if [ -z "$engine" ] || [ "$(printf '%s\n%s\n' "$min_engine" "$engine" | sort -V | head -n1)" != "$min_engine" ]; then
+    echo "lampson necesita synsema $min_engine o más nuevo (tenés '${engine:-ninguno}'): synsema update" >&2; exit 1
+fi
 # skills externas globales, montadas bajo .lampson/ (los workspaces las ven por .lampson/global)
 mkdir -p "$here/.lampson"
 for pair in "skills-global:$HOME/.agents/skills" "skills-claude:$HOME/.claude/skills"; do

@@ -42,6 +42,12 @@ while ($i -lt $args.Count) {
     $i++
 }
 
+# motor mínimo: el hub y los workspaces declaran `trust proxy` (Synsema 0.6.42+; ver lib/origin.syn). Con uno viejo el
+# hub ni arranca: mejor decirlo acá que dejar un 502
+$MinEngine = [version]"0.6.42"
+$engine = ((& synsema --version 2>$null) -replace '^\D*', '').Trim()
+if (-not ($engine -as [version]) -or [version]$engine -lt $MinEngine) { Write-Error "lampson necesita synsema $MinEngine o más nuevo (tenés '$engine'): synsema update"; exit 1 }
+
 # skills externas globales (npx skills add -g → ~/.agents/skills; Claude Code → ~/.claude/skills), montadas bajo .lampson\
 # (una capability no puede apuntar a HOME); los workspaces las ven por su junction .lampson\global
 $skillMounts = @{ "skills-global" = (Join-Path $HOME ".agents\skills"); "skills-claude" = (Join-Path $HOME ".claude\skills") }
