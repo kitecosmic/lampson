@@ -175,7 +175,19 @@ serve on 8080
         give html(read_file("public/index.html"))
 
     route "GET /api/hub" requires auth
-        give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home()}
+        give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home(), "local": request.user["local"]}
+
+    -- ⚙ → Apagar o reiniciar: Lampson entero (hub, workspaces, edge). Lo hace cli.syn desacoplado, porque este proceso
+    -- muere en el medio. Apagar, solo desde esta PC: desde el celular no habría cómo volver a encenderlo
+    route "POST /api/hub/shutdown" requires auth
+        when not request.user["local"]
+            give fail(403, "apagar Lampson solo desde la PC donde corre: desde acá no podrías volver a encenderlo")
+        ws.cli_later("hub-stop")
+        give {"ok": true}
+
+    route "POST /api/hub/restart" requires auth
+        ws.cli_later("hub-reboot")
+        give {"ok": true}
 
     route "GET /api/workspaces" requires auth
         -- la caché del blackboard (tick + acciones) salvo ?fresh=1: la UI lo pide tras encender/apagar

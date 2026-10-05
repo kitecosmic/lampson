@@ -246,8 +246,27 @@ export task list()
         give []
     give out
 
--- Puertos TCP en escucha (cualquier proceso, gestionado o no): [{port, pid, name, command}] — via proc.sh ports
--- (Windows: netstat+tasklist · Linux: ss · macOS: lsof). Un servidor huérfano no aparece en list(); acá sí.
+-- Todos los puertos TCP en escucha con su dueño, en crudo: [{port, pid, name}] — UNA llamada a proc.sh ports
+-- (Windows: netstat+tasklist · Linux: ss · macOS: lsof), sin filtrar y sin la línea de comando. Para encontrar y
+-- parar los procesos de Lampson por su puerto (lib/workspaces.syn): el edge de --domain escucha en :443.
+export task port_owners()
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    let out be []
+    try
+        let r be run(shell(), ["lib/tools/proc.sh", "ports"], 20, {"cwd": "."})
+        each line in split(replace(r["stdout"], "\r", ""), "\n")
+            let parts be where(split(trim(line), " "), (x) => x != "")
+            when length(parts) >= 2 and matches(parts[0], "[0-9]+") and matches(parts[1], "[0-9]+")
+                set out to append(out, {"port": floor(number(parts[0])), "pid": floor(number(parts[1])), "name": when length(parts) >= 3 then parts[2] otherwise "?"})
+    recover err
+        give out
+    give out
+
+-- Puertos TCP en escucha que le interesan al usuario y al agente (panel «Puertos», tool process): sin los del
+-- sistema ni los efímeros, uno por puerto, con la línea de comando: [{port, pid, name, command}]. Un servidor
+-- huérfano no aparece en list(); acá sí.
 export task listeners()
     require exec
     require env("LAMPSON_*")
@@ -255,33 +274,32 @@ export task listeners()
     require file(".lampson")
     require file(".lampson/*")
     let out be []
-    try
-        let r be run(shell(), ["lib/tools/proc.sh", "ports"], 20, {"cwd": "."})
-        let seen be {}
-        each line in split(replace(r["stdout"], "\r", ""), "\n")
-            let parts be where(split(trim(line), " "), (x) => x != "")
-            when length(parts) >= 2
-                let port be floor(number(parts[0]))
-                let nm be when length(parts) >= 3 then parts[2] otherwise "?"
-                when port >= 1024 and port < 49152 and not contains(SYSTEM_PROCS, lower(nm)) and not contains(seen, text(port))
-                    set seen[text(port)] to true
-                    set out to append(out, {"port": port, "pid": floor(number(parts[1])), "name": nm, "command": ""})
-    recover err
-        give out
+    let seen be {}
+    each l in port_owners()
+        when l["port"] >= 1024 and l["port"] < 49152 and not contains(SYSTEM_PROCS, lower(l["name"])) and not contains(seen, text(l["port"]))
+            set seen[text(l["port"])] to true
+            set out to append(out, {"port": l["port"], "pid": l["pid"], "name": l["name"], "command": ""})
     -- la línea de comando dice QUÉ es (next dev, un MCP server de otra herramienta, synsema serve…); un run por pid
     let cmds be {}
     let enriched be []
     each l in out
         let key be text(l["pid"])
         when not contains(cmds, key)
-            try
-                let r be run(shell(), ["lib/tools/proc.sh", "info", key], 15, {"cwd": "."})
-                set cmds[key] to trim(replace(r["stdout"], "\n", " "))
-            recover err
-                set cmds[key] to ""
+            set cmds[key] to command_of(l["pid"])
         set l["command"] to when length(cmds[key]) > 300 then slice(cmds[key], 0, 300) + "…" otherwise cmds[key]
         set enriched to append(enriched, l)
     give sort_by(enriched, (x) => x["port"])
+
+-- la línea de comando de un pid ("" si no se puede saber) — via proc.sh info
+export task command_of(pid)
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    try
+        let r be run(shell(), ["lib/tools/proc.sh", "info", text(floor(pid))], 15, {"cwd": "."})
+        give trim(replace(r["stdout"], "\n", " "))
+    recover err
+        give ""
 
 -- matar un pid ajeno (huérfano de otra herramienta): taskkill /T o kill_tree, via proc.sh
 export task kill_pid(pid)

@@ -7,7 +7,7 @@
 --       web.syn chat.syn → copias (refrescadas al arrancar)        .lampson/ → estado propio (sesiones, tareas…)
 --       .lampson/global → junction a <home>/.lampson (config.json con keys, mcp/lsp globales, skills-*)
 --     con eso `file("workspace/*")`, `use "./lib/x.syn"` y todo el código de siempre funcionan SIN cambios.
---   * cada workspace corre `synsema serve web.syn --port 808N --bind 127.0.0.1` DESACOPLADO del hub (start /b,
+--   * cada workspace corre `synsema serve web.syn --port 471NN --bind 127.0.0.1` DESACOPLADO del hub (start /b,
 --     process_group:false): sobrevive a reinicios del hub y a cerrar terminales. Solo loopback.
 --   * el hub (hub.syn, :8080) se GENERA desde hub.tpl.syn con una ruta proxy por workspace y corre con
 --     `synsema serve hub.syn` desacoplado: al registrar/quitar un workspace se reescribe y un helper lo reinicia.
@@ -103,10 +103,7 @@ export task migrate_ports()
     each k in keys(doc["workspaces"])
         let w be doc["workspaces"][k]
         when w["port"] < FIRST_PORT
-            let old be w["port"]
-            each l in proc.listeners()
-                when l["port"] == old
-                    proc.kill_pid(l["pid"])
+            kill_ports([w["port"]])
             set w["port"] to doc["next_port"]
             set doc["next_port"] to doc["next_port"] + 1
             set doc["workspaces"][k] to w
@@ -480,16 +477,30 @@ export task pause_ws(w)
     summary()
     give true
 
-export task stop_ws(w)
+-- matar lo que escucha en estos puertos: UNA consulta de puertos (proc.port_owners) para todos → cuántos mató
+export task kill_ports(ports)
     require exec
-    require time
     require env("LAMPSON_*")
     require env("OS")
-    require net("127.0.0.1")
-    let victims be where(proc.listeners(), (l) => l["port"] == w["port"])
-    each l in victims
-        proc.kill_pid(l["pid"])
-    give length(victims) > 0
+    let n be 0
+    let done be {}
+    each l in proc.port_owners()
+        when contains(ports, l["port"]) and not contains(done, text(l["pid"]))
+            set done[text(l["pid"])] to true
+            proc.kill_pid(l["pid"])
+            set n to n + 1
+    give n
+
+export task stop_ws(w)
+    give kill_ports([w["port"]]) > 0
+
+-- Lampson entero (lampson --hub stop, ⚙ → Apagar o reiniciar): workspaces y hub en una sola pasada, y el edge
+export task stop_all()
+    let ports be [HUB_PORT]
+    each w in all()
+        set ports to append(ports, w["port"])
+    stop_edge()
+    give kill_ports(ports)
 
 -- ---------- hub ----------
 export task hub_alive()
@@ -518,16 +529,21 @@ export task start_hub()
     spawn_detached(".", exe + " serve " + HUB_FILE + " > .lampson/hub.log 2>&1", {"LAMPSON_HOME": home()})
     give true
 
--- hub.syn cambió (workspace nuevo/quitado): un helper DESACOPLADO (cli.syn hub-restart) para el hub y lo vuelve a
--- arrancar — puede llamarse desde el propio hub (que va a morir en el medio) o desde cli.syn
-export task restart_hub_later()
+-- un comando de cli.syn en un helper DESACOPLADO: para lo que el propio hub pide y en el medio lo mata a él
+-- (reiniciarse, apagar Lampson entero). Log en .lampson/<cmd>.log
+export task cli_later(cmd)
     require exec
     require time
     require env("LAMPSON_*")
     require env("OS")
     let exe be env("LAMPSON_SYNSEMA", "synsema")
-    spawn_detached(".", exe + " run cli.syn > .lampson/hub-restart.log 2>&1", {"LAMPSON_HOME": home(), "LAMPSON_CMD": "hub-restart"})
+    spawn_detached(".", exe + " run cli.syn > .lampson/" + cmd + ".log 2>&1", {"LAMPSON_HOME": home(), "LAMPSON_CMD": cmd, "LAMPSON_DETACHED": "1"})
     give true
+
+-- hub.syn cambió (workspace nuevo/quitado): cli.syn hub-restart para el hub y lo vuelve a arrancar (los workspaces
+-- siguen) — puede llamarse desde el propio hub o desde cli.syn
+export task restart_hub_later()
+    give cli_later("hub-restart")
 
 -- reiniciar UN workspace desde adentro (su propio proceso va a morir en el medio): un helper desacoplado
 -- (cli.syn ws-restart) lo para y lo vuelve a arrancar con el entorno nuevo — el juez de computer use se lee al
@@ -548,10 +564,7 @@ export task stop_hub()
     require time
     require env("LAMPSON_*")
     require env("OS")
-    let victims be where(proc.listeners(), (l) => l["port"] == HUB_PORT)
-    each l in victims
-        proc.kill_pid(l["pid"])
-    give length(victims) > 0
+    give kill_ports([HUB_PORT]) > 0
 
 -- ---------- dominio propio (opcional): edge HTTPS en :443 ----------
 -- `lampson --domain lampson.midominio.com --email yo@midominio.com` guarda .lampson/domain.json; desde ahí el
@@ -616,7 +629,7 @@ export task edge_alive()
     require exec
     require time
     require env("OS")
-    give length(where(proc.listeners(), (l) => l["port"] == edge_port())) > 0
+    give length(edge_pids()) > 0
 
 export task start_edge()
     require exec
@@ -634,14 +647,23 @@ export task start_edge()
     spawn_detached(".", cmd, {"LAMPSON_HOME": home()})
     give true
 
+-- el edge escucha en :443, un puerto que en un VPS puede ser de otro (nginx, caddy): se reconoce por su línea de
+-- comando, no solo por el puerto
+task edge_pids()
+    let out be []
+    each l in proc.port_owners()
+        when l["port"] == edge_port() and contains(proc.command_of(l["pid"]), EDGE_FILE)
+            set out to append(out, l["pid"])
+    give out
+
 export task stop_edge()
     require exec
     require time
     require env("OS")
-    let victims be where(proc.listeners(), (l) => l["port"] == edge_port())
-    each l in victims
-        proc.kill_pid(l["pid"])
-    give length(victims) > 0
+    let pids be edge_pids()
+    each pid in pids
+        proc.kill_pid(pid)
+    give length(pids) > 0
 
 -- lo llama el tick: dominio configurado + edge caído → levantarlo (con espera tras un intento fallido)
 export task keep_edge()

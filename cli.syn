@@ -3,7 +3,7 @@
 --   LAMPSON_CMD=ensure  LAMPSON_WORKSPACE=<ruta>  synsema run cli.syn
 --       registra/prepara el workspace, asegura el hub y su proceso → imprime UNA línea JSON {slug, port, dir, url, alive}
 --   LAMPSON_CMD=hub-status  → {alive}
---   LAMPSON_CMD=hub-start | hub-stop
+--   LAMPSON_CMD=hub-start | hub-stop | hub-reboot (stop + start: hub y workspaces; lo lanza ⚙ → Apagar o reiniciar)
 --   LAMPSON_CMD=list
 --   LAMPSON_CMD=pair  [LAMPSON_PAIR_URL=https://…]   código para emparejar un celular (lampson --pair dibuja el QR)
 --   LAMPSON_CMD=domain  LAMPSON_DOMAIN=<dominio>|off|""  [LAMPSON_EMAIL=<email>]   dominio propio con HTTPS (opcional)
@@ -55,12 +55,17 @@ otherwise when cmd == "hub-start"
     when ws.domain_cfg() != nothing and not ws.edge_alive()
         ws.start_edge()
     print(json_encode({"alive": true}))
-otherwise when cmd == "hub-stop"
-    each w in ws.all()
-        ws.stop_ws(w)
-    ws.stop_edge()
-    ws.stop_hub()
-    print(json_encode({"alive": false}))
+otherwise when cmd == "hub-stop" or cmd == "hub-reboot"
+    -- desde ⚙ llega desacoplado (workspaces.cli_later): darle al hub tiempo de contestar antes de pararlo
+    when env("LAMPSON_DETACHED", "") != ""
+        sleep(1.5)
+    ws.stop_all()
+    when cmd == "hub-reboot"
+        sleep(2)
+        ws.start_hub()
+        when ws.domain_cfg() != nothing
+            ws.start_edge()
+    print(json_encode({"alive": cmd == "hub-reboot"}))
 otherwise when cmd == "domain"
     let arg be trim(env("LAMPSON_DOMAIN", ""))
     when arg == ""

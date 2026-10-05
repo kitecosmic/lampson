@@ -177,3 +177,10 @@
 .panel label.toggle.on { color:var(--accent); }
 .panel .dform .trow label.toggle.on { color:var(--ink); }
 .panel .dform .trow { display:flex; flex-direction:column; gap:6px; margin:4px 0 16px; }
+/* ⚙ Apagar o reiniciar: botones que se confirman en el lugar (inlineConfirm) */
+.panel .dform .trow .hbtn.pwr { align-self:flex-start; }
+.panel .dform .trow .hbtn.pwr.danger { color:var(--rubric); border-color:var(--rubric); }
+.panel .dform .trow .hbtn.pwr:disabled { opacity:.45; cursor:default; }
+.panel .dform .trow .hbtn.pwr.ask { text-transform:none; letter-spacing:0; }
+.panel .dform .trow .hbtn.pwr.ask .yes { color:var(--rubric); cursor:pointer; text-decoration:underline; }
+.panel .dform .trow .hbtn.pwr.ask .no { cursor:pointer; }

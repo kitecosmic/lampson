@@ -1,5 +1,5 @@
 // config.js — configuración (⚙) y proveedor/modelo/key: UNA vista browse del Panel. Secciones a la izquierda
-// (General · Aprobaciones a distancia · Proveedor), su formulario a la derecha. Cada cosa configurable nueva
+// (General · Aprobaciones a distancia · … · Proveedor · Apagar o reiniciar), su formulario a la derecha. Cada cosa configurable nueva
 // entra como una sección más. Los valores fijados en .env se muestran bloqueados; la API key nunca vuelve.
 let setupSel = '';
 function paintModel() {
@@ -13,7 +13,8 @@ const CFG_SECTIONS = [
   { id: 'approvals', name: 'Aprobaciones a distancia', meta: 'URL pública · webhook' },
   { id: 'computer', name: 'Computer use', meta: 'escritorio y navegador · driver aparte' },
   { id: 'judge', name: 'Juez de decisión', meta: 'Jev · Laya · decisiones rápidas con probabilidades' },
-  { id: 'provider', name: 'Proveedor', meta: 'modelo · API key' }
+  { id: 'provider', name: 'Proveedor', meta: 'modelo · API key' },
+  { id: 'power', name: 'Apagar o reiniciar', meta: 'Lampson entero · hub y workspaces' }
 ];
 function cfgField(v, key, label, placeholder, ds, type) {
   return `<label class="col">${label}<input name="${key}" type="${type || 'text'}" spellcheck="false" autocomplete="off" placeholder="${esc(placeholder)}" value="${esc(v[key] || '')}" ${v[key + '_from_env'] ? 'disabled title="fijado en .env (LAMPSON_' + key.toUpperCase() + '): editalo ahí"' : ''}><span class="ds">${ds}</span></label>`;
@@ -71,6 +72,11 @@ async function openCfg(section, onboarding) {
         if (s.id === 'judge') return `<div class="dhead"><span class="nm serif">Juez de decisión</span></div><div class="dform"><p class="lead">Un modelo chico que contesta <b>con probabilidades, no con texto</b>: elige una opción de una lista, dice si algo aplica o puntúa en una escala, en menos de un segundo. Es una credencial de Lampson, como el proveedor: hoy la usa <b>computer use</b> (elige en qué control hacer clic sin gastar un turno del modelo principal) y la van a poder usar otras partes que necesiten decidir rápido.</p>`
           + judgeHtml(v)
           + `<div class="pfoot"><button class="primary" data-save-judge>Guardar</button><span class="derr"></span></div></div>`;
+        // Lampson entero (hub + workspaces): reiniciar o apagar. Apagar un workspace solo es en la lista de workspaces
+        if (s.id === 'power') return `<div class="dhead"><span class="nm serif">Apagar o reiniciar</span></div><div class="dform"><p class="lead">Lampson entero: el hub (<code>localhost:8080</code>) y todos los workspaces. Apagar <b>un</b> workspace se hace en su tarjeta, en la lista de workspaces; el hub queda prendido para encender los demás.</p>
+          <div class="trow"><button class="hbtn pwr" data-reboot>⟳ reiniciar Lampson</button><span class="ds">para todo y lo vuelve a arrancar con el código que hay en disco (por ejemplo, después de actualizar). Se cortan las terminales, los procesos que lanzó el agente y los turnos en curso; las sesiones quedan guardadas. La página vuelve sola en unos segundos.</span></div>
+          <div class="trow"><button class="hbtn pwr danger" data-shutdown>■ apagar Lampson</button><span class="ds">para el hub y todos los workspaces: esta página deja de responder. Para volver: <code>lampson --hub start</code> en una terminal (o <code>lampson</code> dentro de un proyecto). Si lo instalaste con <code>lampson --install</code>, arranca solo al iniciar sesión; para que no lo haga más, <code>lampson --uninstall</code>. <span data-remote-note hidden>Solo desde la PC donde corre: desde acá no podrías volver a encenderlo.</span></span></div>
+          <span class="derr"></span></div>`;
         // proveedor / modelo / key
         setupSel = cfg.provider || (cfg.providers || [])[0]?.name || '';
         const rows = (cfg.providers || []).map(p => `<div class="pr ${p.name === setupSel ? 'on' : ''}" data-name="${esc(p.name)}"><b>${esc(p.name)}</b><span class="dm">${esc(p.model)}</span><span class="k ${p.has_key ? '' : 'no'}">${p.name === 'ollama' ? 'sin key' : (p.has_key ? '● key guardada' : '○ sin key')}</span></div>`).join('');
@@ -171,6 +177,32 @@ async function openCfg(section, onboarding) {
               err('✓ guardado'); paintJ(r2.data.status);
             } catch (e) { err(e.message); } finally { saveJ.disabled = false; }
           };
+        }
+        const reboot = box.querySelector('[data-reboot]');
+        if (reboot) {
+          const off = box.querySelector('[data-shutdown]');
+          fetch('/api/hub').then(r => r.ok ? r.json() : null).then(h => { if (h && h.local === false) { off.disabled = true; box.querySelector('[data-remote-note]').hidden = false; } }).catch(() => {});
+          reboot.onclick = () => inlineConfirm(reboot, '¿reiniciar todo?', async () => {
+            reboot.disabled = off.disabled = true; err('reiniciando Lampson…');
+            const r2 = await api('/api/hub/restart', {});
+            if (!r2.ok) { reboot.disabled = false; err(r2.data.error || ('error ' + r2.status)); return; }
+            add('meta', '⚙ reiniciando Lampson');
+            // el hub tarda en morir (1,5 s) y en volver: esperar a que caiga y a que conteste otra vez
+            const t0 = Date.now(); let down = false;
+            while (Date.now() - t0 < 60000) {
+              await new Promise(r => setTimeout(r, 1000));
+              let up = false; try { up = (await fetch('/api/hub', { cache: 'no-store' })).ok; } catch (e) {}
+              if (!up) down = true; else if (down) { location.reload(); return; }
+            }
+            err('Lampson tarda en volver: recargá la página, o en una terminal lampson --hub status');
+          });
+          off.onclick = () => inlineConfirm(off, '¿apagar Lampson?', async () => {
+            reboot.disabled = off.disabled = true; err('apagando…');
+            const r2 = await api('/api/hub/shutdown', {});
+            if (!r2.ok) { reboot.disabled = false; off.disabled = false; err(r2.data.error || ('error ' + r2.status)); return; }
+            add('meta', '⚙ Lampson apagado — para volver: lampson --hub start');
+            err('✓ apagado en unos segundos · para volver: lampson --hub start');
+          });
         }
         const saveP = box.querySelector('[data-save-provider]');
         if (saveP) {

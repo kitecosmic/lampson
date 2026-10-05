@@ -156,17 +156,24 @@ lampson                         # in a project folder: registers it as a workspa
 lampson --web                   # same, then opens http://127.0.0.1:8080/w/<slug> in the browser
 http://127.0.0.1:8080           # the workspaces screen: open one, create one (native folder dialog; a server-side
                                 # browser on a VPS), turn them on/off, life policy
-lampson --hub start|stop|status|logs|restart
+lampson --hub start|stop|status|logs|restart   # Lampson as a whole: hub + every workspace (+ the --domain edge)
 lampson --install               # Windows: Scheduled Task at logon · Linux: systemd --user unit (Restart=always)
+lampson --uninstall             # undo --install
 ```
+
+The same from the browser: ⚙ → «Apagar o reiniciar» (`POST /api/hub/restart` · `/api/hub/shutdown`, the latter only
+from this machine). Both run `cli.syn hub-reboot|hub-stop` detached (`workspaces.cli_later`), since the hub dies
+halfway; `workspaces.stop_all` kills by port with one `proc.port_owners()` scan, and the edge is recognized by its
+command line (`edge.syn`), not just by :443, which on a VPS may belong to nginx or caddy.
 
 Why processes: in Synsema a tool's file capability is a literal path relative to the process cwd, so a workspace is
 a directory `~/lampson/.lampson/ws/<slug>/` with a junction `workspace` → your project (plus junctions to the
 install's `lib/`, `public/`, `skills/`, `plugins/`, `memory/`), and its own `.lampson/` state. Its process
-(`synsema serve web.syn --port 808N --bind 127.0.0.1`) only ever sees that folder. The hub (`hub.syn`, generated
+(`synsema serve web.syn --port 471NN --bind 127.0.0.1`) only ever sees that folder. The hub (`hub.syn`, generated
 from `hub.tpl.syn`, one proxy route per workspace) is the only listener you use: it serves the UI and forwards
 `/w/<slug>/api/…` — SSE and the WebSocket terminal included (Synsema ≥ 0.6.12). Workspace processes are detached
-from the hub, so a hub restart never kills them. The hub is also the supervisor: every 15 s it starts what should
+from the hub, so the hub restarting by itself (after adding or removing a workspace) never kills them;
+`lampson --hub stop|restart` does, on purpose. The hub is also the supervisor: every 15 s it starts what should
 be alive and stops what is idle (⚙ → hours of inactivity, `0` = never; a workspace with enabled scheduled tasks or
 policy «siempre vivo» stays up).
 
