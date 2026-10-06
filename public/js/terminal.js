@@ -65,7 +65,7 @@ function newTerm(id, show) {
   if (terms.length >= MAX_TERMS) return;
   if (show !== false) { showPane('term'); procOpen = null; clearInterval(procTimer); }
   const el = document.createElement('div'); el.className = 'xt'; $('#xterms').appendChild(el);
-  const term = new Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'), fontSize: 13, lineHeight: 1.25, theme: termTheme(), scrollback: 5000, allowProposedApi: true });
+  const term = new Terminal({ cursorBlink: true, fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono'), fontSize: 13, lineHeight: 1, theme: termTheme(), scrollback: 5000, allowProposedApi: true });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit);
   const t = { id: id || '', el, term, fit, ws: null, ro: null, box: '', meta: 'conectando…', live: false };
   terms.push(t);
