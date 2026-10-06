@@ -1,0 +1,95 @@
+/* mobile.css — la vista de celular (≤ 900 px), con js/mobile.js. Va ÚLTIMA en la cascada: solo pisa lo que cambia.
+   Barra inferior Chat · Sesiones · Archivos · Más; chips de agente/permisos/modelo sobre la caja de texto; paneles y
+   modales a pantalla completa; nada más ancho que la pantalla (el código y las tablas se deslizan dentro de su caja). */
+@media (min-width:901px) { .mtabs, .mchips, .msheet, .mnew { display:none !important; } }
+
+@media (max-width:900px) {
+  html, body { height:100%; overflow:hidden; }
+  body { height:100dvh; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto; grid-template-areas:"top" "main" "tabs"; }
+
+  /* header: una fila — dónde estás, ⚙ y tema; la segunda fila se reparte entre los chips y «Más» */
+  header { padding-top:env(safe-area-inset-top); }
+  header .hrow { height:48px; padding:0 8px 0 14px; gap:4px; }
+  header .hrow.sub { display:none; }
+  header #term, header #new { display:none; }
+  .brand { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; font-size:15px; }
+  header .spacer { display:none; }
+  .theme-toggle { padding:10px; }
+
+  /* paneles: uno por pestaña, a pantalla completa en el lugar del chat */
+  aside { display:none; }
+  body[data-mtab="side"] aside:not(.right), body[data-mtab="files"] aside.right { display:flex; grid-area:main; border:0; overflow:auto; }
+  body[data-mtab="side"] main, body[data-mtab="files"] main { display:none; }
+  aside .fold, aside .rail { display:none !important; }
+  aside.closed .sec { display:flex; }
+  aside .sec h2 { padding:15px 16px 12px; font-size:11.5px; }
+  aside.right h2, aside:not(.right) > .sec:first-of-type h2 { padding-right:16px; }
+  aside .sec .body { padding:0 12px 12px 16px; font-size:15px; }
+  aside .sec .body > * { min-height:34px; }
+  .mnew { flex:none; margin:12px 14px 4px; padding:12px; font:600 11.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; color:var(--accent); background:var(--accent-bg); border:1px solid var(--accent); border-radius:var(--r); cursor:pointer; }
+
+  /* chat: todo el ancho, nada más ancho que la pantalla */
+  #log { padding:14px 16px 18px; max-width:none; }
+  #log.hero { padding:18px 16px; align-items:flex-start; }
+  .user, .assistant, .step { overflow-wrap:anywhere; }
+  .assistant pre, .step pre { max-width:100%; }
+  .assistant table { display:block; max-width:100%; overflow-x:auto; }
+  .assistant img { max-width:100%; height:auto; }
+  .empty code { white-space:normal; }
+  .empty .grid { grid-template-columns:minmax(0,1fr); }
+  .approval .card { max-width:none; }
+  .approval .card button { min-height:40px; }
+
+  /* composer: chips arriba, texto de 16 px (iOS no hace zoom), botón grande para el dedo */
+  form { padding:8px 10px 10px; }
+  /* el texto y el botón en la misma fila (como en cualquier app de mensajes); las imágenes pegadas, arriba */
+  .composer { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px; padding:6px 6px 6px 12px; }
+  .composer .attach { flex-basis:100%; }
+  .composer textarea { flex:1; width:auto; min-width:0; min-height:0; font-size:16px; max-height:30vh; padding:7px 0; }
+  .crow { flex:none; margin:0; }
+  .crow .keys, .crow .tools { display:none; }
+  #send { width:44px; height:40px; font-size:17px; }
+  #stop { height:40px; }
+  /* chips: UNA fila que se desliza de costado (en 4 renglones le comían medio chat) */
+  .mchips { display:flex; flex-wrap:nowrap; gap:6px; margin:0 -10px 8px; padding:0 10px; overflow-x:auto; scrollbar-width:none; }
+  .mchips::-webkit-scrollbar { display:none; }
+  .mchips #wsPill { display:none !important; }
+  .mchips select, .mchips .pill { flex:none; height:30px; font:400 12px/1 var(--mono); color:var(--ink-2); background:var(--paper-2); border:1px solid var(--rule-2); border-radius:15px; padding:0 10px; }
+  .mchips select { padding-right:4px; }
+  .mchips .pill { display:inline-flex; align-items:center; max-width:62vw; }
+  .mchips .pill.on { color:var(--accent); }
+  .mchips .pill.nokey { color:var(--rubric); }
+
+  /* barra inferior */
+  .mtabs { grid-area:tabs; display:flex; background:var(--paper); border-top:1px solid var(--rule); padding-bottom:env(safe-area-inset-bottom); }
+  .mtabs button { flex:1; position:relative; display:flex; flex-direction:column; align-items:center; gap:3px; padding:9px 0 7px; background:none; border:0; color:var(--ink-3); font:400 10.5px/1 var(--mono); letter-spacing:.04em; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .mtabs button.on { color:var(--accent); }
+  .mtabs .badge { position:absolute; top:4px; left:calc(50% + 8px); min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:var(--rubric); color:#fff; font:600 10px/16px var(--mono); font-style:normal; }
+
+  /* «Más»: hoja desde abajo */
+  .msheet { position:fixed; inset:0; z-index:70; display:flex; flex-direction:column; justify-content:flex-end; }
+  .msheet .mback { position:absolute; inset:0; background:rgba(0,0,0,.45); }
+  .msheet .mcard { position:relative; background:var(--paper); border-top:1px solid var(--rule-2); border-radius:12px 12px 0 0; padding:10px 12px calc(12px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:4px; }
+  .msheet .mwhere { padding:8px 6px 10px; border-bottom:1px solid var(--rule); margin-bottom:4px; font:400 12px/1.5 var(--mono); color:var(--ink-3); overflow-wrap:anywhere; }
+  .msheet .mgit { color:var(--ink-2); margin-bottom:2px; }
+  .msheet button { text-align:left; padding:14px 8px; background:none; border:0; border-radius:var(--r); color:var(--ink); font:400 16px/1 var(--serif); text-transform:none; letter-spacing:0; cursor:pointer; }
+  .msheet button:active { background:var(--paper-2); }
+  .msheet .mcancel { text-align:center; color:var(--ink-3); font:400 12px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; margin-top:4px; border-top:1px solid var(--rule); border-radius:0; }
+
+  /* modales (configuración, sesiones, plugins…): pantalla completa; en «browse» la lista arriba y el detalle abajo */
+  .modal { align-items:stretch; justify-content:stretch; }
+  .panel, .panel.lg, .panel.md, .panel.sm { width:100vw; height:100dvh; max-height:none; border:0; border-radius:0; box-shadow:none; padding:calc(10px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
+  .panel .browse { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,38%) minmax(0,1fr); }
+  .panel .blist { border-right:0; border-bottom:1px solid var(--rule); padding:10px 0 8px; }
+  .panel .bdetail { padding:12px 2px 8px; }
+  .panel input, .panel select, .panel textarea { font-size:16px; }
+  .panel .pghost { width:36px; height:36px; flex:none; }
+  /* cabecera del modal: la ✕ siempre a la vista (la ruta de «sub» la empujaba fuera de la pantalla) */
+  .panel .phead { gap:8px; min-width:0; }
+  .panel .phead .sub { display:none; }
+  .panel .phead h3 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* terminal y visor de archivos: el ancho de la pantalla */
+  #termpane .vh { overflow-x:auto; }
+  #viewer pre { font-size:12px; }
+}
