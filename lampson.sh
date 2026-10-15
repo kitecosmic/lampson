@@ -7,7 +7,8 @@
 #   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --workspace /ruta [--agent plan] [--yolo|--strict|--ask] · --update
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# se lo llama por el symlink `lampson` (~/.local/bin): la carpeta es donde vive el script de verdad
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 caller="$(pwd)"
 ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
 while [ $# -gt 0 ]; do
