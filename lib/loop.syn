@@ -276,6 +276,19 @@ task strip_raw_tool_calls(t)
 task tool_result_msg(tc, content)
     give {"role": "tool", "tool_call_id": tc["id"], "name": tc["name"], "content": content}
 
+-- "auto" | "ask" | "" para una tool, según opts["approve"] (nombre exacto o prefijo con * al final)
+export task approve_for(opts, name)
+    when not contains(opts, "approve")
+        give ""
+    let ap be opts["approve"]
+    when contains(ap, name)
+        give ap[name]
+    each k in keys(ap)
+        when ends_with(k, "*")
+            when starts_with(name, slice(k, 0, length(k) - 1))
+                give ap[k]
+    give ""
+
 -- Ejecuta UNA tool call: permisos → allow-list → call_tool → resultado como texto.
 task execute(tc, opts, on_event)
     let tag be opts["tag"]
@@ -294,7 +307,12 @@ task execute(tc, opts, on_event)
             when why != ""
                 emit(on_event, "tool_denied", {"call": tc, "reason": "out of scope (" + why + ")"}, tag)
                 give "DENIED by scope: " + why + ". Do not retry other paths outside it; work with what is in scope or tell the user."
-    let verdict be permission.evaluate(name, args, opts["permission_mode"])
+    -- permiso por tool (runtime: "approve" en el allow-list de un agente del proyecto): "auto" = esta tool se evalúa
+    -- como en yolo (lo prohibido en todos los modos sigue prohibido); "ask" = esta tool pide aprobación siempre
+    let forced be approve_for(opts, name)
+    let verdict be permission.evaluate(name, args, when forced == "auto" then "yolo" otherwise opts["permission_mode"])
+    when forced == "ask" and verdict["decision"] == "allow"
+        set verdict to {"decision": "ask", "reason": "this agent asks before every " + name + " call"}
     when verdict["decision"] == "deny"
         emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]}, tag)
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."

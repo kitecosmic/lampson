@@ -52,7 +52,7 @@ let BASES be ["lampson", "none"]
 
 task builtin(id)
     let p be agents.PROFILES[id]
-    give {"id": id, "description": "", "role": "", "base": "lampson", "system": p["addendum"], "tools": p["tools"], "scopes": {}, "permission": "", "steps": 0, "budget_tokens": 0, "model": {"provider": "", "model": ""}, "builtin": true, "source": "builtin"}
+    give {"id": id, "description": "", "role": "", "base": "lampson", "system": p["addendum"], "tools": p["tools"], "scopes": {}, "approve": {}, "permission": "", "steps": 0, "budget_tokens": 0, "model": {"provider": "", "model": ""}, "builtin": true, "source": "builtin"}
 
 task field(raw, key, fallback)
     when contains(raw, key)
@@ -76,23 +76,37 @@ export task validate(raw, source)
     let tl be field(raw, "tools", [])
     when type_of(tl) != "list"
         give {"ok": false, "spec": nothing, "error": source + ": tools must be a list of tool names"}
-    -- cada tool: "read" (sin límite) o {"name": "read", "paths": ["dir/*", …]} (lib/scope.syn)
+    -- cada tool: "read" (sin límite, permisos del modo del agente) o un objeto con
+    --   "paths": ["dir/*", …]   alcance por ruta (lib/scope.syn; solo tools de archivos)
+    --   "approve": "auto"       esta tool corre sin pedir aprobación (como en yolo, SOLO ella; lo prohibido en todos los
+    --                           modos sigue prohibido) · "ask": esta tool pide aprobación SIEMPRE, aunque el agente sea yolo
     let names be []
     let scopes be {}
+    let approvals_by_tool be {}
     each t in tl
         when type_of(t) == "map"
             let tn be text(field(t, "name", ""))
-            let ps be field(t, "paths", [])
-            when tn == "" or type_of(ps) != "list" or length(ps) == 0
-                give {"ok": false, "spec": nothing, "error": source + ": a tool object needs a name and a non-empty paths list"}
-            when not contains(scope.SCOPABLE, tn)
-                give {"ok": false, "spec": nothing, "error": source + ": only " + join(scope.SCOPABLE, ", ") + " can be limited by path ('" + tn + "' cannot)"}
-            each pp in ps
-                let n be scope.norm(pp)
-                when not n["ok"]
-                    give {"ok": false, "spec": nothing, "error": source + ": " + n["error"]}
+            let ps be field(t, "paths", nothing)
+            let ap be lower(text(field(t, "approve", "")))
+            when tn == ""
+                give {"ok": false, "spec": nothing, "error": source + ": a tool object needs a name"}
+            when ps == nothing and ap == ""
+                give {"ok": false, "spec": nothing, "error": source + ": tool '" + tn + "': an object needs \"paths\" and/or \"approve\" (or write just \"" + tn + "\")"}
+            when ap != "" and ap != "auto" and ap != "ask"
+                give {"ok": false, "spec": nothing, "error": source + ": tool '" + tn + "': approve must be auto or ask"}
+            when ps != nothing
+                when type_of(ps) != "list" or length(ps) == 0
+                    give {"ok": false, "spec": nothing, "error": source + ": tool '" + tn + "': paths must be a non-empty list"}
+                when not contains(scope.SCOPABLE, tn)
+                    give {"ok": false, "spec": nothing, "error": source + ": only " + join(scope.SCOPABLE, ", ") + " can be limited by path ('" + tn + "' cannot)"}
+                each pp in ps
+                    let n be scope.norm(pp)
+                    when not n["ok"]
+                        give {"ok": false, "spec": nothing, "error": source + ": " + n["error"]}
+                set scopes[tn] to apply((pp) => text(pp), ps)
+            when ap != ""
+                set approvals_by_tool[tn] to ap
             set names to append(names, tn)
-            set scopes[tn] to apply((pp) => text(pp), ps)
         otherwise
             set names to append(names, text(t))
     when length(keys(scopes)) > 0
@@ -120,7 +134,7 @@ export task validate(raw, source)
     when type_of(m) != "map"
         set m to {}
     let model be {"provider": lower(text(field(m, "provider", ""))), "model": text(field(m, "model", ""))}
-    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "scopes": scopes, "buffer": buf, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
+    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "scopes": scopes, "approve": approvals_by_tool, "buffer": buf, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
 
 -- {specs, errors}: los .agent.json del proyecto (un archivo roto no tumba a los demás: va a errors)
 export task load_project()
@@ -284,6 +298,8 @@ export task opts_for(id, mode, ask_fn)
         set opts["budget_tokens"] to spec["budget_tokens"]
     when length(keys(spec["scopes"])) > 0
         set opts["scopes"] to spec["scopes"]
+    when length(keys(spec["approve"])) > 0
+        set opts["approve"] to spec["approve"]
     -- buzón de subagentes: los integrados siempre (igual que antes); uno del proyecto solo si puede delegar
     when spec["builtin"] or contains(spec["tools"], "delegate")
         set opts to loop.with_inbox(opts, agents.parent_inbox, "")

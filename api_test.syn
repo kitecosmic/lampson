@@ -249,11 +249,17 @@ while tries3 < 60
 check(cw["count"] == cw_before + 1, "UNA respuesta a Chatwoot para la ráfaga de 2 (" + text(cw["count"] - cw_before) + ")")
 check(cw["last"]["account"] == "1" and cw["last"]["conversation"] == "77" and cw["last"]["token"] == "tok-test", "a la conversación correcta, con el token de config")
 check(cw["last"]["body"]["message_type"] == "outgoing" and contains(cw["last"]["body"]["content"], "msgs=3"), "un turno con los dos mensajes: " + text(cw["last"]["body"]["content"]))
+-- el worker escribe SENT apenas vuelve el send: puede llegar un instante después de que Chatwoot recibió el mensaje
 let chlog be ""
-try
-    set chlog to read_file(".lampson/channels/chatwoot.log")
-recover err
-    set chlog to ""
+let tries4 be 0
+while not contains(chlog, "SENT 1:77") and tries4 < 40
+    set tries4 to tries4 + 1
+    try
+        set chlog to read_file(".lampson/channels/chatwoot.log")
+    recover err
+        set chlog to ""
+    when not contains(chlog, "SENT 1:77")
+        sleep(0.25)
 check(contains(chlog, "RECV 1:77") and contains(chlog, "SENT 1:77"), "el log del canal registra lo que entró y lo que salió")
 plugins.set_enabled("chatwoot", cw_was_on)
 rm_file(".lampson/channels/chatwoot.log")
@@ -288,36 +294,49 @@ check(http_get(BASE + "/mcp", {"Authorization": "Bearer " + ka["key"]}, nothing,
 print("agente ↔ agente: un Lampson usa al agente de otro Lampson por MCP HTTP (mcp.json con url + key)")
 -- Lampson A = `lampson run` con un mcp.json que apunta a este web.syn (Lampson B); la key va por ${LAMPSON_PROVEEDOR_KEY}
 write_file(".lampson/tmp/a2a_mcp.json", json_encode({"mcpServers": {"proveedor": {"url": BASE + "/mcp", "headers": {"Authorization": "Bearer ${LAMPSON_PROVEEDOR_KEY}"}}}}))
-write_file(ADIR + "/rt-a2a.agent.json", json_encode({"id": "rt-a2a", "system": "Agente de compras.", "tools": ["mcp_proveedor_*"], "permission": "yolo"}))
-let ap be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_AGENT": "rt-a2a", "LAMPSON_MESSAGE": "pregunta-proveedor", "LAMPSON_RUN_JSON": "1", "LAMPSON_MCP_CONFIG": ".lampson/tmp/a2a_mcp.json", "LAMPSON_PROVEEDOR_KEY": ka["key"]}, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
-proc_close_stdin(ap)
-let a2a_lines be []
-let a2a_code be nothing
-let a2a_deadline be now() + 90
-while a2a_code == nothing and now() < a2a_deadline
-    let ev be proc_recv(ap, 1)
-    when ev != nothing
-        when ev["type"] == "exit"
-            set a2a_code to ev["data"]["exit_code"]
-        otherwise
-            set a2a_lines to append(a2a_lines, ev["data"])
-proc_close(ap)
-let a2a_done be nothing
-let a2a_calls be []
-each l in a2a_lines
-    when starts_with(trim(l), "{")
-        try
-            let e be json_decode(trim(l))
-            when e["kind"] == "done"
-                set a2a_done to e["data"]
-            when e["kind"] == "tool_call"
-                set a2a_calls to append(a2a_calls, e["data"]["name"])
-        recover err
-            set a2a_calls to a2a_calls
-check(a2a_code == 0 and contains(a2a_calls, "mcp_proveedor_ask"), "el agente A llamó a la tool del agente B (mcp_proveedor_ask)")
-check(a2a_done != nothing and contains(a2a_done["text"], "el proveedor dijo: final ls"), "y respondió con lo que contestó el agente B: " + (when a2a_done == nothing then join(a2a_lines, " | ") otherwise a2a_done["text"]))
-when a2a_done != nothing
-    set created to append(created, a2a_done["session"])
+-- el agente A es STRICT: la tool del proveedor la habilita SOLO el permiso por tool (approve auto), sin yolo
+write_file(ADIR + "/rt-a2a.agent.json", json_encode({"id": "rt-a2a", "system": "Agente de compras.", "permission": "strict", "tools": [{"name": "mcp_proveedor_*", "approve": "auto"}]}))
+write_file(ADIR + "/rt-a2a-no.agent.json", json_encode({"id": "rt-a2a-no", "system": "Agente de compras sin permiso.", "permission": "strict", "tools": ["mcp_proveedor_*"]}))
+task run_a2a(agent_id)
+    let ap be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_AGENT": agent_id, "LAMPSON_MESSAGE": "pregunta-proveedor", "LAMPSON_RUN_JSON": "1", "LAMPSON_MCP_CONFIG": ".lampson/tmp/a2a_mcp.json", "LAMPSON_PROVEEDOR_KEY": ka["key"]}, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
+    proc_close_stdin(ap)
+    let lines be []
+    let code be nothing
+    let deadline be now() + 90
+    while code == nothing and now() < deadline
+        let ev be proc_recv(ap, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                set code to ev["data"]["exit_code"]
+            otherwise
+                set lines to append(lines, ev["data"])
+    proc_close(ap)
+    let done be nothing
+    let calls be []
+    let denied be []
+    each l in lines
+        when starts_with(trim(l), "{")
+            try
+                let e be json_decode(trim(l))
+                when e["kind"] == "done"
+                    set done to e["data"]
+                when e["kind"] == "tool_call"
+                    set calls to append(calls, e["data"]["name"])
+                when e["kind"] == "tool_denied"
+                    set denied to append(denied, e["data"]["reason"])
+            recover err
+                set calls to calls
+    give {"code": code, "done": done, "calls": calls, "denied": denied, "raw": join(lines, " | ")}
+let a2a be run_a2a("rt-a2a")
+check(a2a["code"] == 0 and contains(a2a["calls"], "mcp_proveedor_ask") and length(a2a["denied"]) == 0, "el agente A (strict + approve auto) llamó a la tool del agente B")
+check(a2a["done"] != nothing and contains(a2a["done"]["text"], "el proveedor dijo: final ls"), "y respondió con lo que contestó el agente B: " + (when a2a["done"] == nothing then a2a["raw"] otherwise a2a["done"]["text"]))
+when a2a["done"] != nothing
+    set created to append(created, a2a["done"]["session"])
+let a2n be run_a2a("rt-a2a-no")
+check(length(a2n["denied"]) == 1 and a2n["done"] != nothing and contains(a2n["done"]["text"], "DENIED"), "sin approve, el mismo agente strict NO puede usarla: " + (when length(a2n["denied"]) > 0 then a2n["denied"][0] otherwise a2n["raw"]))
+when a2n["done"] != nothing
+    set created to append(created, a2n["done"]["session"])
+rm_file(ADIR + "/rt-a2a-no.agent.json")
 rm_file(".lampson/tmp/a2a_mcp.json")
 rm_file(ADIR + "/rt-a2a.agent.json")
 

@@ -247,12 +247,16 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       compras de un restaurante" le pidió 10 panes integrales al agente `tienda` → stock, precio con promo y envío.
 
 **Pendientes que salieron en la fase 3b:**
-- [ ] **Permiso por tool en el agente.** Las tools MCP y de plugins piden aprobación (`ask`) y en `strict` se
-      deniegan; un agente sin humano que debe usar otro agente hoy necesita `"permission": "yolo"`. Propuesta:
-      `{"name": "mcp_proveedor_ask", "approve": "auto"}` en el allow-list — quien escribe el agente lo autoriza
-      explícitamente para esa tool y solo esa.
+- [x] **Permiso por tool en el agente** (así nadie está obligado a dar `yolo` para todo): en el allow-list,
+      `{"name": "mcp_proveedor_*", "approve": "auto"}` → esa tool (o ese prefijo) se evalúa como en yolo, SOLO ella
+      (lo prohibido en todos los modos sigue prohibido); `{"name": "bash", "approve": "ask"}` → pide aprobación
+      siempre, aunque el agente sea yolo. Combina con `paths`. Lo aplica `loop.execute` (`approve_for`). Probado:
+      unitarios, `ask` sin humano → denegado, y agente ↔ agente con el agente A en `strict` + `approve: auto` (y el
+      mismo agente sin `approve` → denegado).
 - [ ] Respuestas en streaming (SSE) desde nuestro servidor MCP y progreso mientras el agente trabaja.
-- [ ] `tty_test` falló 1 de 4 corridas con la máquina cargada (maneja la terminal por PTY con tiempos fijos).
+- [ ] `tty_test` intermitente (~1 de cada 20-25 corridas): la vez que se pudo ver, quedó colgado después del paso
+      Esc, antes de `/exit` (que mide 0,1 s; ese camino no cambió). Parece del manejo de la PTY bajo carga, no del
+      motor. Si se vuelve frecuente: timeout propio por paso y volcar la pantalla al fallar.
 
 ### Fase 4 — Canales como plugins
 Contrato en la cabecera de `lib/channels.syn`. Universal a propósito: cada uno arma el canal que necesite, la
