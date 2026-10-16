@@ -132,6 +132,53 @@ task arg(args, k)
         give trim(text(args[k]))
     give ""
 
+-- ---------- stock y pedidos guardados (update_order / cancel_order) ----------
+task qty_by_sku(lines)
+    let m be {}
+    each ln in lines
+        let k be upper(text(ln["sku"]))
+        set m[k] to (when contains(m, k) then m[k] otherwise 0) + floor(number(ln["qty"]))
+    give m
+
+-- el catálogo con el stock movido: deltas = {sku: unidades que SALEN} (negativo = vuelven)
+task shift_stock(cat, deltas)
+    let prods be []
+    each p in cat["products"]
+        let k be upper(text(p["sku"]))
+        when contains(deltas, k)
+            set p["stock"] to floor(num(p, "stock", 0)) - deltas[k]
+        set prods to append(prods, p)
+    set cat["products"] to prods
+    give cat
+
+task negate(m)
+    let out be {}
+    each k in keys(m)
+        set out[k] to 0 - m[k]
+    give out
+
+-- lo que cambia entre dos carritos: nuevo - viejo, por sku
+task delta(new_q, old_q)
+    let out be {}
+    each k in keys(new_q)
+        set out[k] to new_q[k] - (when contains(old_q, k) then old_q[k] otherwise 0)
+    each k in keys(old_q)
+        when not contains(new_q, k)
+            set out[k] to 0 - old_q[k]
+    give out
+
+task quote_problem(q)
+    give (when length(q["unknown"]) > 0 then "unknown sku " + join(q["unknown"], ", ") + " " otherwise "") + (when length(q["short"]) > 0 then "not enough stock for " + join(apply(q["short"], (s) => s["name"] + " (asked " + text(s["asked"]) + ", available " + text(s["available"]) + ")"), ", ") otherwise "") + (when length(q["lines"]) == 0 then "empty cart" otherwise "")
+
+-- un pedido guardado que todavía se puede tocar: {ok, order} o {ok: false, error}
+task editable(oid)
+    when not matches(oid, "P-[0-9]{1,8}") or not file_exists(DIR + "/" + oid + ".json")
+        give {"ok": false, "error": "no order " + oid}
+    let o be json_decode(read_file(DIR + "/" + oid + ".json"))
+    when o["status"] != "new"
+        give {"ok": false, "error": "order " + oid + " is '" + text(o["status"]) + "': it can't be changed or cancelled from here anymore — the customer has to talk to the store"}
+    give {"ok": true, "order": o}
+
 let tool be env("PLUGIN_TOOL", "")
 let args be json_decode(env("PLUGIN_ARGS", "{}"))
 
@@ -195,6 +242,77 @@ try
                 set cs[ckey] to {"name": name, "phone": arg(cust, "phone"), "address": when address != "" then address otherwise (when contains(prev, "address") then prev["address"] otherwise ""), "orders": append(prev["orders"], id), "last": order["created"]}
                 write_file(CUSTOMERS, json_encode(cs))
                 out({"ok": true, "order_id": id, "total": q["total"], "subtotal": q["subtotal"], "discount": q["discount"], "delivery_fee": q["delivery_fee"], "delivery": delivery, "address": address, "payment": payment, "eta": when delivery == "delivery" and contains(d, "eta") then d["eta"] otherwise "", "lines": q["lines"]})
+    otherwise when tool == "update_order"
+        let ed be editable(upper(arg(args, "order_id")))
+        when not ed["ok"]
+            fail(ed["error"])
+        otherwise
+            let o be ed["order"]
+            let cat be load_catalog()
+            let old be qty_by_sku(o["lines"])
+            -- sin "items" el carrito queda como estaba (cambia solo la entrega, el pago, la hora o las notas)
+            let items be when contains(args, "items") and args["items"] != nothing then args["items"] otherwise apply(o["lines"], (l) => {"sku": l["sku"], "qty": l["qty"]})
+            let delivery be when arg(args, "delivery") != "" then arg(args, "delivery") otherwise o["delivery"]
+            let address be when arg(args, "address") != "" then arg(args, "address") otherwise o["address"]
+            let payment be when arg(args, "payment") != "" then arg(args, "payment") otherwise o["payment"]
+            let methods be when contains(cat, "payment") and cat["payment"] != nothing then cat["payment"] otherwise []
+            when delivery != "delivery" and delivery != "pickup"
+                fail("delivery must be delivery or pickup")
+            otherwise when delivery == "delivery" and address == ""
+                fail("missing: address — ask the customer, then update the order")
+            otherwise when length(methods) > 0 and length(where(methods, (m) => lower(text(m)) == lower(payment))) == 0
+                fail("payment '" + payment + "' is not accepted; accepted: " + join(apply(methods, (m) => text(m)), ", "))
+            otherwise
+                when length(methods) > 0
+                    set payment to text(where(methods, (m) => lower(text(m)) == lower(payment))[0])
+                -- lo que este pedido ya tiene reservado cuenta como disponible para él
+                let q be quote_of(shift_stock(cat, negate(old)), items, delivery)
+                when not q["ok"]
+                    out({"ok": false, "error": "cannot update it: " + quote_problem(q), "quote": q})
+                otherwise
+                    write_file(CATALOG, json_encode(shift_stock(cat, delta(qty_by_sku(q["lines"]), old))))
+                    let before be o["total"]
+                    let stamp be format_time(now(), "%Y-%m-%d %H:%M")
+                    let hist be when contains(o, "history") and o["history"] != nothing then o["history"] otherwise []
+                    set o["history"] to append(hist, {"at": stamp, "change": "updated", "total_before": before})
+                    set o["lines"] to q["lines"]
+                    set o["subtotal"] to q["subtotal"]
+                    set o["discount"] to q["discount"]
+                    set o["delivery"] to delivery
+                    set o["address"] to address
+                    set o["delivery_fee"] to q["delivery_fee"]
+                    set o["total"] to q["total"]
+                    set o["payment"] to payment
+                    set o["updated"] to stamp
+                    when contains(args, "when") and args["when"] != nothing
+                        set o["when"] to arg(args, "when")
+                    when contains(args, "notes") and args["notes"] != nothing
+                        set o["notes"] to arg(args, "notes")
+                    write_file(DIR + "/" + o["id"] + ".json", json_encode(o))
+                    when address != "" and contains(o["customer"], "key")
+                        let cs be load_customers()
+                        when contains(cs, o["customer"]["key"])
+                            let c be cs[o["customer"]["key"]]
+                            set c["address"] to address
+                            set cs[o["customer"]["key"]] to c
+                            write_file(CUSTOMERS, json_encode(cs))
+                    let d be when contains(cat, "delivery") and cat["delivery"] != nothing then cat["delivery"] otherwise {}
+                    out({"ok": true, "order_id": o["id"], "total": q["total"], "total_before": before, "subtotal": q["subtotal"], "discount": q["discount"], "delivery_fee": q["delivery_fee"], "delivery": delivery, "address": address, "payment": payment, "when": o["when"], "eta": when delivery == "delivery" and contains(d, "eta") then d["eta"] otherwise "", "lines": q["lines"]})
+    otherwise when tool == "cancel_order"
+        let ed be editable(upper(arg(args, "order_id")))
+        when not ed["ok"]
+            fail(ed["error"])
+        otherwise
+            let o be ed["order"]
+            -- el stock vuelve al catálogo
+            write_file(CATALOG, json_encode(shift_stock(load_catalog(), negate(qty_by_sku(o["lines"])))))
+            let stamp be format_time(now(), "%Y-%m-%d %H:%M")
+            let hist be when contains(o, "history") and o["history"] != nothing then o["history"] otherwise []
+            set o["history"] to append(hist, {"at": stamp, "change": "cancelled", "reason": arg(args, "reason")})
+            set o["status"] to "cancelled"
+            set o["cancelled"] to stamp
+            write_file(DIR + "/" + o["id"] + ".json", json_encode(o))
+            out({"ok": true, "order_id": o["id"], "status": "cancelled", "total_was": o["total"]})
     otherwise when tool == "find_customer"
         let cs be load_customers()
         let key be ""
