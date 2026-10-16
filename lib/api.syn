@@ -10,18 +10,19 @@
 --
 -- Auth: SIEMPRE `Authorization: Bearer lk_…` (lib/apikeys.syn), también por loopback: el hub reenvía /v1 sin pedir
 -- passkey y este proceso confía en todo lo que le llega del hub, así que la key es la única puerta.
+-- Todo mensaje pasa por el buzón de su conversación (lib/mailbox.syn): fila por (agente, thread), espera de silencio
+-- ("buffer" del agente; default 3 s / tope 15 s) y lo que llega a mitad de turno entra al turno en curso. Los
+-- mensajes de una ráfaga reciben la MISMA respuesta, con "batch" (ids del lote) y "lead" (el que lo encabeza).
 -- Permisos: el modo del agente, o strict si no dice. En `ask`, la aprobación sale por la cola de lib/approvals.syn
 -- (UI, link firmado al webhook, /approve en la terminal) y vence → denegado. Nunca se auto-aprueba.
--- Callback: POST JSON {job, status, agent, thread, session, text, steps, usage, stopped, meta}; con
--- LAMPSON_WEBHOOK_SECRET va firmado (X-Lampson-Signature: sha256=<hmac hex>), igual que las aprobaciones.
+-- Callback: UN POST por lote y URL: {job, jobs, batch, status, agent, thread, session, text, steps, usage, stopped,
+-- meta}; con LAMPSON_WEBHOOK_SECRET va firmado (X-Lampson-Signature: sha256=<hmac hex>). Los demás jobs del lote
+-- quedan "merged" (merged_into = el que encabeza).
 
 use "./runtime.syn" as runtime
 use "./apikeys.syn" as apikeys
-use "./approvals.syn" as approvals
-use "./permission.syn" as permission
+use "./mailbox.syn" as mailbox
 
-export let JOBS_DIR be ".lampson/api/jobs"
-export let APPROVAL_TIMEOUT be 180
 
 -- la key del header Authorization (o nothing)
 export task bearer_of(h)
@@ -86,141 +87,31 @@ export task parse(body, rec)
     let meta be field(body, "meta", {})
     when type_of(meta) != "map"
         set meta to {}
+    -- la hora en que el cliente escribió (unix s), si el canal la da: ordena una ráfaga que llegó desordenada
+    when contains(body, "sent_at") and body["sent_at"] != nothing
+        set meta["sent_at"] to body["sent_at"]
     let sobre be {"to": target, "thread": text(field(body, "thread", "")), "session": text(field(body, "session", "")), "from": from, "text": msg, "images": images, "channel": text(field(body, "channel", "http")), "meta": meta}
     give {"ok": true, "status": 200, "error": "", "sobre": sobre, "callback": cb, "stream": field(body, "stream", false) == true}
 
--- aprobación humana para la API: la cola de lib/approvals.syn (no hay nadie en la request para preguntarle)
-export task approve_api(name, args, why)
-    require time
-    require random
-    require net
-    require env("LAMPSON_*")
-    require file.read(".lampson")
-    require file.read(".lampson/*")
-    let id be approvals.open("api", permission.describe_call(name, args), why, APPROVAL_TIMEOUT)
-    give approvals.wait(id, APPROVAL_TIMEOUT)
+-- el modo de un agente por la API: el suyo, y si no dice → strict (nadie en la request para preguntarle)
+export task mode_for(spec)
+    give when spec != nothing and spec["permission"] != "" then "" otherwise "strict"
 
--- hooks del runtime para la API: sin modo pedido → el del agente, y si el agente no dice → strict
-export task hooks(sobre, on_event, on_start)
+-- opts del buzón (lib/mailbox.syn) para un sobre ya validado
+export task mailbox_opts(sobre)
     require file.read("workspace")
     require file.read("workspace/*")
     let spec be runtime.get(sobre["to"])
-    let mode be when spec != nothing and spec["permission"] != "" then "" otherwise "strict"
-    give {"mode": mode, "ask_fn": approve_api, "on_event": on_event, "on_start": on_start}
+    give {"mode": mode_for(spec), "buffer": mailbox.buffer_of(spec, mailbox.DEFAULT_BUFFER)}
 
--- ---------- trabajos asíncronos (callback) ----------
-
-task job_path(id)
-    give JOBS_DIR + "/" + id + ".json"
+-- registro de un trabajo con callback (lo completa el worker del buzón al entregar)
+export task create_job(id, rec, sobre, callback)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    mailbox.save_job({"job": id, "status": "queued", "key": rec["id"], "agent": sobre["to"], "thread": sobre["thread"], "callback": callback, "created": format_time(now()), "result": nothing, "delivered": false, "merged_into": nothing})
 
 export task job(id)
     require file.read(".lampson")
     require file.read(".lampson/*")
-    when not matches(id, "j[0-9a-zA-Z_-]{4,40}")
-        give nothing
-    try
-        give json_decode(read_file(job_path(id)))
-    recover err
-        give nothing
-
-task save_job(j)
-    require file(".lampson")
-    require file(".lampson/*")
-    write_file(job_path(j["job"]), json_encode(j))
-
--- encola: escribe el trabajo y devuelve {job, status:"queued"}; quien llama lanza el agente con el spec
-export task enqueue(p, rec)
-    require time
-    require random
-    require file(".lampson")
-    require file(".lampson/*")
-    let id be "j" + slice(text(floor(now() * 1000)), 5, 13) + slice(token(16), 0, 4)
-    let j be {"job": id, "status": "queued", "key": rec["id"], "agent": p["sobre"]["to"], "thread": p["sobre"]["thread"], "callback": p["callback"], "created": format_time(now()), "result": nothing, "delivered": false}
-    save_job(j)
-    give {"job": id, "spec": json_encode({"job": id, "sobre": p["sobre"], "callback": p["callback"]})}
-
-task post_callback(url, payload)
-    require net
-    require env("LAMPSON_*")
-    require file.read(".lampson")
-    require file.read(".lampson/*")
-    let body be json_encode(payload)
-    let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
-    let sec be env("LAMPSON_WEBHOOK_SECRET", "")
-    when sec != ""
-        set headers["X-Lampson-Signature"] to "sha256=" + decode(hmac(body, sec), "hex")
-    -- dos intentos: un receptor que parpadea no pierde la respuesta
-    let tries be 0
-    while tries < 2
-        set tries to tries + 1
-        try
-            let r be http_post(url, body, headers, 15)
-            when r["ok"]
-                give true
-            print("[lampson api] callback " + url + " respondió " + text(r["status"]))
-        recover err
-            print("[lampson api] callback falló: " + text(err))
-    give false
-
--- corre un trabajo (lo llama el agente ApiJob vía la task top-level lampson_api_job del entry)
-export task run_job(spec_json)
-    require net
-    require exec
-    require time
-    require random
-    require file(".lampson")
-    require file(".lampson/*")
-    require file("workspace")
-    require file("workspace/*")
-    require file.read("skills")
-    require file.read("skills/*")
-    require file.read("plugins")
-    require file.read("plugins/*")
-    require file.read("memory")
-    require file.read("memory/*")
-    require env("LAMPSON_*")
-    require env("OS")
-    require secret("LAMPSON_*")
-    let spec be json_decode(spec_json)
-    let j be job(spec["job"])
-    set j["status"] to "running"
-    save_job(j)
-    let result be nothing
-    try
-        set result to runtime.deliver(spec["sobre"], hooks(spec["sobre"], nothing, nothing))
-    recover err
-        set result to {"agent": spec["sobre"]["to"], "thread": spec["sobre"]["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
-    set j["status"] to when starts_with(result["stopped"], "error") then "error" otherwise "done"
-    set j["result"] to result
-    set j["finished"] to format_time(now())
-    save_job(j)
-    let payload be {"job": j["job"], "status": j["status"], "agent": result["agent"], "thread": result["thread"], "session": result["session"], "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "meta": spec["sobre"]["meta"]}
-    set j["delivered"] to post_callback(spec["callback"], payload)
-    save_job(j)
-    give j["status"]
-
--- MIGA runtime (igual que agents.Child): un `agent` solo ve sus parámetros, las builtins y las tasks TOP-LEVEL del
--- entry. web.syn define `task lampson_api_job(spec_json) give api.run_job(spec_json)`.
-agent ApiJob
-    require net
-    require exec
-    require time
-    require random
-    require file(".lampson")
-    require file(".lampson/*")
-    require file("workspace")
-    require file("workspace/*")
-    require file.read("skills")
-    require file.read("skills/*")
-    require file.read("plugins")
-    require file.read("plugins/*")
-    require file("memory")
-    require file("memory/*")
-    require env("LAMPSON_*")
-    require env("OS")
-    require secret("LAMPSON_*")
-    lampson_api_job(spec_json)
-
-export task start_job(spec_json)
-    spawn ApiJob with spec_json = spec_json
-    give true
+    give mailbox.job(id)

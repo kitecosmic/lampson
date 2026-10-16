@@ -1471,3 +1471,23 @@ test "runtime: tools con paths — validación y opts"
     assert_eq(o["scopes"], {"read": ["datos/*"]})
     assert(not contains(runtime.opts_for("build", "", nothing), "scopes"), "un integrado no tiene scopes")
     rm_file(runtime.PROJECT_DIR + "/rt-s.agent.json")
+
+use "./lib/mailbox.syn" as mailbox
+
+test "runtime: buffer del agente — false, {quiet_s, max_s} o nada (la de la puerta)"
+    assert_eq(runtime.validate({"id": "a", "system": "x"}, "x")["spec"]["buffer"], nothing)
+    assert_eq(runtime.validate({"id": "a", "system": "x", "buffer": false}, "x")["spec"]["buffer"], false)
+    assert_eq(runtime.validate({"id": "a", "system": "x", "buffer": {"quiet_s": 2}}, "x")["spec"]["buffer"], {"quiet_s": 2, "max_s": 15})
+    assert(not runtime.validate({"id": "a", "system": "x", "buffer": {"quiet_s": 10, "max_s": 5}}, "x")["ok"], "max < quiet")
+    assert(not runtime.validate({"id": "a", "system": "x", "buffer": "mucho"}, "x")["ok"])
+
+test "mailbox: espera por agente y clave de la conversación"
+    assert_eq(mailbox.buffer_of(nothing, mailbox.DEFAULT_BUFFER), {"quiet_s": 3, "max_s": 15})
+    assert_eq(mailbox.buffer_of({"buffer": false}, mailbox.DEFAULT_BUFFER), {"quiet_s": 0, "max_s": 0})
+    assert_eq(mailbox.buffer_of({"buffer": {"quiet_s": 1, "max_s": 4}}, mailbox.DEFAULT_BUFFER), {"quiet_s": 1, "max_s": 4})
+    assert_eq(mailbox.buffer_of({"buffer": nothing}, mailbox.DEFAULT_BUFFER), mailbox.DEFAULT_BUFFER, "sin campo = la de la puerta")
+    let s1 be {"to": "tienda", "thread": "wa:1", "session": ""}
+    assert_eq(mailbox.key_of(s1, "m1"), mailbox.key_of(s1, "m2"), "mismo thread → misma fila")
+    assert(mailbox.key_of(s1, "m1") != mailbox.key_of({"to": "otro", "thread": "wa:1", "session": ""}, "m1"), "otro agente → otra fila")
+    let s2 be {"to": "tienda", "thread": "", "session": ""}
+    assert(mailbox.key_of(s2, "m1") != mailbox.key_of(s2, "m2"), "sin thread ni sesión: cada mensaje es su propia fila")

@@ -106,11 +106,21 @@ export task validate(raw, source)
     let budget be number(field(raw, "budget_tokens", 0))
     when steps < 0 or budget < 0
         give {"ok": false, "spec": nothing, "error": source + ": steps and budget_tokens must be >= 0"}
+    -- espera de silencio del buzón (lib/mailbox.syn): false = sin espera; {quiet_s, max_s}; sin campo = la de la puerta
+    let buf be field(raw, "buffer", nothing)
+    when buf != nothing and buf != false
+        when type_of(buf) != "map"
+            give {"ok": false, "spec": nothing, "error": source + ": buffer must be false or {\"quiet_s\": 3, \"max_s\": 15}"}
+        let qs be number(field(buf, "quiet_s", 3))
+        let ms be number(field(buf, "max_s", 15))
+        when qs < 0 or ms < qs
+            give {"ok": false, "spec": nothing, "error": source + ": buffer needs 0 <= quiet_s <= max_s"}
+        set buf to {"quiet_s": qs, "max_s": ms}
     let m be field(raw, "model", {})
     when type_of(m) != "map"
         set m to {}
     let model be {"provider": lower(text(field(m, "provider", ""))), "model": text(field(m, "model", ""))}
-    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "scopes": scopes, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
+    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "scopes": scopes, "buffer": buf, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
 
 -- {specs, errors}: los .agent.json del proyecto (un archivo roto no tumba a los demás: va a errors)
 export task load_project()

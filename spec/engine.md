@@ -176,8 +176,18 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       jobs, revocar) — y a mano por el hub con el modelo real (agente `tienda`, JSON + SSE + callback)
 
 **Pendientes que salieron en la fase 2:**
-- [ ] Dos mensajes del mismo thread a la vez (un cliente que manda tres seguidos) corren en paralelo sobre la misma
-      sesión: el último en guardar pisa al otro. Hace falta una cola por `(agente, thread)`.
+- [x] **Buzón por conversación** (`lib/mailbox.syn`): antes, tres mensajes seguidos del mismo cliente corrían en
+      paralelo sobre la misma sesión (el último en guardar pisaba a los otros) y salían tres respuestas sueltas.
+      1. **Fila por `(agente, thread)`, siempre**: nunca dos turnos a la vez sobre la misma conversación.
+      2. **Espera de silencio**: el turno arranca tras `quiet_s` sin mensajes nuevos o al cumplirse `max_s` desde el
+         primero; la ráfaga va en UN turno, ordenada por `sent_at` (hora del cliente, si el canal la da) o llegada.
+         Por agente: `"buffer": {"quiet_s": 3, "max_s": 15}` (default de la API) o `"buffer": false`.
+      3. **A mitad de turno**: lo que llega mientras el agente trabaja entra por `opts.inbox_fn` antes de la próxima
+         llamada al modelo.
+      Todos los mensajes del lote reciben la misma respuesta (`batch`, `lead`); con callback, UN POST por lote y
+      URL, y los demás jobs quedan `merged`. Probado en `api_test.syn` (ráfaga desordenada, mitad de turno,
+      clientes en paralelo, callback) y con el modelo real: "hola" / "¿precio del pan sin gluten?" / "¿hay stock?"
+      a 0,1 / 1,3 / 3,0 s → un lote, una respuesta con precio y stock.
 - [ ] Rate limit por key (`rate_limit` de Synsema en las rutas `/v1`, o propio por key).
 - [ ] Probar el modo `ask` por la API con una aprobación real (el código reusa la cola; no tiene test propio).
 - [ ] Las keys solo se ven por la CLI: falta panel en la web (va con la documentación, al final).
@@ -219,6 +229,14 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — El buzón va en el **runtime**, no en cada canal: lo aprovechan la API, cualquier canal-plugin y
+  después los agentes que se mandan mensajes (fase 6), y nadie que escriba un canal tiene que reimplementarlo. La
+  fila no es opcional (es corrección); la espera sí (`buffer`). Mecánica: estado de `serve` (`state_*`) con un lock
+  por conteo (`state_incr`), un worker por conversación (`agent MailboxWorker`) que se va cuando la fila queda
+  vacía (tomar y soltar bajo el mismo lock: ningún mensaje queda huérfano), eventos por el bus para el SSE. El
+  `agent ApiJob` de la fase 2 desapareció: los callbacks los entrega el worker. Bajo `lampson run` no hay fila
+  (cada proceso es un mensaje); la terminal y el chat web tampoco la usan (la persona está mirando).
 
 - **2026-10-16** — Fase 2 hecha. Decisiones del camino:
   - El sobre va en el **body** (`POST /v1/messages`), no en la URL (`/agents/:a/threads/:t/…`): un thread como

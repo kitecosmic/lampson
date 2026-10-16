@@ -71,6 +71,7 @@ use "./lib/judge.syn" as jdg
 use "./lib/origin.syn" as origin
 use "./lib/runtime.syn" as runtime
 use "./lib/api.syn" as api
+use "./lib/mailbox.syn" as mailbox
 
 let APPROVAL_TIMEOUT be 180
 
@@ -106,9 +107,9 @@ task as_text(x)
 task lampson_subagent(spec_json)
     give agents.run_child_json(spec_json)
 
--- Trabajo asíncrono de la API /v1 (callback): `agent ApiJob` (lib/api.syn) solo llama tasks TOP-LEVEL; esta es su puerta
-task lampson_api_job(spec_json)
-    give api.run_job(spec_json)
+-- Worker del buzón de una conversación (lib/mailbox.syn): `agent MailboxWorker` solo llama tasks TOP-LEVEL; esta es su puerta
+task lampson_mailbox_worker(spec_json)
+    give mailbox.work(spec_json)
 
 -- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
 -- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada
@@ -676,11 +677,15 @@ serve on 8080
         when not p["ok"]
             give fail(p["status"], p["error"])
         state_set("lampson:last_used", now())
+        -- todo pasa por el buzón de la conversación (lib/mailbox.syn): fila, espera de silencio, mitad de turno
+        let mo be api.mailbox_opts(p["sobre"])
         when p["callback"] != ""
-            let q be api.enqueue(p, a["key"])
-            api.start_job(q["spec"])
-            give respond(json_encode({"job": q["job"], "status": "queued"}), "application/json", 202)
-        give runtime.deliver(p["sobre"], api.hooks(p["sobre"], nothing, nothing))
+            let jid be mailbox.new_id()
+            api.create_job(jid, a["key"], p["sobre"], p["callback"])
+            mailbox.submit(p["sobre"], merge(mo, {"id": jid, "callback": p["callback"], "job": true}))
+            give respond(json_encode({"job": jid, "status": "queued"}), "application/json", 202)
+        let s be mailbox.submit(p["sobre"], mo)
+        give mailbox.wait(s["id"])
 
     route "POST /w/:slug/v1/messages/stream"
         let a be api.authorize(headers of request)
@@ -691,14 +696,34 @@ serve on 8080
             give fail(p["status"], p["error"])
         state_set("lampson:last_used", now())
         let sobre be p["sobre"]
+        let mo be api.mailbox_opts(sobre)
+        -- suscripto ANTES de encolar: el worker publica en el bus los eventos de la conversación
+        let mid be mailbox.new_id()
+        let sub be bus_subscribe("lampson.mb." + mailbox.key_of(sobre, mid))
+        mailbox.submit(sobre, merge(mo, {"id": mid}))
         stream
-            task emit_api(kind, data, tag)
-                when kind != "busy" and kind != "idle"
-                    send {"kind": kind, "data": data, "tag": tag, "agent": sobre["to"], "thread": sobre["thread"]} as "event"
-            task start_api(info)
-                send {"kind": "session", "data": info, "tag": "", "agent": info["agent"], "thread": info["thread"]} as "event"
-            let result be runtime.deliver(sobre, api.hooks(sobre, emit_api, start_api))
-            send {"kind": "done", "data": result, "tag": "", "agent": result["agent"], "thread": result["thread"]} as "event"
+            let finished be false
+            let deadline be now() + mailbox.WAIT_TIMEOUT
+            while not finished and now() < deadline
+                let ev be bus_recv(sub, 1)
+                when ev != nothing
+                    let d be ev["data"]
+                    when d["kind"] == "done"
+                        -- el done de un lote anterior de la misma conversación no es el nuestro
+                        when contains(d["data"]["batch"], mid)
+                            state_delete("mb:res:" + mid)
+                            send d as "event"
+                            set finished to true
+                    otherwise
+                        send d as "event"
+                -- por si el done pasó mientras no estábamos escuchando
+                when not finished
+                    let r be state_get("mb:res:" + mid, nothing)
+                    when r != nothing
+                        state_delete("mb:res:" + mid)
+                        send {"kind": "done", "data": r, "tag": "", "agent": r["agent"], "thread": r["thread"]} as "event"
+                        set finished to true
+            bus_unsubscribe(sub)
 
     route "GET /w/:slug/v1/jobs/:id"
         let a be api.authorize(headers of request)
