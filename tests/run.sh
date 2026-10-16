@@ -41,4 +41,6 @@ LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" synsema run fetch_test.syn || code=
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run agents_test.syn || code=1
 # runtime (deliver, agentes del proyecto, sesión por thread) y la puerta `lampson run` contra el mismo mock
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run run_test.syn || code=1
+# API /v1 (keys, JSON, SSE, callback firmado) contra web.syn de verdad en :47990
+LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run api_test.syn || code=1
 exit "${code:-0}"

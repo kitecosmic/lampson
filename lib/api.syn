@@ -1,0 +1,226 @@
+-- lib/api.syn — la API HTTP /v1 de un workspace (spec/engine.md, fase 2). Las rutas viven en web.syn; acá la lógica.
+--
+--   GET  /w/<slug>/v1/agents        los agentes que la key puede usar
+--   POST /w/<slug>/v1/messages      un sobre → respuesta. Tres formas:
+--        {"to", "thread", "text", "images", "from", "meta"}               → JSON con el resultado (espera el turno)
+--        … + "stream": true                                             → SSE: los mismos eventos que `lampson run --json`
+--        … + "callback": "https://…"                                     → 202 {job} enseguida; el resultado va por POST
+--                                                                         al callback (canal `http`: WhatsApp, n8n…)
+--   GET  /w/<slug>/v1/jobs/<id>     estado de un trabajo asíncrono
+--
+-- Auth: SIEMPRE `Authorization: Bearer lk_…` (lib/apikeys.syn), también por loopback: el hub reenvía /v1 sin pedir
+-- passkey y este proceso confía en todo lo que le llega del hub, así que la key es la única puerta.
+-- Permisos: el modo del agente, o strict si no dice. En `ask`, la aprobación sale por la cola de lib/approvals.syn
+-- (UI, link firmado al webhook, /approve en la terminal) y vence → denegado. Nunca se auto-aprueba.
+-- Callback: POST JSON {job, status, agent, thread, session, text, steps, usage, stopped, meta}; con
+-- LAMPSON_WEBHOOK_SECRET va firmado (X-Lampson-Signature: sha256=<hmac hex>), igual que las aprobaciones.
+
+use "./runtime.syn" as runtime
+use "./apikeys.syn" as apikeys
+use "./approvals.syn" as approvals
+use "./permission.syn" as permission
+
+export let JOBS_DIR be ".lampson/api/jobs"
+export let APPROVAL_TIMEOUT be 180
+
+-- la key del header Authorization (o nothing)
+export task bearer_of(h)
+    let a be ""
+    each k in keys(h)
+        when lower(k) == "authorization"
+            set a to text(h[k])
+    when starts_with(lower(a), "bearer ")
+        give trim(slice(a, 7, length(a)))
+    give nothing
+
+-- {ok, key, status, error}: la key válida, o por qué no
+export task authorize(h)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    let rec be apikeys.check(bearer_of(h))
+    when rec == nothing
+        give {"ok": false, "key": nothing, "status": 401, "error": "missing or invalid API key (Authorization: Bearer lk_…; create one with `lampson key add`)"}
+    give {"ok": true, "key": rec, "status": 200, "error": ""}
+
+-- los agentes que esta key puede usar: [{id, description}]
+export task agents_for(rec)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let out be []
+    each id in runtime.names()
+        when apikeys.allows(rec, id)
+            set out to append(out, {"id": id, "description": runtime.get(id)["description"]})
+    give out
+
+task field(m, k, fallback)
+    when contains(m, k)
+        when m[k] != nothing
+            give m[k]
+    give fallback
+
+-- {ok, sobre, callback, stream, status, error}: el body de POST /v1/messages ya validado contra la key
+export task parse(body, rec)
+    require env("LAMPSON_*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    when body == nothing or type_of(body) != "map"
+        give {"ok": false, "status": 400, "error": "body must be a JSON object"}
+    let msg be text(field(body, "text", ""))
+    when trim(msg) == ""
+        give {"ok": false, "status": 400, "error": "text is required"}
+    let target be lower(text(field(body, "to", runtime.default_agent())))
+    when not contains(runtime.names(), target)
+        give {"ok": false, "status": 404, "error": "no agent named '" + target + "'"}
+    when not apikeys.allows(rec, target)
+        give {"ok": false, "status": 403, "error": "this API key cannot use agent '" + target + "'"}
+    let cb be text(field(body, "callback", ""))
+    when cb != "" and not (starts_with(cb, "https://") or starts_with(cb, "http://"))
+        give {"ok": false, "status": 400, "error": "callback must be an http(s) URL"}
+    let images be field(body, "images", [])
+    when type_of(images) != "list"
+        set images to []
+    let from be field(body, "from", {})
+    when type_of(from) != "map"
+        set from to {}
+    let meta be field(body, "meta", {})
+    when type_of(meta) != "map"
+        set meta to {}
+    let sobre be {"to": target, "thread": text(field(body, "thread", "")), "session": text(field(body, "session", "")), "from": from, "text": msg, "images": images, "channel": text(field(body, "channel", "http")), "meta": meta}
+    give {"ok": true, "status": 200, "error": "", "sobre": sobre, "callback": cb, "stream": field(body, "stream", false) == true}
+
+-- aprobación humana para la API: la cola de lib/approvals.syn (no hay nadie en la request para preguntarle)
+export task approve_api(name, args, why)
+    require time
+    require random
+    require net
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let id be approvals.open("api", permission.describe_call(name, args), why, APPROVAL_TIMEOUT)
+    give approvals.wait(id, APPROVAL_TIMEOUT)
+
+-- hooks del runtime para la API: sin modo pedido → el del agente, y si el agente no dice → strict
+export task hooks(sobre, on_event, on_start)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let spec be runtime.get(sobre["to"])
+    let mode be when spec != nothing and spec["permission"] != "" then "" otherwise "strict"
+    give {"mode": mode, "ask_fn": approve_api, "on_event": on_event, "on_start": on_start}
+
+-- ---------- trabajos asíncronos (callback) ----------
+
+task job_path(id)
+    give JOBS_DIR + "/" + id + ".json"
+
+export task job(id)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when not matches(id, "j[0-9a-zA-Z_-]{4,40}")
+        give nothing
+    try
+        give json_decode(read_file(job_path(id)))
+    recover err
+        give nothing
+
+task save_job(j)
+    require file(".lampson")
+    require file(".lampson/*")
+    write_file(job_path(j["job"]), json_encode(j))
+
+-- encola: escribe el trabajo y devuelve {job, status:"queued"}; quien llama lanza el agente con el spec
+export task enqueue(p, rec)
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    let id be "j" + slice(text(floor(now() * 1000)), 5, 13) + slice(token(16), 0, 4)
+    let j be {"job": id, "status": "queued", "key": rec["id"], "agent": p["sobre"]["to"], "thread": p["sobre"]["thread"], "callback": p["callback"], "created": format_time(now()), "result": nothing, "delivered": false}
+    save_job(j)
+    give {"job": id, "spec": json_encode({"job": id, "sobre": p["sobre"], "callback": p["callback"]})}
+
+task post_callback(url, payload)
+    require net
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let body be json_encode(payload)
+    let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
+    let sec be env("LAMPSON_WEBHOOK_SECRET", "")
+    when sec != ""
+        set headers["X-Lampson-Signature"] to "sha256=" + decode(hmac(body, sec), "hex")
+    -- dos intentos: un receptor que parpadea no pierde la respuesta
+    let tries be 0
+    while tries < 2
+        set tries to tries + 1
+        try
+            let r be http_post(url, body, headers, 15)
+            when r["ok"]
+                give true
+            print("[lampson api] callback " + url + " respondió " + text(r["status"]))
+        recover err
+            print("[lampson api] callback falló: " + text(err))
+    give false
+
+-- corre un trabajo (lo llama el agente ApiJob vía la task top-level lampson_api_job del entry)
+export task run_job(spec_json)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let spec be json_decode(spec_json)
+    let j be job(spec["job"])
+    set j["status"] to "running"
+    save_job(j)
+    let result be nothing
+    try
+        set result to runtime.deliver(spec["sobre"], hooks(spec["sobre"], nothing, nothing))
+    recover err
+        set result to {"agent": spec["sobre"]["to"], "thread": spec["sobre"]["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+    set j["status"] to when starts_with(result["stopped"], "error") then "error" otherwise "done"
+    set j["result"] to result
+    set j["finished"] to format_time(now())
+    save_job(j)
+    let payload be {"job": j["job"], "status": j["status"], "agent": result["agent"], "thread": result["thread"], "session": result["session"], "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "meta": spec["sobre"]["meta"]}
+    set j["delivered"] to post_callback(spec["callback"], payload)
+    save_job(j)
+    give j["status"]
+
+-- MIGA runtime (igual que agents.Child): un `agent` solo ve sus parámetros, las builtins y las tasks TOP-LEVEL del
+-- entry. web.syn define `task lampson_api_job(spec_json) give api.run_job(spec_json)`.
+agent ApiJob
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("memory")
+    require file("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    lampson_api_job(spec_json)
+
+export task start_job(spec_json)
+    spawn ApiJob with spec_json = spec_json
+    give true

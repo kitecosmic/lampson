@@ -70,6 +70,7 @@ use "./lib/workspaces.syn" as workspaces
 use "./lib/judge.syn" as jdg
 use "./lib/origin.syn" as origin
 use "./lib/runtime.syn" as runtime
+use "./lib/api.syn" as api
 
 let APPROVAL_TIMEOUT be 180
 
@@ -104,6 +105,10 @@ task as_text(x)
 -- programa; esta es su puerta de entrada. Bajo serve el agente sobrevive al request que lo lanzó.
 task lampson_subagent(spec_json)
     give agents.run_child_json(spec_json)
+
+-- Trabajo asíncrono de la API /v1 (callback): `agent ApiJob` (lib/api.syn) solo llama tasks TOP-LEVEL; esta es su puerta
+task lampson_api_job(spec_json)
+    give api.run_job(spec_json)
 
 -- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
 -- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada
@@ -653,3 +658,53 @@ serve on 8080
                 set sobre["images"] to images
                 let result be runtime.deliver(sobre, hooks)
                 send {"kind": "done", "data": {"text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "session": result["session"]}} as "event"
+
+    -- ---------- API /v1 para apps (lib/api.syn · spec/engine.md fase 2) ----------
+    -- Sin `requires auth`: bajo el hub todo llega por loopback y check_client lo daría por bueno. La API exige SIEMPRE
+    -- una API key (Authorization: Bearer lk_…), que valida api.authorize.
+    route "GET /w/:slug/v1/agents"
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give fail(a["status"], a["error"])
+        give {"agents": api.agents_for(a["key"])}
+
+    route "POST /w/:slug/v1/messages"
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give fail(a["status"], a["error"])
+        let p be api.parse(json of request, a["key"])
+        when not p["ok"]
+            give fail(p["status"], p["error"])
+        state_set("lampson:last_used", now())
+        when p["callback"] != ""
+            let q be api.enqueue(p, a["key"])
+            api.start_job(q["spec"])
+            give respond(json_encode({"job": q["job"], "status": "queued"}), "application/json", 202)
+        give runtime.deliver(p["sobre"], api.hooks(p["sobre"], nothing, nothing))
+
+    route "POST /w/:slug/v1/messages/stream"
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give fail(a["status"], a["error"])
+        let p be api.parse(json of request, a["key"])
+        when not p["ok"]
+            give fail(p["status"], p["error"])
+        state_set("lampson:last_used", now())
+        let sobre be p["sobre"]
+        stream
+            task emit_api(kind, data, tag)
+                when kind != "busy" and kind != "idle"
+                    send {"kind": kind, "data": data, "tag": tag, "agent": sobre["to"], "thread": sobre["thread"]} as "event"
+            task start_api(info)
+                send {"kind": "session", "data": info, "tag": "", "agent": info["agent"], "thread": info["thread"]} as "event"
+            let result be runtime.deliver(sobre, api.hooks(sobre, emit_api, start_api))
+            send {"kind": "done", "data": result, "tag": "", "agent": result["agent"], "thread": result["thread"]} as "event"
+
+    route "GET /w/:slug/v1/jobs/:id"
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give fail(a["status"], a["error"])
+        let j be api.job(params.id)
+        when j == nothing or j["key"] != a["key"]["id"]
+            give fail(404, "no such job")
+        give j

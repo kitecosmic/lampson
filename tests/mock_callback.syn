@@ -1,0 +1,25 @@
+-- tests/mock_callback.syn — receptor de callbacks para api_test.syn (el canal `http` de la API /v1)
+--
+--   synsema serve tests/mock_callback.syn        (puerto 8767)
+--
+--   POST /cb     guarda el body y la firma (X-Lampson-Signature) que llegaron
+--   GET  /last   {count, body, signature} del último callback
+require serve(8767)
+require time
+
+serve on 8767
+    route "POST /cb"
+        let sig be ""
+        let h be headers of request
+        each k in keys(h)
+            when lower(k) == "x-lampson-signature"
+                set sig to text(h[k])
+        let n be state_get("count")
+        state_set("count", (when n == nothing then 0 otherwise n) + 1)
+        state_set("last", {"body": json of request, "signature": sig})
+        give {"ok": true}
+
+    route "GET /last"
+        let n be state_get("count")
+        let l be state_get("last")
+        give {"count": when n == nothing then 0 otherwise n, "body": when l == nothing then nothing otherwise l["body"], "signature": when l == nothing then "" otherwise l["signature"]}

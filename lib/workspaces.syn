@@ -361,6 +361,9 @@ task hub_routes(w)
     each m in ["GET", "POST"]
         set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/api/*path\" requires auth\n        proxy to \"" + base + "\"")
     set lines to append(lines, "    route \"GET /w/" + w["slug"] + "/approve/*path\"\n        proxy to \"" + base + "\"")
+    -- la API /v1 para apps (lib/api.syn) tampoco: la autentica el proceso del workspace con su API key (Bearer lk_…)
+    each m in ["GET", "POST"]
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/v1/*path\"\n        proxy to \"" + base + "\"")
     give join(lines, "\n")
 
 -- reescribe hub.syn desde la plantilla si cambió (bajo --watch, el hub se reinicia solo)
@@ -734,6 +737,10 @@ export task should_live(w, hc)
         give true
     when schedules_on_disk(w) > 0
         give true
+    -- con API keys (lib/apikeys.syn) el workspace atiende apps (un bot, un webhook): apagarlo por inactividad haría
+    -- que el próximo mensaje encuentre un 502 en el hub
+    when api_keys_on_disk(w) > 0
+        give true
     let ih be idle_hours()
     when ih == 0
         give true
@@ -741,6 +748,12 @@ export task should_live(w, hc)
     give now() - last < ih * 3600
 
 -- tareas encendidas según el json del workspace (sirve aunque el proceso esté apagado)
+task api_keys_on_disk(w)
+    try
+        give length(json_decode(read_file(dir_of(w["slug"]) + "/.lampson/api_keys.json"))["keys"])
+    recover err
+        give 0
+
 task schedules_on_disk(w)
     try
         let doc be json_decode(read_file(dir_of(w["slug"]) + "/.lampson/schedules.json"))

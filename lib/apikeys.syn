@@ -1,0 +1,94 @@
+-- lib/apikeys.syn — API keys de la API /v1 (spec/engine.md, fase 2)
+--
+-- Una key = acceso por HTTP a ciertos agentes de ESTE workspace. Se guarda solo su hash (sha256), en el estado del
+-- workspace (.lampson/api_keys.json, al lado de las sesiones): nunca en la carpeta del proyecto, que puede ir a git.
+-- La key en claro se muestra UNA vez, al crearla (`lampson key add`).
+--
+--   create(name, agents) → {id, key, name, agents}      agents: ["tienda"] o ["*"] (todos los elegibles)
+--   check(key) → registro sin hash | nothing           (y anota last_used)
+--   allows(rec, agent) → bool
+--   list() / remove(id)
+
+export let FILE be ".lampson/api_keys.json"
+export let PREFIX be "lk_"
+
+task hash_of(key)
+    give decode(sha256("lampson-api:" + key), "hex")
+
+task load()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    try
+        let d be json_decode(read_file(FILE))
+        when contains(d, "keys")
+            give d["keys"]
+    recover err
+        give []
+    give []
+
+task store(keys_list)
+    require file(".lampson")
+    require file(".lampson/*")
+    write_file(FILE, json_encode({"keys": keys_list}))
+
+task public(k)
+    give {"id": k["id"], "name": k["name"], "agents": k["agents"], "created": k["created"], "last_used": k["last_used"]}
+
+export task create(name, agents)
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    let ag be when agents == nothing or length(agents) == 0 then ["*"] otherwise agents
+    let key be PREFIX + token(24)
+    let id be "k" + slice(token(16), 0, 8)
+    let rec be {"id": id, "name": text(name), "agents": ag, "hash": hash_of(key), "created": format_time(now()), "last_used": nothing}
+    store(append(load(), rec))
+    give {"id": id, "key": key, "name": rec["name"], "agents": ag}
+
+export task list()
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    give apply((k) => public(k), load())
+
+export task remove(id)
+    require file(".lampson")
+    require file(".lampson/*")
+    let all be load()
+    let rest be where(all, (k) => k["id"] != id)
+    when length(rest) == length(all)
+        give false
+    store(rest)
+    give true
+
+-- el registro de la key (sin hash) o nothing. Anota last_used como mucho una vez por minuto (no reescribir en cada request)
+export task check(key)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    when key == nothing
+        give nothing
+    let k be text(key)
+    when not starts_with(k, PREFIX)
+        give nothing
+    let h be hash_of(k)
+    let all be load()
+    let found be nothing
+    let changed be false
+    let out be []
+    each r in all
+        when r["hash"] == h
+            set found to public(r)
+            let stamp be format_time(now(), "%Y-%m-%dT%H:%M")
+            when r["last_used"] == nothing or slice(text(r["last_used"]), 0, 16) != stamp
+                set r["last_used"] to format_time(now())
+                set changed to true
+        set out to append(out, r)
+    when changed
+        store(out)
+    give found
+
+export task allows(rec, agent)
+    when rec == nothing
+        give false
+    give contains(rec["agents"], "*") or contains(rec["agents"], agent)

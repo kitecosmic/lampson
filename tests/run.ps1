@@ -62,6 +62,9 @@ try {
     # runtime (deliver, agentes del proyecto, sesión por thread) y la puerta `lampson run` contra el mismo mock
     synsema run run_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # API /v1 (keys, JSON, SSE, callback firmado) contra web.syn de verdad en :47990
+    synsema run api_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     $env:LAMPSON_NO_CONFIG = $prevNoCfg
 } finally {

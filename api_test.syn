@@ -1,0 +1,160 @@
+-- api_test.syn — la API /v1 (lib/api.syn, lib/apikeys.syn) contra web.syn DE VERDAD: levanta el mock LLM (:8765),
+-- un receptor de callbacks (tests/mock_callback.syn, :8767) y `synsema serve web.syn` en :47990, y le habla por HTTP.
+-- Lo lanza tests/run.ps1 / run.sh con el provider apuntando al mock (igual que agents_test / run_test).
+-- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
+require net
+require time
+require exec
+require random
+require env("LAMPSON_*")
+require env("OS")
+require file("workspace")
+require file("workspace/*")
+require file(".lampson")
+require file(".lampson/*")
+use "./lib/apikeys.syn" as apikeys
+use "./lib/runtime.syn" as runtime
+use "./lib/session.syn" as session
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+task rm_file(path)
+    when env("OS", "") == "Windows_NT"
+        run("cmd", ["/c", "del", "/q", replace(path, "/", "\\")], 10)
+    otherwise
+        run("rm", ["-f", path], 10)
+
+task wait_up(url)
+    let tries be 0
+    while tries < 60
+        sleep(0.25)
+        set tries to tries + 1
+        try
+            let r be http_get(url, {}, nothing, 2)
+            when r["status"] > 0
+                give true
+        recover err
+            set tries to tries
+    give false
+
+let BASE be "http://127.0.0.1:47990/w/test/v1"
+let ADIR be runtime.PROJECT_DIR
+write_file(ADIR + "/rt-api.agent.json", json_encode({"id": "rt-api", "description": "agente de la API", "system": "Bot de prueba.", "tools": ["ls"], "permission": "strict"}))
+write_file(ADIR + "/rt-api2.agent.json", json_encode({"id": "rt-api2", "system": "Otro bot."}))
+
+let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
+let cbs be proc_spawn("synsema", ["serve", "tests/mock_callback.syn"], {"stderr": "merge"})
+let web be proc_spawn("synsema", ["serve", "web.syn", "--port", "47990", "--bind", "127.0.0.1"], {"stderr": "merge", "env": {"LAMPSON_WEBHOOK_SECRET": "s3cret"}})
+check(wait_up("http://127.0.0.1:8765/v1/models"), "mock LLM arriba")
+check(wait_up("http://127.0.0.1:8767/last"), "receptor de callbacks arriba")
+check(wait_up("http://127.0.0.1:47990/w/test/api/health"), "web.syn arriba en :47990")
+
+let ka be apikeys.create("test-a", ["rt-api"])
+let kb be apikeys.create("test-b", ["*"])
+task auth(k)
+    give {"Authorization": "Bearer " + k["key"], "Content-Type": "application/json"}
+task post(path, body, k)
+    let r be http_post(BASE + path, json_encode(body), auth(k), 60)
+    let d be nothing
+    try
+        set d to json_decode(text(r["body"]))
+    recover err
+        set d to nothing
+    give {"status": r["status"], "json": d, "raw": text(r["body"])}
+
+print("auth")
+check(http_get(BASE + "/agents", {}, nothing, 10)["status"] == 401, "sin key → 401")
+check(http_get(BASE + "/agents", {"Authorization": "Bearer lk_nope"}, nothing, 10)["status"] == 401, "key inventada → 401")
+check(http_get(BASE + "/agents", {"Authorization": "Bearer " + ka["key"]}, nothing, 10)["status"] == 200, "key válida → 200")
+let ag be json_decode(text(http_get(BASE + "/agents", {"Authorization": "Bearer " + ka["key"]}, nothing, 10)["body"]))
+check(apply((a) => a["id"], ag["agents"]) == ["rt-api"], "la key A solo ve su agente: " + json_encode(ag))
+let agb be json_decode(text(http_get(BASE + "/agents", {"Authorization": "Bearer " + kb["key"]}, nothing, 10)["body"]))
+check(contains(apply((a) => a["id"], agb["agents"]), "build") and contains(apply((a) => a["id"], agb["agents"]), "rt-api"), "la key * ve todos")
+check(not contains(apply((a) => a["id"], agb["agents"]), "worker"), "worker no se ofrece")
+
+print("POST /v1/messages (JSON)")
+let created be []
+let m1 be post("/messages", {"to": "rt-api", "thread": "api:cliente-1", "text": "ls"}, ka)
+check(m1["status"] == 200 and starts_with(m1["json"]["text"], "final ls"), "respuesta del agente: " + slice(m1["raw"], 0, 100))
+check(m1["json"]["agent"] == "rt-api" and m1["json"]["thread"] == "api:cliente-1", "con agente y thread")
+when m1["json"] != nothing
+    set created to append(created, m1["json"]["session"])
+let m2 be post("/messages", {"to": "rt-api", "thread": "api:cliente-1", "text": "hola"}, ka)
+check(m2["status"] == 200 and m2["json"]["session"] == m1["json"]["session"] and contains(m2["json"]["text"], "msgs=6"), "mismo thread → misma sesión, el historial sigue")
+check(post("/messages", {"to": "build", "text": "hola"}, ka)["status"] == 403, "agente fuera de la key → 403")
+check(post("/messages", {"to": "nadie", "text": "hola"}, kb)["status"] == 404, "agente inexistente → 404")
+check(post("/messages", {"to": "rt-api", "text": ""}, ka)["status"] == 400, "text vacío → 400")
+check(post("/messages", {"to": "rt-api", "text": "x", "callback": "ftp://x"}, ka)["status"] == 400, "callback que no es http(s) → 400")
+
+print("POST /v1/messages/stream (SSE)")
+let sr be http_post(BASE + "/messages/stream", json_encode({"to": "rt-api", "thread": "api:cliente-2", "text": "ls"}), auth(kb), 60)
+let evs be []
+each l in split(replace(text(sr["body"]), "\r", ""), "\n")
+    when starts_with(l, "data: ")
+        try
+            set evs to append(evs, json_decode(slice(l, 6, length(l))))
+        recover err
+            set evs to evs
+check(sr["status"] == 200 and length(evs) > 2, "SSE con eventos (" + text(length(evs)) + ")")
+check(length(evs) > 0 and evs[0]["kind"] == "session", "primero session")
+let lastev be when length(evs) > 0 then evs[length(evs) - 1] otherwise {"kind": ""}
+check(lastev["kind"] == "done" and starts_with(lastev["data"]["text"], "final ls"), "último done con la respuesta")
+check(length(where(evs, (e) => e["kind"] == "tool_call" and e["agent"] == "rt-api" and e["thread"] == "api:cliente-2")) == 1, "eventos con agente y thread")
+when lastev["kind"] == "done"
+    set created to append(created, lastev["data"]["session"])
+
+print("callback (canal http)")
+let cr be post("/messages", {"to": "rt-api", "thread": "api:cliente-3", "text": "hola", "meta": {"wa_id": "123"}, "callback": "http://127.0.0.1:8767/cb"}, ka)
+check(cr["status"] == 202 and cr["json"]["status"] == "queued", "202 queued enseguida: " + cr["raw"])
+let jid be when cr["json"] != nothing then text(cr["json"]["job"]) otherwise ""
+let jdone be nothing
+let tries be 0
+while jdone == nothing and tries < 60
+    sleep(0.5)
+    set tries to tries + 1
+    let jr be http_get(BASE + "/jobs/" + jid, {"Authorization": "Bearer " + ka["key"]}, nothing, 10)
+    when jr["status"] == 200
+        let jj be json_decode(text(jr["body"]))
+        when jj["status"] == "done" or jj["status"] == "error"
+            set jdone to jj
+check(jdone != nothing and jdone["status"] == "done", "GET /v1/jobs/<id> → done")
+let last be json_decode(text(http_get("http://127.0.0.1:8767/last", {}, nothing, 10)["body"]))
+check(last["count"] == 1 and last["body"]["job"] == jid and contains(last["body"]["text"], "final directo"), "el callback llegó con el resultado: " + json_encode(last["body"]))
+check(last["body"]["meta"]["wa_id"] == "123" and last["body"]["thread"] == "api:cliente-3", "y con el meta y el thread del sobre")
+check(starts_with(last["signature"], "sha256=") and length(last["signature"]) == 71, "firmado con LAMPSON_WEBHOOK_SECRET (X-Lampson-Signature: sha256=<hex>)")
+check(http_get(BASE + "/jobs/" + jid, {"Authorization": "Bearer " + kb["key"]}, nothing, 10)["status"] == 404, "el job de otra key → 404")
+when jdone != nothing
+    set created to append(created, jdone["result"]["session"])
+
+print("revocar")
+apikeys.remove(ka["id"])
+check(http_get(BASE + "/agents", {"Authorization": "Bearer " + ka["key"]}, nothing, 10)["status"] == 401, "key revocada → 401")
+check(apikeys.list() != nothing and length(where(apikeys.list(), (k) => k["id"] == ka["id"])) == 0, "ya no está en la lista")
+
+-- limpieza
+apikeys.remove(kb["id"])
+each t in ["api:cliente-1", "api:cliente-2", "api:cliente-3"]
+    let ts be runtime.thread_session("rt-api", t)
+    when ts != "" and not contains(created, ts)
+        set created to append(created, ts)
+    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key("rt-api", t) + ".json")
+each id in created
+    session.delete(id)
+when jid != ""
+    rm_file(".lampson/api/jobs/" + jid + ".json")
+rm_file(ADIR + "/rt-api.agent.json")
+rm_file(ADIR + "/rt-api2.agent.json")
+proc_close(web)
+proc_close(cbs)
+proc_close(mock)
+
+when length(failures) > 0
+    print("api_test: " + text(length(failures)) + " fallas")
+    raise("api_test failed")
+print("api_test: todo OK")
