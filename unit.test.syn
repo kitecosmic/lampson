@@ -1500,7 +1500,7 @@ test "plugins: un canal puede no tener tools; config pasa los secretos; el chatw
     let cw be where(plugins.all(), (l) => l["name"] == "chatwoot")
     assert_eq(length(cw), 1, "plugins/chatwoot viene con lampson")
     assert(cw[0]["error"] == nothing, text(cw[0]["error"]))
-    assert_eq(cw[0]["channel"], {"agent": "", "typing": false})
+    assert(cw[0]["channel"]["agent"] == "" and not cw[0]["channel"]["typing"] and not cw[0]["channel"]["poll"], "chatwoot: sin agente fijo, sin typing ni poll")
     assert_eq(cw[0]["config"], ["CHATWOOT_URL", "CHATWOOT_TOKEN", "CHATWOOT_WEBHOOK_SECRET"])
     assert_eq(cw[0]["tools"], [])
     let tgp be where(plugins.all(), (l) => l["name"] == "telegram")
