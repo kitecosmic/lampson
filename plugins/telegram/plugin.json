@@ -6,6 +6,6 @@
   "caps": "net",
   "timeout": 30,
   "config": ["TELEGRAM_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_API"],
-  "channel": {"agent": "", "typing": true},
+  "channel": {"agent": "", "typing": true, "poll": true},
   "tools": []
 }

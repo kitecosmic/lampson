@@ -120,6 +120,13 @@ task lampson_subagent(spec_json)
 task lampson_mailbox_worker(spec_json)
     give mailbox.work(spec_json)
 
+-- Canales en modo sin URL pública (lib/channels.syn): un agente ChannelPoller por canal; el tick lo mantiene vivo
+task lampson_channel_poller(name)
+    give channels.poll_loop(name)
+task channel_poll_tick()
+    give channels.poll_tick()
+cron_every(5, channel_poll_tick)
+
 -- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
 -- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada
 -- 30 s (cron_every de Synsema: intervalo puro; la hora de reloj la resuelve schedule.syn) corre lo vencido:

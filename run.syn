@@ -118,7 +118,8 @@ when ch_cmd != ""
             print("no hay canales instalados (un canal es un plugin con \"channel\" en su plugin.json)")
         each l in chs
             let ag be when l["error"] == nothing then channels.agent_for(l["name"], l, {}) otherwise "?"
-            print("  " + (when l["enabled"] then "● " otherwise "○ ") + l["name"] + "  " + (when l["error"] != nothing then "roto: " + text(l["error"]) otherwise "agente: " + ag + "  webhook: " + hook_url(l["name"])))
+            let md be channels.mode_of(l["name"])
+            print("  " + (when l["enabled"] then "● " otherwise "○ ") + l["name"] + "  " + (when l["error"] != nothing then "roto: " + text(l["error"]) otherwise "agente: " + ag + "  " + (when md == "poll" then "modo: sin URL pública (poll)" otherwise "webhook: " + hook_url(l["name"]))))
         when pub_ch == ""
             print("  (sin URL pública: las plataformas no llegan a esta PC. `lampson --domain …` o un túnel; ver lampson.org/docs/phone)")
         exit(0)
@@ -135,10 +136,18 @@ when ch_cmd != ""
         when not l["enabled"]
             print("lampson channel: el canal " + ch_name + " está apagado — `lampson channel on " + ch_name + "` primero")
             exit(2)
+        when pub_ch == "" and l["channel"]["poll"]
+            -- sin URL pública: modo poll (Lampson le pide los mensajes a la plataforma; no hace falta dominio ni túnel)
+            channels.set_mode(ch_name, "poll")
+            let pout be text(plugins.invoke(l, "setup", {"mode": "poll"}))
+            print(trim(pout))
+            print("modo sin URL pública: el proceso del workspace le pide los mensajes a " + ch_name + " (arranca solo con el workspace; `lampson --hub start` si está apagado)")
+            exit(when starts_with(trim(pout), "ERROR") then 1 otherwise 0)
         when pub_ch == ""
             print("lampson channel: hace falta una URL pública (https) para que " + ch_name + " llegue a este Lampson: `lampson --domain …`, un túnel, o LAMPSON_PUBLIC_URL en .env")
             exit(2)
-        let out be text(plugins.invoke(l, "setup", {"webhook_url": hook_url(ch_name)}))
+        channels.set_mode(ch_name, "webhook")
+        let out be text(plugins.invoke(l, "setup", {"mode": "webhook", "webhook_url": hook_url(ch_name)}))
         when contains(out, "unknown action 'setup'")
             print("el canal " + ch_name + " se configura desde la plataforma: pegá esta URL como webhook → " + hook_url(ch_name))
             exit(0)

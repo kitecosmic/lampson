@@ -14,7 +14,12 @@
 --            Imprime lo que quiera; una salida que empieza con "ERROR" cuenta como fallo (queda en el log).
 --   typing   (opcional, con "channel": {"typing": true}) el "escribiendo…" de la plataforma: {"thread", "meta"}.
 --            Lampson la llama al empezar cada turno y la renueva cada ~4,5 s mientras el modelo trabaja.
---   setup    (opcional) registra el webhook en la plataforma: {"webhook_url"} (`lampson channel setup <canal>`).
+--   setup    (opcional) {"mode": "webhook", "webhook_url"} registra el webhook en la plataforma; {"mode": "poll"} lo
+--            quita (los dos modos no conviven en Telegram). Lo llama `lampson channel setup <canal>`.
+--   poll     (opcional, con "channel": {"poll": true}) MODO SIN URL PÚBLICA: {"cursor"} → el plugin le pide a la
+--            plataforma los mensajes nuevos (espera larga) e imprime {"messages": [...], "cursor": <el siguiente>}.
+--            `lampson channel setup` lo elige solo cuando este Lampson no tiene URL pública; el proceso del
+--            workspace mantiene un agente por canal pidiendo en bucle (cursor en .lampson/channels/<canal>.cursor).
 --   Imágenes: un mensaje puede traer "images": [{"media_type": "image/jpeg", "data": "<base64>"}] — los modelos con
 --            visión las ven; a los demás el proveedor les deja una nota.
 --
@@ -95,6 +100,28 @@ export task handle(name, req)
         give jresp(500, {"error": "the channel plugin failed: " + p["error"]})
     let d be p["data"]
     let msgs be when type_of(d) == "map" and contains(d, "messages") and type_of(d["messages"]) == "list" then d["messages"] otherwise []
+    let accepted be route_messages(name, l, msgs)
+    -- lo que el plugin quiere que se le responda a la plataforma (verificación de webhook, un 200 específico…)
+    when type_of(d) == "map" and contains(d, "http") and type_of(d["http"]) == "map"
+        let h be d["http"]
+        let body be when contains(h, "body") and h["body"] != nothing then (when type_of(h["body"]) == "text" then h["body"] otherwise json_encode(h["body"])) otherwise ""
+        give {"status": when contains(h, "status") then floor(number(h["status"])) otherwise 200, "body": body, "ctype": when contains(h, "content_type") then text(h["content_type"]) otherwise "text/plain", "accepted": accepted}
+    give {"status": 200, "body": json_encode({"ok": true, "accepted": accepted}), "ctype": "application/json", "accepted": accepted}
+
+-- los mensajes que devolvió receive o poll → al buzón de cada conversación; cuántos entraron
+export task route_messages(name, l, msgs)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
     let names be runtime.names()
     let accepted be 0
     each m in msgs
@@ -114,9 +141,139 @@ export task handle(name, req)
             mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, mailbox.DEFAULT_BUFFER), "reply_channel": name, "reply_thread": th})
             log(name, "RECV " + th + " → " + ag + "  " + slice(tx, 0, 120))
             set accepted to accepted + 1
-    -- lo que el plugin quiere que se le responda a la plataforma (verificación de webhook, un 200 específico…)
-    when type_of(d) == "map" and contains(d, "http") and type_of(d["http"]) == "map"
-        let h be d["http"]
-        let body be when contains(h, "body") and h["body"] != nothing then (when type_of(h["body"]) == "text" then h["body"] otherwise json_encode(h["body"])) otherwise ""
-        give {"status": when contains(h, "status") then floor(number(h["status"])) otherwise 200, "body": body, "ctype": when contains(h, "content_type") then text(h["content_type"]) otherwise "text/plain", "accepted": accepted}
-    give {"status": 200, "body": json_encode({"ok": true, "accepted": accepted}), "ctype": "application/json", "accepted": accepted}
+    give accepted
+
+-- ---------- modo sin URL pública (poll) ----------
+
+task modes_file()
+    give mailbox.CHANNEL_LOG_DIR + "/modes.json"
+
+export task mode_of(name)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    try
+        let d be json_decode(read_file(modes_file()))
+        when contains(d, name)
+            give text(d[name])
+    recover err
+        give "webhook"
+    give "webhook"
+
+export task set_mode(name, mode)
+    require file(".lampson")
+    require file(".lampson/*")
+    let d be {}
+    try
+        set d to json_decode(read_file(modes_file()))
+    recover err
+        set d to {}
+    set d[name] to mode
+    write_file(modes_file(), json_encode(d))
+    give mode
+
+task cursor_file(name)
+    give mailbox.CHANNEL_LOG_DIR + "/" + name + ".cursor"
+
+-- una vuelta: pide los mensajes nuevos al plugin y los manda al buzón → {ok, n, error}
+export task poll_once(name)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let l be plugins.channel(name)
+    when l == nothing
+        give {"ok": false, "n": 0, "error": "channel off"}
+    let cursor be nothing
+    try
+        set cursor to json_decode(read_file(cursor_file(name)))["cursor"]
+    recover err
+        set cursor to nothing
+    let p be parse_output(plugins.invoke(l, "poll", {"cursor": cursor}))
+    when not p["ok"]
+        log(name, "POLL-ERROR " + p["error"])
+        give {"ok": false, "n": 0, "error": p["error"]}
+    let d be p["data"]
+    let msgs be when type_of(d) == "map" and contains(d, "messages") and type_of(d["messages"]) == "list" then d["messages"] otherwise []
+    -- el cursor se guarda ANTES de encolar: un mensaje nunca se procesa dos veces (si se cae acá, se pierde uno)
+    when type_of(d) == "map" and contains(d, "cursor") and d["cursor"] != nothing
+        write_file(cursor_file(name), json_encode({"cursor": d["cursor"]}))
+    give {"ok": true, "n": route_messages(name, l, msgs), "error": ""}
+
+-- el bucle de un canal en modo poll (corre en un agente ChannelPoller del proceso del workspace)
+export task poll_loop(name)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    log(name, "POLL start (no public URL: Lampson asks the platform for new messages)")
+    let going be true
+    while going
+        let l be plugins.channel(name)
+        when l == nothing or not l["channel"]["poll"] or mode_of(name) != "poll"
+            set going to false
+        otherwise
+            let r be poll_once(name)
+            when not r["ok"]
+                sleep(10)
+            otherwise when r["n"] == 0
+                sleep(1)
+    state_set("chpoll:" + name, false)
+    log(name, "POLL stop")
+    give true
+
+-- MIGA runtime (igual que agents.Child): un agente solo llama tasks TOP-LEVEL del entry; web.syn define
+-- `task lampson_channel_poller(name) give channels.poll_loop(name)`
+agent ChannelPoller
+    require exec
+    require time
+    require random
+    require net
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file("memory")
+    require file("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    lampson_channel_poller(channel_name)
+
+-- el tick (cron de web.syn): un poller vivo por cada canal encendido en modo poll
+export task poll_tick()
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    each l in plugins.channels()
+        when l["channel"]["poll"] and mode_of(l["name"]) == "poll" and state_get("chpoll:" + l["name"], false) != true
+            state_set("chpoll:" + l["name"], true)
+            spawn ChannelPoller with channel_name = l["name"]
+    give true

@@ -51,7 +51,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -223,6 +223,7 @@ set created to append(created, lastcb["body"]["session"])
 
 print("canales: el plugin chatwoot de punta a punta (webhook firmado → buzón → agente → API de Chatwoot)")
 let CH be "http://127.0.0.1:47990/w/test/ch"
+let threads_extra_600 be false
 let cw_was_on be length(where(plugins.all(), (l) => l["name"] == "chatwoot" and l["enabled"])) > 0
 plugins.set_enabled("chatwoot", true)
 task cw_post(payload, secret)
@@ -300,7 +301,9 @@ task tg_msg(chat, text_, date, extra)
     give {"update_id": date, "message": m}
 -- run.syn como lo llama `lampson channel …` (con la URL pública y el slug que pone el launcher)
 task channel_cli(cmd, name)
-    let p be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_CHANNEL_CMD": cmd, "LAMPSON_CHANNEL_NAME": name, "LAMPSON_PUBLIC_URL": "https://example.test", "LAMPSON_WS": "test", "LAMPSON_TELEGRAM_TOKEN": "T1", "LAMPSON_TELEGRAM_WEBHOOK_SECRET": "tgsecret", "LAMPSON_TELEGRAM_API": "http://127.0.0.1:8767", "LAMPSON_CHANNEL_TELEGRAM_AGENT": "rt-buf"}, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
+    give channel_cli_pub(cmd, name, "https://example.test")
+task channel_cli_pub(cmd, name, pub)
+    let p be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_CHANNEL_CMD": cmd, "LAMPSON_CHANNEL_NAME": name, "LAMPSON_PUBLIC_URL": pub, "LAMPSON_WS": "test", "LAMPSON_TELEGRAM_TOKEN": "T1", "LAMPSON_TELEGRAM_WEBHOOK_SECRET": "tgsecret", "LAMPSON_TELEGRAM_API": "http://127.0.0.1:8767", "LAMPSON_CHANNEL_TELEGRAM_AGENT": "rt-buf"}, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
     proc_close_stdin(p)
     let lines be []
     let code be nothing
@@ -371,8 +374,37 @@ proc_close(lp)
 let parts be where(tg_calls("sendMessage"), (c) => c["body"]["chat_id"] == 558)
 check(length(parts) == 4 and length(where(parts, (c) => length(c["body"]["text"]) <= 4000)) == 4, "un texto de " + text(length(longtxt)) + " caracteres sale en 4 partes de ≤ 4000: " + lout)
 check(length(where(parts, (c) => ends_with(c["body"]["text"], "entera."))) == 4, "cada parte corta en un salto de línea, no a mitad de frase")
+print("canales sin URL pública: lampson channel setup elige el modo poll y el workspace pide los mensajes solo")
+let sp0 be channel_cli_pub("setup", "telegram", "")
+check(sp0["code"] == 0 and contains(sp0["out"], "polling mode: @lampson_test_bot") and contains(sp0["out"], "modo sin URL pública"), "setup sin URL pública → modo poll: " + replace(trim(sp0["out"]), "\n", " | "))
+check(length(tg_calls("deleteWebhook")) >= 1, "y quitó el webhook en Telegram (los dos modos no conviven)")
+check(contains(channel_cli_pub("list", "", "")["out"], "modo: sin URL pública (poll)"), "channel list muestra el modo")
+-- el tick del workspace (cada 5 s) arranca el poller; un mensaje encolado en "Telegram" tiene que llegar al agente
+http_post("http://127.0.0.1:8767/telegram/queue", json_encode(tg_msg(600, "hola por poll", 500, {})), {"Content-Type": "application/json"}, 10)
+let p600 be []
+let tries6 be 0
+while length(p600) == 0 and tries6 < 60
+    sleep(0.5)
+    set tries6 to tries6 + 1
+    set p600 to where(tg_calls("sendMessage"), (c) => c["body"]["chat_id"] == 600)
+check(length(p600) == 1, "un mensaje pedido por poll (sin webhook) recibe su respuesta en el chat 600")
+check(length(where(tg_calls("getUpdates"), (c) => contains(c["body"], "offset") and c["body"]["offset"] == 501)) >= 1, "el cursor avanza: la próxima vuelta pide desde el update 501")
+let cur_txt be ""
+try
+    set cur_txt to read_file(".lampson/channels/telegram.cursor")
+recover err
+    set cur_txt to ""
+check(contains(cur_txt, "501"), "y queda guardado en disco (sobrevive a un reinicio): " + cur_txt)
+-- volver a webhook: el poller se detiene solo
+channel_cli("setup", "telegram")
+let polls_before be length(tg_calls("getUpdates"))
+sleep(4)
+check(length(tg_calls("getUpdates")) <= polls_before + 1, "con el modo webhook de vuelta, el poller deja de pedir")
+set threads_extra_600 to true
 plugins.set_enabled("telegram", tg_was_on)
 rm_file(".lampson/channels/telegram.log")
+rm_file(".lampson/channels/telegram.cursor")
+rm_file(".lampson/channels/modes.json")
 
 print("MCP por HTTP (POST /v1/mcp): otro agente usa los de este workspace con la API key")
 task mcp_rpc(k, payload)
