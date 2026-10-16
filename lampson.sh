@@ -8,14 +8,17 @@
 #   lampson --workspace /ruta [--agent plan] [--yolo|--strict|--ask] · --update
 #   lampson run [--agent ID] [--thread T | --session ID] [--json] [--yolo|--strict|--ask] "mensaje"   # sin interfaz
 #       (sin mensaje lo lee de stdin; --json = eventos JSONL; ver spec/engine.md y run.syn)
+#   lampson key add [--agent ID[,ID]] [--name NOMBRE] · key list · key remove <id>     # API keys de la API /v1
 set -euo pipefail
 # se lo llama por el symlink `lampson` (~/.local/bin): la carpeta es donde vive el script de verdad
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 caller="$(pwd)"
 ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
-run=0; msg=""; perm_flag=""
+run=0; msg=""; perm_flag=""; key=""; key_name=""; key_id=""
 # `lampson run …`: subcomando sin interfaz (run.syn); las palabras sueltas son el mensaje, no el workspace
 if [ "${1:-}" = run ]; then run=1; shift; fi
+# `lampson key add|list|remove …`: API keys (también corre run.syn, con LAMPSON_KEY_CMD)
+if [ "${1:-}" = key ]; then run=1; key="${2:-help}"; shift; [ $# -gt 0 ] && shift; fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --web) web=1 ;;
@@ -33,9 +36,10 @@ while [ $# -gt 0 ]; do
         --thread) shift; export LAMPSON_THREAD="$1" ;;
         --session) shift; export LAMPSON_SESSION="$1" ;;
         --json) export LAMPSON_RUN_JSON=1 ;;
+        --name) shift; key_name="$1" ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
         -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
-        *) if [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
+        *) if [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
     esac
     shift
 done
@@ -156,5 +160,6 @@ entry=chat.syn
 if [ "$run" = 1 ]; then
     # sin interfaz: los permisos los fija el flag, o el agente (run.syn: strict si el agente no dice nada)
     entry=run.syn; export LAMPSON_MESSAGE="$msg" LAMPSON_RUN_PERMISSION="$perm_flag"
+    export LAMPSON_KEY_CMD="$key" LAMPSON_KEY_NAME="$key_name" LAMPSON_KEY_ID="$key_id" LAMPSON_KEY_AGENTS="${LAMPSON_AGENT:-}"
 fi
 if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" "$entry"; else exec synsema run "$entry"; fi

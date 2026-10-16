@@ -158,10 +158,31 @@ orquestación va en su propia rama.
       (base del SDK de la fase 5).
 
 ### Fase 2 — API HTTP + canal `http`
-- [ ] `POST /v1/agents/:agent/threads/:thread/messages` → SSE o JSON (`?stream=0`)
-- [ ] API keys (además de passkeys), por agente
-- [ ] Aprobaciones asíncronas por webhook (reusa `lib/approvals.syn`)
-- [ ] Canal `http`: sobre entrante por POST, respuesta saliente a un webhook configurable
+Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógica en `lib/api.syn`, keys en
+`lib/apikeys.syn`:
+- [x] `POST /v1/messages` con el **sobre en el body** → JSON con el resultado
+- [x] `POST /v1/messages/stream` → SSE con los mismos eventos que `lampson run --json`
+- [x] `GET /v1/agents` (los que la key puede usar) · `GET /v1/jobs/<id>`
+- [x] API keys por agente (`lampson key add [--agent ID[,ID]] [--name N]` · `key list` · `key remove <id>`); solo
+      el hash, en el estado del workspace (`.lampson/api_keys.json` del ws, nunca en el proyecto); siempre
+      obligatorias, también por loopback
+- [x] Canal `http`: `"callback": "https://…"` → 202 `{job}` enseguida, el turno corre en un `agent` (ApiJob) y el
+      resultado va por POST al callback (2 intentos, firmado con `LAMPSON_WEBHOOK_SECRET` como las aprobaciones)
+- [x] Aprobaciones: en modo `ask` la API usa la cola de `lib/approvals.syn` (UI, link firmado, terminal); vence →
+      denegado. Sin modo en el agente → `strict`
+- [x] Un workspace con API keys cuenta como "en uso" para la política `auto` del hub (si no, el próximo mensaje
+      de un bot encontraba el workspace apagado → 502)
+- [x] `api_test.syn` contra `web.syn` real en :47990 (26 checks: auth, JSON, 403/404/400, SSE, callback firmado,
+      jobs, revocar) — y a mano por el hub con el modelo real (agente `tienda`, JSON + SSE + callback)
+
+**Pendientes que salieron en la fase 2:**
+- [ ] Dos mensajes del mismo thread a la vez (un cliente que manda tres seguidos) corren en paralelo sobre la misma
+      sesión: el último en guardar pisa al otro. Hace falta una cola por `(agente, thread)`.
+- [ ] Rate limit por key (`rate_limit` de Synsema en las rutas `/v1`, o propio por key).
+- [ ] Probar el modo `ask` por la API con una aprobación real (el código reusa la cola; no tiene test propio).
+- [ ] Las keys solo se ven por la CLI: falta panel en la web (va con la documentación, al final).
+- [ ] Callback a una URL arbitraria: quien tiene una key puede hacer que Lampson haga POST a cualquier lado
+      (incluida la red local). Aceptable porque la key es de confianza; evaluar una allow-list por key.
 
 ### Fase 3 — `lampson mcp serve`
 - [ ] Lampson como servidor MCP: `ask(agent, thread, message)`, `agents()`, `threads(agent)`
@@ -184,7 +205,7 @@ orquestación va en su propia rama.
 
 ## Estado
 
-**Fase actual:** 2 — API HTTP `/v1` + canal `http`. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** 3 — `lampson mcp serve`. Fases 1 y 2 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 
@@ -198,6 +219,14 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — Fase 2 hecha. Decisiones del camino:
+  - El sobre va en el **body** (`POST /v1/messages`), no en la URL (`/agents/:a/threads/:t/…`): un thread como
+    `whatsapp:+54911…` en una URL obliga a codificarlo, y el body ya es el contrato del sobre.
+  - El streaming es otra ruta (`/v1/messages/stream`) y no un flag: `stream` en Synsema es un bloque de la ruta.
+  - La API exige key **siempre**: bajo el hub todo llega por loopback y `check_client` lo daría por bueno.
+  - `lampson.ps1` corre dentro de la sesión de PowerShell del usuario: las variables de `run`/`key` se borran al
+    terminar (un `LAMPSON_SESSION` que quedaba hacía que el siguiente `lampson` retomara esa sesión).
 
 - **2026-10-16** — No se mergea a `main` por fase: se termina y prueba todo el motor y recién ahí se documenta y se
   mergea. El alcance por ruta es **opcional**: sin `paths` el agente ve todo (uso personal, código, modelo local).
