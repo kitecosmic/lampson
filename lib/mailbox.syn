@@ -230,7 +230,24 @@ task run_batch(k, spec, items)
     let lead be ordered[0]
     let topic be "lampson.mb." + k
     let all be ordered
+    -- "escribiendo…" del canal (acción `typing`, si el plugin la declara): al empezar y cada ~4,5 s mientras trabaja
+    let typing_pl be nothing
+    when lead["reply_channel"] != ""
+        let tp be plugins.channel(lead["reply_channel"])
+        when tp != nothing and tp["channel"]["typing"]
+            set typing_pl to tp
+    let typing_at be 0
+    task typing()
+        when typing_pl != nothing and now() - typing_at >= 4.5
+            set typing_at to now()
+            try
+                plugins.invoke(typing_pl, "typing", {"thread": lead["reply_thread"], "meta": ordered[length(ordered) - 1]["meta"]})
+            recover err
+                set typing_at to typing_at
+    typing()
     task publish(kind, data, tag)
+        when kind == "busy"
+            typing()
         when kind != "busy" and kind != "idle"
             bus_publish(topic, {"kind": kind, "data": data, "tag": tag, "agent": lead["to"], "thread": lead["thread"]})
     let hooks be {"mode": spec["mode"], "ask_fn": approve_queue, "on_event": publish}

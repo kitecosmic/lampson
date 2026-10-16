@@ -38,6 +38,21 @@ task out(m)
 task ignore(why)
     out({"messages": [], "ignored": why})
 
+task fetch_image(u)
+    try
+        let r be http_bytes("GET", u, {}, nothing, nothing, 20)
+        when not r["ok"] or length(r["bytes"]) == 0 or length(r["bytes"]) > 1500000
+            give nothing
+        let ct be ""
+        each k in keys(field(r, "headers", {}))
+            when lower(k) == "content-type"
+                set ct to lower(text(r["headers"][k]))
+        when not starts_with(ct, "image/")
+            set ct to when ends_with(lower(u), ".png") then "image/png" otherwise "image/jpeg"
+        give {"media_type": split(ct, ";")[0], "data": decode(r["bytes"], "base64")}
+    recover err
+        give nothing
+
 task receive()
     let body be text(field(args, "body", ""))
     let h be field(args, "headers", {})
@@ -75,11 +90,19 @@ task receive()
         ignore("private note")
         give false
     let content be text(field(ev, "content", ""))
-    -- adjuntos: el agente recibe el link (la imagen no viaja; el modelo puede no tener visión)
+    -- adjuntos: una IMAGEN (hasta 1,5 MB) viaja como imagen para el modelo; lo demás, como link en el texto
+    let images be []
     each a in field(ev, "attachments", [])
         let u be text(field(a, "data_url", ""))
-        when u != ""
+        let img be nothing
+        when u != "" and text(field(a, "file_type", "")) == "image"
+            set img to fetch_image(u)
+        when img != nothing
+            set images to append(images, img)
+        otherwise when u != ""
             set content to content + "\n[attachment: " + u + "]"
+    when trim(content) == "" and length(images) > 0
+        set content to "[image]"
     when trim(content) == ""
         ignore("empty message")
         give false
@@ -92,7 +115,7 @@ task receive()
     let who be field(ev, "sender", field(ev, "contact", {}))
     let created be field(ev, "created_at", nothing)
     let sent_at be when type_of(created) == "number" then created otherwise nothing
-    out({"messages": [{"thread": text(account_id) + ":" + text(conv_id), "text": content, "sent_at": sent_at, "from": {"id": text(field(who, "id", "")), "name": text(field(who, "name", "")), "kind": "human"}, "meta": {"account_id": account_id, "conversation_id": conv_id, "message_id": field(ev, "id", nothing), "inbox_id": field(field(ev, "inbox", {}), "id", nothing)}}]})
+    out({"messages": [{"thread": text(account_id) + ":" + text(conv_id), "text": content, "sent_at": sent_at, "from": {"id": text(field(who, "id", "")), "name": text(field(who, "name", "")), "kind": "human"}, "images": images, "meta": {"account_id": account_id, "conversation_id": conv_id, "message_id": field(ev, "id", nothing), "inbox_id": field(field(ev, "inbox", {}), "id", nothing)}}]})
     give true
 
 task send()

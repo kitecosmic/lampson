@@ -328,8 +328,8 @@ check(length(tg_calls("sendChatAction")) >= typing_before + 2, "avisa escribiend
 check(tg_post(tg_msg(555, "hola", 300, {}), "otro")["status"] == 401, "secreto inválido → 401")
 check(tg_post({"update_id": 1, "edited_message": {"message_id": 1, "chat": {"id": 555}, "from": {"id": 9001, "is_bot": false}, "text": "editado", "date": 1}}, "tgsecret")["json"]["accepted"] == 0, "una edición se ignora (no hay respuesta duplicada)")
 check(tg_post(tg_msg(555, "soy un bot", 301, {"from": {"id": 7, "is_bot": true, "first_name": "Otro"}}), "tgsecret")["json"]["accepted"] == 0, "un mensaje de otro bot se ignora")
-let tp be tg_post(tg_msg(557, nothing, 400, {"caption": "mirá esto", "photo": [{"file_id": "x"}]}), "tgsecret")
-check(tp["json"]["accepted"] == 1, "una foto con caption entra como texto con la nota")
+let tp be tg_post(tg_msg(557, nothing, 400, {"caption": "mirá esto", "photo": [{"file_id": "chica", "file_size": 900}, {"file_id": "x", "file_size": 50000}, {"file_id": "enorme", "file_size": 5000000}]}), "tgsecret")
+check(tp["json"]["accepted"] == 1, "una foto con caption entra")
 let sends be []
 let tries5 be 0
 while length(sends) < sends_before + 2 and tries5 < 60
@@ -341,7 +341,11 @@ check(length(to555) == 1 and contains(to555[0]["body"]["text"], "msgs=3") and to
 check(length(where(sends, (c) => c["body"]["chat_id"] == 557)) == 1, "y otra al chat de la foto")
 let ts557 be runtime.thread_session("rt-buf", "telegram:557")
 let doc557 be when ts557 != "" then session.load(ts557) otherwise {"messages": []}
-check(length(where(doc557["messages"], (m) => m["role"] == "user" and contains(text(m["content"]), "mirá esto") and contains(text(m["content"]), "[the user sent a photo]"))) == 1, "el agente vio el caption y la nota de la foto")
+let u557 be where(doc557["messages"], (m) => m["role"] == "user" and contains(text(m["content"]), "mirá esto"))
+check(length(u557) == 1 and contains(u557[0], "images") and length(u557[0]["images"]) == 1, "la foto llega al agente como IMAGEN, con el caption como texto")
+check(length(u557) == 1 and contains(u557[0], "images") and u557[0]["images"][0]["media_type"] == "image/jpeg" and u557[0]["images"][0]["data"] == decode(bytes("FFD8FFE000104A46494600010100", "hex"), "base64"), "los bytes descargados con getFile, en base64")
+check(length(where(tg_calls("getFile"), (c) => c["body"]["file_id"] == "x")) == 1, "eligió la versión más grande que entra en 1 MB (no la de 5 MB)")
+check(length(tg_calls("sendChatAction")) >= typing_before + 5, "escribiendo…: al recibir cada mensaje y otra vez cuando el agente arranca el turno (" + text(length(tg_calls("sendChatAction")) - typing_before) + ")")
 -- send en partes: el plugin solo, bajo su techo, con un texto de 9000 caracteres
 let longtxt be ""
 let li be 0

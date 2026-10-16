@@ -12,6 +12,11 @@
 --   send     Lampson le pasa la respuesta del agente: {"thread", "text", "meta", "agent", "session", "batch"}
 --            (thread y meta = los que devolvió receive para el último mensaje del lote) y el plugin la manda.
 --            Imprime lo que quiera; una salida que empieza con "ERROR" cuenta como fallo (queda en el log).
+--   typing   (opcional, con "channel": {"typing": true}) el "escribiendo…" de la plataforma: {"thread", "meta"}.
+--            Lampson la llama al empezar cada turno y la renueva cada ~4,5 s mientras el modelo trabaja.
+--   setup    (opcional) registra el webhook en la plataforma: {"webhook_url"} (`lampson channel setup <canal>`).
+--   Imágenes: un mensaje puede traer "images": [{"media_type": "image/jpeg", "data": "<base64>"}] — los modelos con
+--            visión las ven; a los demás el proveedor les deja una nota.
 --
 -- Lampson pone todo lo demás: la ruta del webhook (POST/GET /w/<slug>/ch/<canal>, que el hub reenvía sin passkey:
 -- la firma de la plataforma la verifica el plugin en receive), el buzón de cada conversación (lib/mailbox.syn:

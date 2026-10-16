@@ -43,7 +43,13 @@ serve on 8767
         state_set("tg_calls", append(when calls == nothing then [] otherwise calls, entry))
         when params.method == "getMe"
             give {"ok": true, "result": {"id": 1, "is_bot": true, "username": "lampson_test_bot"}}
+        when params.method == "getFile"
+            give {"ok": true, "result": {"file_id": "x", "file_path": "photos/p1.jpg"}}
         give {"ok": true, "result": true}
+
+    -- la descarga de un archivo (getFile → /file/bot<TOKEN>/<file_path>): unos bytes de JPEG
+    route "GET /file/:bot/*path"
+        give binary(bytes("FFD8FFE000104A46494600010100", "hex"), "image/jpeg")
 
     route "GET /telegram/calls"
         let calls be state_get("tg_calls")

@@ -87,7 +87,7 @@ task read_manifest(dir, name, scope, legacy)
     when contains(doc, "channel") and doc["channel"] != nothing
         when type_of(doc["channel"]) != "map"
             give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "channel must be an object, e.g. {\"agent\": \"support\"}"}
-        set channel to {"agent": when contains(doc["channel"], "agent") and doc["channel"]["agent"] != nothing then lower(text(doc["channel"]["agent"])) otherwise ""}
+        set channel to {"agent": when contains(doc["channel"], "agent") and doc["channel"]["agent"] != nothing then lower(text(doc["channel"]["agent"])) otherwise "", "typing": contains(doc["channel"], "typing") and doc["channel"]["typing"] == true}
     let config be []
     when contains(doc, "config") and doc["config"] != nothing
         each ck in doc["config"]
