@@ -51,7 +51,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"], ["rt-ask", "api:aprob-1"], ["rt-ask", "api:aprob-2"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-mid", "api:tarde"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"], ["rt-ask", "api:aprob-1"], ["rt-ask", "api:aprob-2"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -195,6 +195,17 @@ check(midr[0]["json"]["session"] == midr[1]["json"]["session"] and length(midr[0
 check(midr[0]["json"]["steps"] == 2 and contains(midr[0]["json"]["text"], "msgs=5"), "el modelo vio el segundo mensaje antes de responder (un solo turno de 2 pasos): " + midr[0]["json"]["text"])
 check(midr[0]["json"]["text"] == midr[1]["json"]["text"], "y los dos reciben la misma respuesta")
 set created to append(created, midr[0]["json"]["session"])
+
+print("buzón: lo que llega mientras el modelo escribe la respuesta (sin tools) la rehace — no sale una respuesta vieja")
+let late be parallel_map(fire, [
+    {"delay": 0, "key": kb["key"], "body": {"to": "rt-mid", "thread": "api:tarde", "text": "piensa: hola"}},
+    {"delay": 1.5, "key": kb["key"], "body": {"to": "rt-mid", "thread": "api:tarde", "text": "piensa: soy lucía"}}
+])
+check(length(late[0]["json"]["batch"]) == 2 and late[0]["json"]["text"] == late[1]["json"]["text"], "un lote, una respuesta: " + json_encode(late[0]["json"]["batch"]))
+check(late[0]["json"]["steps"] == 2 and contains(late[0]["json"]["text"], "msgs=3 · último: piensa: soy lucía"), "el borrador se descartó y la respuesta vio el segundo mensaje: " + late[0]["json"]["text"])
+let ldoc be session.load(late[0]["json"]["session"])
+check(length(where(ldoc["messages"], (m) => m["role"] == "assistant")) == 1, "en la sesión queda solo la respuesta final, no el borrador")
+set created to append(created, late[0]["json"]["session"])
 
 print("buzón: clientes distintos no se esperan entre sí")
 let par be parallel_map(fire, [

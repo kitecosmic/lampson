@@ -277,7 +277,7 @@ task run_batch(k, spec, items)
                 give nothing
             give {"messages": msgs, "stop": halt}
         let ctx be o["ctx"]
-        set ctx["opts"] to loop.with_inbox(ctx["opts"], mid, "")
+        set ctx["opts"] to loop.with_final_inbox(loop.with_inbox(ctx["opts"], mid, ""))
         set o["ctx"] to ctx
         let msgs be o["messages"]
         each it in ordered

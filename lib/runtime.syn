@@ -364,9 +364,11 @@ export task system_for(id, cfg)
     require env("OS")
     require secret("LAMPSON_*")
     let spec be spec_or_raise(id)
+    -- los plugins traen su proceso: las instrucciones de los que tienen tools en el catálogo de este agente
+    let extra be plugins.instructions(apply(catalog_of(spec), (s) => s["name"]))
     when spec["base"] == "lampson"
-        give {"role": "system", "content": prompt.build(agents.env_info(cfg), spec["system"])}
-    give {"role": "system", "content": spec["system"] + "\n\n# Environment\n- Date: " + format_time(now(), "%Y-%m-%d")}
+        give {"role": "system", "content": prompt.build(agents.env_info(cfg), spec["system"]) + extra}
+    give {"role": "system", "content": spec["system"] + extra + "\n\n# Environment\n- Date: " + format_time(now(), "%Y-%m-%d")}
 
 -- over: {mode, provider, model} — lo que pide la puerta pisa lo del agente; vacío = lo del agente / lo configurado
 export task boot(id, over, ask_fn)

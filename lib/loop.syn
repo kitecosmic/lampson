@@ -429,7 +429,19 @@ export task run_turn(cfg, messages, opts, on_event)
         set msgs to append(msgs, assistant)
         when clean_text != ""
             emit(on_event, "assistant", clean_text, tag)
-        when length(r["tool_calls"]) == 0
+        -- buzón de conversación (opts.inbox_final): si mientras el modelo escribía la respuesta llegaron mensajes
+        -- nuevos, esa respuesta ya está vieja (visto 2026-10-16: «soy Lucía» llegó a mitad de turno y salió «decime
+        -- tu nombre»). Se descarta el borrador, entran los mensajes y el modelo responde de nuevo — un paso más.
+        let late be nothing
+        when length(r["tool_calls"]) == 0 and not last_step and contains(opts, "inbox_final") and opts["inbox_final"] == true and opts["inbox_fn"] != nothing
+            set late to call(opts["inbox_fn"], {"step": steps, "tag": tag})
+        when late != nothing and length(late["messages"]) > 0
+            set msgs to slice(msgs, 0, length(msgs) - 1)
+            emit(on_event, "inbox", "llegaron mensajes mientras respondía: rehago la respuesta", tag)
+            each m in late["messages"]
+                emit(on_event, "inbox", m, tag)
+                set msgs to append(msgs, {"role": "user", "content": m})
+        otherwise when length(r["tool_calls"]) == 0
             set final_text to clean_text
             give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": when over_budget then "budget" otherwise (when last_step then "max_steps" otherwise "done")}
         each tc in r["tool_calls"]
@@ -523,6 +535,11 @@ export task with_steps(opts, n)
 
 export task with_inbox(opts, inbox_fn, tag)
     give with_key(with_key(opts, "inbox_fn", inbox_fn), "tag", tag)
+
+-- buzón de una conversación (lib/mailbox.syn): además de antes de cada llamada, se consulta al terminar; lo que
+-- llegó mientras el modelo respondía rehace la respuesta en lugar de mandar una vieja
+export task with_final_inbox(opts)
+    give with_key(opts, "inbox_final", true)
 
 export task with_ask(opts, ask_fn)
     give with_key(opts, "ask_fn", ask_fn)

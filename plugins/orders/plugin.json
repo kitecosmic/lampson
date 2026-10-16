@@ -1,0 +1,59 @@
+{
+  "name": "orders",
+  "description": "Take orders by chat: catalog, quotes with promos and delivery, orders saved with customer and address, stock kept up to date. Data in .lampson/orders/ of the project.",
+  "kind": "syn",
+  "entry": "plugin.syn",
+  "caps": "file=workspace/.lampson/orders,file=workspace/.lampson/orders/*",
+  "timeout": 20,
+  "instructions": "INSTRUCTIONS.md",
+  "tools": [
+    {
+      "name": "catalog",
+      "description": "The store's catalog: products (sku, name, price, unit, stock, notes, promos), hours, delivery and payment methods. Read it before talking about products, prices, stock, delivery or hours.",
+      "parameters": {"type": "object", "properties": {}},
+      "readonly": true
+    },
+    {
+      "name": "quote",
+      "description": "Prices a cart exactly: lines, promos and packs applied, delivery fee and total, plus any item without enough stock. Use it for every total you tell the customer; never add up yourself.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "description": "the cart", "items": {"type": "object", "properties": {"sku": {"type": "string"}, "qty": {"type": "integer", "minimum": 1}}, "required": ["sku", "qty"]}},
+          "delivery": {"type": "string", "enum": ["delivery", "pickup"], "description": "delivery to an address, or pickup at the store"}
+        },
+        "required": ["items"]
+      },
+      "readonly": true
+    },
+    {
+      "name": "place_order",
+      "description": "Places the order once the customer CONFIRMED the summary: saves it with an order number, saves the customer (name, phone, address) and lowers the stock. Prices are computed here again from the catalog.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer": {"type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string"}}, "required": ["name"]},
+          "items": {"type": "array", "items": {"type": "object", "properties": {"sku": {"type": "string"}, "qty": {"type": "integer", "minimum": 1}}, "required": ["sku", "qty"]}},
+          "delivery": {"type": "string", "enum": ["delivery", "pickup"]},
+          "address": {"type": "string", "description": "street, number, floor/apartment and any reference — required for delivery"},
+          "payment": {"type": "string", "description": "one of the catalog's payment methods"},
+          "when": {"type": "string", "description": "when the customer wants it, if they said (e.g. 'today 18 h'); empty = as soon as possible"},
+          "notes": {"type": "string", "description": "anything else the store must know"}
+        },
+        "required": ["customer", "items", "delivery", "payment"]
+      }
+    },
+    {
+      "name": "find_customer",
+      "description": "Looks up a returning customer by phone (or by name): saved address and last orders.",
+      "parameters": {"type": "object", "properties": {"phone": {"type": "string"}, "name": {"type": "string"}}},
+      "readonly": true
+    },
+    {
+      "name": "order_status",
+      "description": "An order by its number (e.g. P-0003): items, total, delivery and status.",
+      "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+      "readonly": true
+    }
+  ]
+}
