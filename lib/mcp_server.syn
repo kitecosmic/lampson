@@ -1,8 +1,13 @@
 -- lib/mcp_server.syn — Lampson COMO servidor MCP (spec/engine.md, fase 3): `lampson mcp serve`
 --
--- Lo inverso de lib/mcp.syn (que es el CLIENTE): acá Claude Desktop, Cursor u otro agente lanzan a Lampson y usan
--- sus agentes como tools. Transporte stdio: JSON-RPC 2.0, un mensaje por línea en stdin, respuestas por stdout
--- (nada más puede escribir en stdout mientras sirve).
+-- Lo inverso de lib/mcp.syn (que es el CLIENTE): acá Claude Desktop, Cursor u otro agente usan los agentes de
+-- Lampson como tools. Dos transportes, el mismo manejo (handle):
+--   stdio  `lampson mcp serve`: JSON-RPC 2.0, un mensaje por línea en stdin, respuestas por stdout (nada más puede
+--          escribir en stdout mientras sirve). El cliente y Lampson en la MISMA máquina.
+--   HTTP   POST /w/<slug>/v1/mcp (web.syn, "Streamable HTTP" de MCP, respuestas JSON) con la API key de la API /v1:
+--          desde cualquier lado, con la URL pública de Lampson (--domain, túnel, LAMPSON_PUBLIC_URL). Cada key ve
+--          solo sus agentes; los mensajes pasan por el buzón (lib/mailbox.syn: dos agentes de afuera escribiendo a
+--          la vez en la misma conversación no se pisan).
 --
 -- Tools:
 --   ask(message, agent?, thread?)  un mensaje a un agente; mismo thread = misma conversación. Sin thread se crea uno
@@ -14,6 +19,7 @@
 use "./runtime.syn" as runtime
 
 export let PROTOCOL be "2025-06-18"
+export let SUPPORTED be ["2025-06-18", "2025-03-26", "2024-11-05"]
 
 -- los agentes que este servidor ofrece: LAMPSON_MCP_AGENTS ("tienda,plan") o todos los elegibles
 export task offered()
@@ -45,8 +51,8 @@ task reply_error(id, code, msg)
 task text_result(t, structured, is_error)
     give {"content": [{"type": "text", "text": t}], "structuredContent": structured, "isError": is_error}
 
--- tools/call → resultado MCP
-export task call(name, args, agents_list)
+-- tools/call → resultado MCP (no se llama `call`: taparía al builtin call() que invoca deliver_fn)
+export task run_tool(name, args, agents_list, deliver_fn)
     require net
     require exec
     require time
@@ -83,13 +89,74 @@ export task call(name, args, agents_list)
     let mode be when spec["permission"] != "" then "" otherwise "strict"
     let r be nothing
     try
-        set r to runtime.deliver({"to": agent, "thread": thread, "session": "", "from": {"id": "", "name": "", "kind": "agent"}, "text": msg, "images": [], "channel": "mcp", "meta": {}}, {"mode": mode, "ask_fn": nothing})
+        set r to call(deliver_fn, {"sobre": {"to": agent, "thread": thread, "session": "", "from": {"id": "", "name": "", "kind": "agent"}, "text": msg, "images": [], "channel": "mcp", "meta": {}}, "mode": mode})
     recover err
         give text_result("error: " + text(err), {"agent": agent, "thread": thread}, true)
     let failed be starts_with(r["stopped"], "error")
     let body be when failed then r["stopped"] otherwise r["text"]
     let footer be "\n\n[lampson · agent " + agent + " · thread " + thread + " — pass this thread to continue the conversation]"
     give text_result(body + footer, {"agent": agent, "thread": thread, "session": r["session"], "text": r["text"], "steps": r["steps"], "stopped": r["stopped"]}, failed)
+
+-- un mensaje JSON-RPC → la respuesta (map), o nothing si era una notificación (no se responde)
+export task handle(req, agents_list, deliver_fn)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    when req == nothing or type_of(req) != "map"
+        give {"jsonrpc": "2.0", "id": nothing, "error": {"code": -32600, "message": "invalid request"}}
+    let id be when contains(req, "id") then req["id"] otherwise nothing
+    let method be when contains(req, "method") then text(req["method"]) otherwise ""
+    let params be when contains(req, "params") and req["params"] != nothing then req["params"] otherwise {}
+    when id == nothing
+        give nothing
+    when method == "initialize"
+        -- la versión que pide el cliente si la hablamos; si no, la nuestra (el cliente decide si sigue)
+        let asked be when contains(params, "protocolVersion") then text(params["protocolVersion"]) otherwise PROTOCOL
+        let v be when contains(SUPPORTED, asked) then asked otherwise PROTOCOL
+        give {"jsonrpc": "2.0", "id": id, "result": {"protocolVersion": v, "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "lampson", "version": "0.2"}, "instructions": "Lampson agents. Use `agents` to see who is available and `ask` to talk to one; keep the returned thread to continue a conversation."}}
+    when method == "ping"
+        give {"jsonrpc": "2.0", "id": id, "result": {}}
+    when method == "tools/list"
+        give {"jsonrpc": "2.0", "id": id, "result": {"tools": tools_list(agents_list)}}
+    when method == "tools/call"
+        let args be when contains(params, "arguments") and params["arguments"] != nothing then params["arguments"] otherwise {}
+        give {"jsonrpc": "2.0", "id": id, "result": run_tool(text(params["name"]), args, agents_list, deliver_fn)}
+    give {"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found: " + method}}
+
+-- stdio: el turno directo (un solo cliente, un proceso)
+export task deliver_direct(sobre, mode)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    give runtime.deliver(sobre, {"mode": mode, "ask_fn": nothing})
 
 -- el loop stdio: hasta EOF
 export task serve()
@@ -112,31 +179,23 @@ export task serve()
     require env("OS")
     require secret("LAMPSON_*")
     let agents_list be offered()
+    when length(agents_list) == 0
+        give false
     let line be read_line("")
     while line != nothing
         when trim(line) != ""
             let req be nothing
+            let bad be false
             try
                 set req to json_decode(line)
             recover err
+                set bad to true
+            when bad
                 reply_error(nothing, -32700, "parse error")
-            when req != nothing
-                let id be when contains(req, "id") then req["id"] otherwise nothing
-                let method be when contains(req, "method") then text(req["method"]) otherwise ""
-                let params be when contains(req, "params") and req["params"] != nothing then req["params"] otherwise {}
-                -- notificaciones (sin id): no se responden
-                when id == nothing
-                    set id to nothing
-                otherwise when method == "initialize"
-                    reply(id, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "lampson", "version": "0.2"}, "instructions": "Lampson agents working in the user's project. Use `agents` to see who is available and `ask` to talk to one; keep the returned thread to continue a conversation."})
-                otherwise when method == "ping"
-                    reply(id, {})
-                otherwise when method == "tools/list"
-                    reply(id, {"tools": tools_list(agents_list)})
-                otherwise when method == "tools/call"
-                    let args be when contains(params, "arguments") and params["arguments"] != nothing then params["arguments"] otherwise {}
-                    reply(id, call(text(params["name"]), args, agents_list))
-                otherwise
-                    reply_error(id, -32601, "method not found: " + method)
+            otherwise
+                let resp be handle(req, agents_list, deliver_direct)
+                when resp != nothing
+                    print(json_encode(resp))
+                    flush()
         set line to read_line("")
     give true

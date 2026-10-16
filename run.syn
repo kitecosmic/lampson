@@ -41,12 +41,16 @@ use "./lib/agents.syn" as agents
 use "./lib/mcp.syn" as mcp
 use "./lib/apikeys.syn" as apikeys
 use "./lib/mcp_server.syn" as mcp_server
+use "./lib/approvals.syn" as approvals
 
 -- `lampson key add|list|remove`: API keys de la API /v1 de este workspace (lib/apikeys.syn, lib/api.syn)
 --   LAMPSON_KEY_CMD=add [LAMPSON_KEY_NAME] [LAMPSON_KEY_AGENTS=tienda,soporte]   · list · remove LAMPSON_KEY_ID
 let key_cmd be env("LAMPSON_KEY_CMD", "")
 when key_cmd != ""
-    let api_base be "http://127.0.0.1:8080/w/" + env("LAMPSON_WS", "<slug>") + "/v1"
+    let ws_path be "/w/" + env("LAMPSON_WS", "<slug>") + "/v1"
+    -- la URL pública de este lampson (--domain, túnel o LAMPSON_PUBLIC_URL), si hay: la que se pega en otra app o agente
+    let pub be approvals.public_url()
+    let api_base be when pub != "" then pub + ws_path otherwise "http://127.0.0.1:8080" + ws_path
     when key_cmd == "add"
         let ag be where(apply((x) => lower(trim(x)), split(env("LAMPSON_KEY_AGENTS", ""), ",")), (x) => x != "")
         each a in ag
@@ -58,6 +62,11 @@ when key_cmd != ""
         print("")
         print("  " + k["key"])
         print("")
+        print("  API (apps, bots):     " + api_base + "/messages")
+        print("  MCP (otros agentes):  " + api_base + "/mcp      con el header Authorization: Bearer <la key>")
+        when pub == ""
+            print("  (solo desde esta PC: para usarla desde afuera, `lampson --domain …` o un túnel; ver lampson.org/docs/phone)")
+        print("")
         print("  curl -X POST " + api_base + "/messages -H \"Authorization: Bearer " + k["key"] + "\" -H \"Content-Type: application/json\" -d '{\"to\": \"" + (when contains(k["agents"], "*") then runtime.default_agent() otherwise k["agents"][0]) + "\", \"thread\": \"cliente-1\", \"text\": \"hola\"}'")
     otherwise when key_cmd == "list"
         let ks be apikeys.list()
@@ -65,7 +74,7 @@ when key_cmd != ""
             print("sin API keys en este workspace (lampson key add [--agent ID] [--name NOMBRE])")
         each k in ks
             print("  " + k["id"] + "  " + (when k["name"] == "" then "(sin nombre)" otherwise k["name"]) + "  agentes: " + join(k["agents"], ", ") + "  creada " + k["created"] + "  último uso " + (when k["last_used"] == nothing then "nunca" otherwise text(k["last_used"])))
-        print("  API: " + api_base)
+        print("  API: " + api_base + "/messages · MCP: " + api_base + "/mcp")
     otherwise when key_cmd == "remove"
         let kid be env("LAMPSON_KEY_ID", "")
         when apikeys.remove(kid)

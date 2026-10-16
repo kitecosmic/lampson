@@ -73,6 +73,7 @@ use "./lib/runtime.syn" as runtime
 use "./lib/api.syn" as api
 use "./lib/mailbox.syn" as mailbox
 use "./lib/channels.syn" as channels
+use "./lib/mcp_server.syn" as mcp_server
 
 let APPROVAL_TIMEOUT be 180
 
@@ -725,6 +726,24 @@ serve on 8080
                         send {"kind": "done", "data": r, "tag": "", "agent": r["agent"], "thread": r["thread"]} as "event"
                         set finished to true
             bus_unsubscribe(sub)
+
+    -- MCP por HTTP (lib/mcp_server.syn, "Streamable HTTP" con respuestas JSON): Claude, Cursor u otro agente usan los
+    -- agentes de este workspace desde cualquier lado, con la API key. Una notificación → 202 sin cuerpo.
+    route "POST /w/:slug/v1/mcp"
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give with_header(fail(a["status"], a["error"]), "WWW-Authenticate", "Bearer")
+        state_set("lampson:last_used", now())
+        let offered be apply((x) => x["id"], api.agents_for(a["key"]))
+        when length(offered) == 0
+            give fail(403, "this API key has no agents")
+        let resp be mcp_server.handle(json of request, offered, api.mcp_deliver)
+        when resp == nothing
+            give respond("", "application/json", 202)
+        give resp
+
+    route "GET /w/:slug/v1/mcp"
+        give fail(405, "this MCP server does not open a server-to-client stream; POST JSON-RPC messages")
 
     -- ---------- canales (lib/channels.syn · spec/engine.md fase 4) ----------
     -- El webhook de la plataforma. Sin auth de Lampson: la firma de la plataforma la verifica el plugin en `receive`

@@ -58,6 +58,26 @@ delante. Y que esa base sea la misma sobre la que después se construye la **orq
    no va a llegar: o tiene una regla, o abre una aprobación asíncrona.
 6. **El kernel no se toca para agregar puertas.** Si una puerta necesita algo del kernel, va por `opts`/`on_event`.
 
+## Casos de uso (para la documentación final)
+
+Cómo se usa Lampson como motor, de lo más común a lo que viene. La documentación pública sale de acá.
+
+1. **Atender clientes por chat** (WhatsApp, Instagram, email, web vía Chatwoot, o cualquier canal-plugin): un agente
+   con el catálogo y las reglas del negocio, sesiones por cliente, ráfagas juntadas en una respuesta, permisos
+   acotados (`strict`, rutas limitadas). → canales (fase 4), buzón.
+2. **Integrarlo en tu app o backend**: `POST /v1/messages` (JSON, SSE o callback) con API key; o `lampson run` desde
+   un script. → API (fase 2), `lampson run` (fase 1).
+3. **Los empleados ya usan una IA** (Claude, ChatGPT, Cursor): el agente del negocio se conecta como tool MCP y le
+   preguntan desde ahí, sin otra app, con la información y las reglas reales. → MCP HTTP (3b).
+4. **Darle a una IA acceso a datos sensibles sin darle las llaves**: en el servidor, un agente de Lampson con un
+   plugin de solo lectura y alcance limitado; la IA de afuera le pregunta y recibe solo la respuesta. → MCP, scopes.
+5. **Ahorrar delegando lo pesado a un modelo barato**: Claude delega "lee estos 40 archivos" a un agente de Lampson
+   con DeepSeek u Ollama y recibe el resumen. → MCP stdio (3).
+6. **Agente ↔ agente entre empresas**: el agente de compras de un restaurante le pregunta precio y stock al agente
+   del proveedor; cada uno con su Lampson, su key y sus reglas. Un Lampson pone la URL del otro en su `mcp.json` y
+   su agente gana la tool `mcp_<proveedor>_ask`. → MCP HTTP servidor + cliente (3b). Es la base de la orquestación
+   (fase 6): un equipo puede incluir agentes de afuera.
+
 ## Contratos
 
 ### Sobre (envelope)
@@ -210,6 +230,30 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
 - [ ] Ejemplo de configuración para Claude Desktop / Cursor (va con la documentación final; en Windows el comando
       es `lampson.cmd`).
 
+### Fase 3b — MCP por HTTP (y Lampson como cliente MCP por HTTP)
+- [x] Servidor: `POST /w/<slug>/v1/mcp` ("Streamable HTTP" de MCP, respuestas JSON; notificación → 202; GET → 405),
+      con la API key de `/v1` (cada key ve solo sus agentes). Mismo manejo que stdio (`mcp_server.handle`). Los
+      `ask` pasan por el buzón (dos agentes de afuera en la misma conversación no se pisan); entre agentes no hay
+      espera de silencio salvo que el agente la configure. Negocia la versión de protocolo que pide el cliente.
+- [x] La URL pública que Lampson ya sabe tener (`--domain`, túnel, `LAMPSON_PUBLIC_URL`) completa esto:
+      `lampson key add` imprime la URL de la API y la del MCP listas para pegar en otra app o agente.
+- [x] Cliente: `lib/mcp.syn` también habla HTTP. En `mcp.json`, el formato de Claude Code:
+      `{"proveedor": {"url": "https://…/v1/mcp", "headers": {"Authorization": "Bearer ${LAMPSON_PROVEEDOR_KEY}"}}}`
+      (`${LAMPSON_*}` se expande del `.env`: la key no queda escrita). Respuestas JSON o SSE, `Mcp-Session-Id`.
+      `/mcp add <nombre> https://…` también sirve.
+- [x] Tests (`api_test.syn`): servidor (401, initialize, 202, tools/list por key, ask + continuación, 405) y
+      **agente ↔ agente**: un `lampson run` con un `mcp.json` que apunta a otro Lampson usa a su agente como tool
+      (`mcp_proveedor_ask`) y responde con lo que le contestó. A mano por el hub con el modelo real: un "agente de
+      compras de un restaurante" le pidió 10 panes integrales al agente `tienda` → stock, precio con promo y envío.
+
+**Pendientes que salieron en la fase 3b:**
+- [ ] **Permiso por tool en el agente.** Las tools MCP y de plugins piden aprobación (`ask`) y en `strict` se
+      deniegan; un agente sin humano que debe usar otro agente hoy necesita `"permission": "yolo"`. Propuesta:
+      `{"name": "mcp_proveedor_ask", "approve": "auto"}` en el allow-list — quien escribe el agente lo autoriza
+      explícitamente para esa tool y solo esa.
+- [ ] Respuestas en streaming (SSE) desde nuestro servidor MCP y progreso mientras el agente trabaja.
+- [ ] `tty_test` falló 1 de 4 corridas con la máquina cargada (maneja la terminal por PTY con tiempos fijos).
+
 ### Fase 4 — Canales como plugins
 Contrato en la cabecera de `lib/channels.syn`. Universal a propósito: cada uno arma el canal que necesite, la
 comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir más plataformas.
@@ -251,7 +295,7 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
 
 ## Estado
 
-**Fase actual:** 3b — MCP por HTTP. Fases 1, 2 (con el buzón), 3 y 4 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** 5 — SDK. Fases 1, 2 (con el buzón), 3, 3b y 4 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 

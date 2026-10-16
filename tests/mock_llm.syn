@@ -88,6 +88,12 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("bash", {"command": "sleep 2 && echo listo"})])
             give reply_text("final lento · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 40))
+        -- "pregunta-proveedor": agente ↔ agente — llama a la tool MCP de OTRO Lampson (mcp_proveedor_ask, por HTTP) y
+        -- responde con lo que le contestó el otro agente
+        when starts_with(q, "pregunta-proveedor")
+            when tools_seen == 0
+                give reply_tools([tool_call("mcp_proveedor_ask", {"message": "ls", "thread": "a2a-1"})])
+            give reply_text("final a2a · el proveedor dijo: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
         -- "espera": el modelo tarda 3 s y pide ls (deja tiempo a que llegue otro mensaje A MITAD del turno: lib/mailbox.syn)
         when starts_with(q, "espera")
             sleep(3)

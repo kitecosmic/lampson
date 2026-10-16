@@ -49,7 +49,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -257,6 +257,69 @@ recover err
 check(contains(chlog, "RECV 1:77") and contains(chlog, "SENT 1:77"), "el log del canal registra lo que entró y lo que salió")
 plugins.set_enabled("chatwoot", cw_was_on)
 rm_file(".lampson/channels/chatwoot.log")
+
+print("MCP por HTTP (POST /v1/mcp): otro agente usa los de este workspace con la API key")
+task mcp_rpc(k, payload)
+    let hs be {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    when k != nothing
+        set hs["Authorization"] to "Bearer " + k["key"]
+    let r be http_post(BASE + "/mcp", json_encode(payload), hs, 60)
+    let d be nothing
+    try
+        set d to json_decode(text(r["body"]))
+    recover err
+        set d to nothing
+    give {"status": r["status"], "json": d}
+check(mcp_rpc(nothing, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})["status"] == 401, "sin key → 401")
+let mi be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "otro-agente", "version": "1"}}})
+check(mi["status"] == 200 and mi["json"]["result"]["serverInfo"]["name"] == "lampson" and mi["json"]["result"]["protocolVersion"] == "2025-03-26", "initialize negocia la versión que pide el cliente")
+check(mcp_rpc(ka, {"jsonrpc": "2.0", "method": "notifications/initialized"})["status"] == 202, "una notificación → 202")
+let mt be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+check(apply((t) => t["name"], mt["json"]["result"]["tools"]) == ["ask", "agents"] and not contains(mt["json"]["result"]["tools"][0]["inputSchema"]["properties"], "agent"), "la key A tiene un solo agente: ask sin parámetro agent")
+let mtb be mcp_rpc(kb, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+check(contains(mtb["json"]["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"], "rt-api") and contains(mtb["json"]["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"], "build"), "la key * ofrece varios agentes")
+let ma be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "ask", "arguments": {"message": "ls", "thread": "mcp:http-1"}}})
+check(ma["status"] == 200 and not ma["json"]["result"]["isError"] and starts_with(ma["json"]["result"]["content"][0]["text"], "final ls"), "ask → respuesta del agente")
+let ma2 be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "ask", "arguments": {"message": "hola", "thread": "mcp:http-1"}}})
+check(ma2["json"]["result"]["structuredContent"]["session"] == ma["json"]["result"]["structuredContent"]["session"] and contains(ma2["json"]["result"]["content"][0]["text"], "msgs=6"), "mismo thread → la conversación sigue")
+check(mcp_rpc(ka, {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ask", "arguments": {"message": "x", "agent": "build"}}})["json"]["result"]["isError"], "un agente fuera de la key → isError")
+check(http_get(BASE + "/mcp", {"Authorization": "Bearer " + ka["key"]}, nothing, 10)["status"] == 405, "GET → 405 (sin stream servidor→cliente)")
+
+print("agente ↔ agente: un Lampson usa al agente de otro Lampson por MCP HTTP (mcp.json con url + key)")
+-- Lampson A = `lampson run` con un mcp.json que apunta a este web.syn (Lampson B); la key va por ${LAMPSON_PROVEEDOR_KEY}
+write_file(".lampson/tmp/a2a_mcp.json", json_encode({"mcpServers": {"proveedor": {"url": BASE + "/mcp", "headers": {"Authorization": "Bearer ${LAMPSON_PROVEEDOR_KEY}"}}}}))
+write_file(ADIR + "/rt-a2a.agent.json", json_encode({"id": "rt-a2a", "system": "Agente de compras.", "tools": ["mcp_proveedor_*"], "permission": "yolo"}))
+let ap be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_AGENT": "rt-a2a", "LAMPSON_MESSAGE": "pregunta-proveedor", "LAMPSON_RUN_JSON": "1", "LAMPSON_MCP_CONFIG": ".lampson/tmp/a2a_mcp.json", "LAMPSON_PROVEEDOR_KEY": ka["key"]}, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
+proc_close_stdin(ap)
+let a2a_lines be []
+let a2a_code be nothing
+let a2a_deadline be now() + 90
+while a2a_code == nothing and now() < a2a_deadline
+    let ev be proc_recv(ap, 1)
+    when ev != nothing
+        when ev["type"] == "exit"
+            set a2a_code to ev["data"]["exit_code"]
+        otherwise
+            set a2a_lines to append(a2a_lines, ev["data"])
+proc_close(ap)
+let a2a_done be nothing
+let a2a_calls be []
+each l in a2a_lines
+    when starts_with(trim(l), "{")
+        try
+            let e be json_decode(trim(l))
+            when e["kind"] == "done"
+                set a2a_done to e["data"]
+            when e["kind"] == "tool_call"
+                set a2a_calls to append(a2a_calls, e["data"]["name"])
+        recover err
+            set a2a_calls to a2a_calls
+check(a2a_code == 0 and contains(a2a_calls, "mcp_proveedor_ask"), "el agente A llamó a la tool del agente B (mcp_proveedor_ask)")
+check(a2a_done != nothing and contains(a2a_done["text"], "el proveedor dijo: final ls"), "y respondió con lo que contestó el agente B: " + (when a2a_done == nothing then join(a2a_lines, " | ") otherwise a2a_done["text"]))
+when a2a_done != nothing
+    set created to append(created, a2a_done["session"])
+rm_file(".lampson/tmp/a2a_mcp.json")
+rm_file(ADIR + "/rt-a2a.agent.json")
 
 print("revocar")
 apikeys.remove(ka["id"])

@@ -115,3 +115,14 @@ export task job(id)
     require file.read(".lampson")
     require file.read(".lampson/*")
     give mailbox.job(id)
+
+-- MCP por HTTP (lib/mcp_server.syn): un `ask` pasa por el buzón de su conversación. Entre agentes no hay espera de
+-- silencio salvo que el agente la configure (`buffer`): la fila sí, siempre.
+export task mcp_deliver(sobre, mode)
+    require time
+    require random
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let spec be runtime.get(sobre["to"])
+    let s be mailbox.submit(sobre, {"mode": mode, "buffer": mailbox.buffer_of(spec, false)})
+    give mailbox.wait(s["id"])
