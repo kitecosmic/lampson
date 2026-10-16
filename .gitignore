@@ -25,3 +25,5 @@ __pycache__/
 sdk/python/dist/
 sdk/python/build/
 sdk/python/*.egg-info/
+# agentes globales del usuario (<LAMPSON_HOME>/agents): contenido suyo, como memory/
+/agents/

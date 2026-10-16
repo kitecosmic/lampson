@@ -47,7 +47,7 @@ function sync() {
   fs.mkdirSync(home, { recursive: true });
   // the folders every workspace links to (lib/workspaces.syn LINKS): if `memory/` does not exist when the
   // link is made, the link is born dangling and memory(write) fails with "No such file or directory"
-  for (const d of ['memory', 'plugins']) fs.mkdirSync(path.join(home, d), { recursive: true });
+  for (const d of ['memory', 'plugins', 'agents']) fs.mkdirSync(path.join(home, d), { recursive: true });
   for (const item of CODE) {
     const src = path.join(pkgDir, item);
     if (!fs.existsSync(src)) continue;

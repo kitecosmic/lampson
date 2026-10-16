@@ -27,7 +27,7 @@ export let HUB_FILE be "hub.syn"
 export let HUB_TEMPLATE be "hub.tpl.syn"
 -- rango alto para no chocar con lo que usan las apps (3000, 5173, 8000, 8080-8090…): solo el hub queda en 8080
 let FIRST_PORT be 47101
-let LINKS be ["lib", "public", "skills", "plugins", "memory"]
+let LINKS be ["lib", "public", "skills", "plugins", "memory", "agents"]
 let COPIES be ["web.syn", "chat.syn", "run.syn"]
 
 task is_win()

@@ -14,6 +14,8 @@ require file(".lampson")
 require file(".lampson/*")
 require file.read("plugins")
 require file.read("plugins/*")
+require file("agents")
+require file("agents/*")
 use "./lib/apikeys.syn" as apikeys
 use "./lib/plugins.syn" as plugins
 use "./lib/runtime.syn" as runtime
@@ -464,6 +466,15 @@ when a2n["done"] != nothing
 rm_file(ADIR + "/rt-a2a-no.agent.json")
 rm_file(".lampson/tmp/a2a_mcp.json")
 rm_file(ADIR + "/rt-a2a.agent.json")
+
+print("agentes globales: un agente de agents/ (la instalación) atendido por la API — pasa por el worker del buzón")
+write_file("agents/rt-gapi.agent.json", json_encode({"id": "rt-gapi", "description": "agente global", "system": "Soy global.", "tools": [], "buffer": false}))
+let ga be post("/messages", {"to": "rt-gapi", "thread": "api:global-1", "text": "hola"}, kb)
+check(ga["status"] == 200 and ga["json"]["agent"] == "rt-gapi" and contains(ga["json"]["text"], "final (no tools offered)"), "el agente global responde por /v1/messages: " + slice(ga["raw"], 0, 80))
+when ga["json"] != nothing
+    set created to append(created, ga["json"]["session"])
+rm_file("agents/rt-gapi.agent.json")
+rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key("rt-gapi", "api:global-1") + ".json")
 
 print("límites por key: rate limit (429 + Retry-After) y callbacks solo a URLs permitidas")
 let kr be apikeys.create_with("test-rate", ["rt-api"], {"rate": 3})

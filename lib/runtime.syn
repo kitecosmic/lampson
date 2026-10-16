@@ -7,8 +7,10 @@
 -- AGENTES = datos:
 --   integrados: los perfiles de lib/agents.syn (build, plan, review, explore, worker) — se comportan EXACTO como
 --               antes: registry/catalog/steps/prompt salen de las mismas tasks de agents.syn
+--   globales:   agents/<id>.agent.json en la instalación (<LAMPSON_HOME>/agents, enlazada en cada workspace como
+--               los plugins): valen para todos los proyectos
 --   proyecto:   workspace/.lampson/agents/<id>.agent.json — {id, description, base, system, tools, permission,
---               steps, budget_tokens, model:{provider, model}}; el último con el mismo id gana
+--               steps, budget_tokens, model:{provider, model}}; pisan a un global o integrado con el mismo id
 --
 -- SESIONES: `session` en el sobre = id de archivo ya conocido (lo que mandan la web y la terminal); `thread` =
 -- identidad externa (un número de WhatsApp, "cto:tarea-17"): se mapea a una sesión con un índice en
@@ -42,6 +44,7 @@ use "./tools/proc.syn" as proc
 use "./scope.syn" as scope
 
 export let PROJECT_DIR be "workspace/.lampson/agents"
+export let GLOBAL_DIR be "agents"
 export let THREADS_DIR be ".lampson/threads"
 export let SUFFIX be ".agent.json"
 let ID_RE be "[a-z0-9][a-z0-9-]{0,39}"
@@ -140,12 +143,27 @@ export task validate(raw, source)
 export task load_project()
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    give load_dir(PROJECT_DIR)
+
+-- {specs, errors}: los globales de la instalación
+export task load_global()
+    require file.read("agents")
+    require file.read("agents/*")
+    give load_dir(GLOBAL_DIR)
+
+task load_dir(dir)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
     let specs be []
     let errors be []
     try
-        each e in list_dir(PROJECT_DIR)
+        each e in list_dir(dir)
             when not e["is_dir"] and ends_with(e["name"], SUFFIX)
-                let src be PROJECT_DIR + "/" + e["name"]
+                let src be dir + "/" + e["name"]
                 try
                     let v be validate(json_decode(read_file(src)), src)
                     when v["ok"]
@@ -161,13 +179,18 @@ export task load_project()
         set specs to specs
     give {"specs": specs, "errors": errors}
 
--- todos los agentes por id: integrados y después los del proyecto (pisan a un integrado con el mismo id)
+-- todos los agentes por id: integrados, después los globales y después los del proyecto (pisa el más cercano)
 export task all()
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
     let out be {}
     each id in keys(agents.PROFILES)
         set out[id] to builtin(id)
+    each s in load_global()["specs"]
+        set s["source"] to "global:" + s["source"]
+        set out[s["id"]] to s
     each s in load_project()["specs"]
         set out[s["id"]] to s
     give out
@@ -175,6 +198,8 @@ export task all()
 export task get(id)
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
     let a be all()
     when contains(a, id)
         give a[id]
@@ -184,6 +209,8 @@ export task get(id)
 export task names()
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
     give sort(where(keys(all()), (n) => n != "worker"))
 
 -- el agente que atiende cuando el sobre no dice `to`
@@ -221,6 +248,8 @@ export task registry_of(spec)
     require file("workspace/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require env("LAMPSON_*")
     require env("OS")
     when spec["builtin"]
@@ -246,6 +275,8 @@ export task catalog_of(spec)
     require file("workspace/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require env("LAMPSON_*")
     require env("OS")
     when spec["builtin"]
@@ -267,6 +298,8 @@ task pick(a, b)
 task spec_or_raise(id)
     require file.read("workspace")
     require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
     let spec be get(id)
     when spec == nothing
         raise("no agent named '" + id + "' · available: " + join(names(), ", "))
@@ -285,6 +318,8 @@ export task opts_for(id, mode, ask_fn)
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file.read("memory")
     require file.read("memory/*")
     require env("LAMPSON_*")
@@ -321,6 +356,8 @@ export task system_for(id, cfg)
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file.read("memory")
     require file.read("memory/*")
     require env("LAMPSON_*")
@@ -343,6 +380,8 @@ export task boot(id, over, ask_fn)
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file.read("memory")
     require file.read("memory/*")
     require env("LAMPSON_*")
@@ -409,6 +448,8 @@ export task open(sobre, hooks)
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file.read("memory")
     require file.read("memory/*")
     require env("LAMPSON_*")
@@ -466,6 +507,8 @@ export task turn(o, messages, label, hooks)
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file.read("memory")
     require file.read("memory/*")
     require env("LAMPSON_*")
@@ -502,6 +545,8 @@ export task deliver(sobre, hooks)
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file.read("memory")
     require file.read("memory/*")
     require env("LAMPSON_*")
