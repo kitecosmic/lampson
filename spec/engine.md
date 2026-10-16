@@ -366,6 +366,11 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
 
 ## Estado
 
+**Documentación pública** (2026-10-16): lampson-site, rama `docs/engine` — grupo «Lampson como motor» (engine,
+agents, headless, api, channels, mcp-server, sdk) en en/es/pt, más MCP, plugins, comandos, configuración, interfaz
+web, FAQ, portada y llms.txt actualizados; 0 enlaces rotos en los tres idiomas. `main` de Lampson ya tiene el motor
+(merge 2026-10-16) y npm 0.3.0 / PyPI 0.2.10 están publicados.
+
 **Fase actual:** motor completo (fases 1-5) y los pendientes cerrados, salvo los que necesitan algo de afuera
 (Chatwoot real, webhook real de Telegram con dominio/túnel, publicar en PyPI/npm) y los próximos canales. Siguiente:
 Joel verifica → documentación final → merge a `main`; después fase 6 (orquestación) en su propia rama. **Rama:** `feat/engine` (desde `main` @ 61fae00).
