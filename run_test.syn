@@ -64,7 +64,7 @@ write_file(ADIR + "/rt-scoped.agent.json", json_encode({"id": "rt-scoped", "syst
 let created be []
 let threads be []
 -- threads fijos de este test: se limpian también AL EMPEZAR (una corrida abortada no contamina la siguiente)
-each t in [["rt-shop", "whatsapp:+5491100000001"], ["rt-shop", "whatsapp:+5491100000002"], ["rt-shop", "cli:test-1"], ["rt-shop", "sdk-1"]]
+each t in [["rt-shop", "whatsapp:+5491100000001"], ["rt-shop", "whatsapp:+5491100000002"], ["rt-shop", "cli:test-1"], ["rt-shop", "sdk-1"], ["rt-shop", "sdk-par-1"], ["rt-shop", "sdk-par-2"]]
     let ts0 be runtime.thread_session(t[0], t[1])
     when ts0 != ""
         session.delete(ts0)
@@ -203,7 +203,18 @@ task read_until(until_fn, secs)
 task is_ready(m)
     give m["kind"] == "ready"
 let rd be read_until(is_ready, 60)
-check(length(rd) == 1 and rd[0]["kind"] == "ready" and contains(rd[0]["data"]["agents"], "rt-shop"), "arranca y avisa ready con los agentes")
+check(length(rd) == 1 and rd[0]["kind"] == "ready" and contains(rd[0]["data"]["agents"], "rt-shop") and rd[0]["data"]["protocol"] == 2, "arranca y avisa ready (protocolo 2) con los agentes")
+-- conversaciones distintas en paralelo: dos asks lentos (~6 s cada uno contra el mock) terminan juntos
+let tpar be now()
+proc_send(sp, json_encode({"id": "p1", "op": "ask", "to": "rt-shop", "thread": "sdk-par-1", "text": "espera"}) + "\n" + json_encode({"id": "p2", "op": "ask", "to": "rt-shop", "thread": "sdk-par-2", "text": "espera"}) + "\n")
+let pdone be []
+task both_done(m)
+    when m["kind"] == "done" and (m["id"] == "p1" or m["id"] == "p2")
+        set pdone to append(pdone, m["id"])
+    give length(pdone) == 2
+read_until(both_done, 60)
+let dur be now() - tpar
+check(length(pdone) == 2 and dur < 10, "dos conversaciones a la vez terminan en " + text(floor(dur * 10) / 10) + " s (en serie serían ~12)")
 -- dos pedidos de una: se atienden en orden, cada evento con su id
 proc_send(sp, json_encode({"id": "a1", "op": "ask", "to": "rt-shop", "thread": "sdk-1", "text": "ls"}) + "\n" + json_encode({"id": "a2", "op": "ask", "to": "rt-shop", "thread": "sdk-1", "text": "hola"}) + "\n")
 task is_done_a2(m)
@@ -228,6 +239,8 @@ check(length(where(evs3, (m) => m["id"] == "x1" and m["kind"] == "done" and cont
 check(length(where(evs3, (m) => m["id"] == "x2" and m["kind"] == "done" and contains(m["data"]["stopped"], "text is required"))) == 1, "texto vacío → done con error")
 set created to append(created, d1[0]["data"]["session"])
 set threads to append(threads, ["rt-shop", "sdk-1"])
+set threads to append(threads, ["rt-shop", "sdk-par-1"])
+set threads to append(threads, ["rt-shop", "sdk-par-2"])
 proc_close_stdin(sp)
 let sexit be read_until(is_ready, 10)
 proc_close(sp)

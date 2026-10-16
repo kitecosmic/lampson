@@ -160,22 +160,86 @@ task lampson_subagent(spec_json)
 --   {"id": "r2", "op": "agents"}  ·  {"id": "r3", "op": "ping"}
 -- y por stdout, una línea JSON por evento con ese id: los mismos que `--json` (session, assistant, tool_call…) y
 -- {"id", "kind": "done", "data": {agent, thread, session, text, steps, usage, stopped}} al terminar cada ask. Al
--- arrancar, {"kind": "ready", "data": {"agents": […], "protocol": 1}}. Los pedidos se atienden en orden, de a uno.
+-- arrancar, {"kind": "ready", "data": {"agents": […], "protocol": 2}}.
+-- CONCURRENCIA (protocolo 2): cada ask corre en su propio agente de Synsema; conversaciones distintas van en
+-- paralelo, dos asks de la MISMA conversación (agente + thread) esperan en fila. Un agente que imprime sale con
+-- prefijo "[Agente_N]" (rompería el JSON): por eso los trabajos publican en el bus y SOLO el hilo principal escribe.
 -- Sin humano: lo que pida aprobación se deniega; "mode" lo puede fijar quien llama (es su programa, en su máquina).
-let cur_id be ""
-let cur_agent be ""
-let cur_thread be ""
 task stdio_out(m)
     print(json_encode(m))
     flush()
-task stdio_event(kind, data, tag)
-    when kind != "busy" and kind != "idle"
-        stdio_out({"id": cur_id, "kind": kind, "data": data, "tag": tag, "agent": cur_agent, "thread": cur_thread})
-task stdio_start(info)
-    set cur_thread to info["thread"]
-    stdio_out({"id": cur_id, "kind": "session", "data": info, "tag": "", "agent": info["agent"], "thread": info["thread"]})
-task stdio_fail(msg)
-    stdio_out({"id": cur_id, "kind": "done", "data": {"agent": cur_agent, "thread": cur_thread, "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + msg}, "tag": "", "agent": cur_agent, "thread": cur_thread})
+
+-- un ask, dentro de un agente StdioJob (los agentes solo ven tasks TOP-LEVEL del entry)
+task lampson_stdio_job(req_json)
+    let req be json_decode(req_json)
+    let rid be req["id"]
+    let agent_id be req["to"]
+    let th be req["thread"]
+    task out(m)
+        bus_publish("stdio.out", m)
+    task on_event(kind, data, tag)
+        when kind != "busy" and kind != "idle"
+            out({"id": rid, "kind": kind, "data": data, "tag": tag, "agent": agent_id, "thread": th})
+    task on_start(info)
+        set th to info["thread"]
+        out({"id": rid, "kind": "session", "data": info, "tag": "", "agent": info["agent"], "thread": info["thread"]})
+    let r be nothing
+    try
+        set r to runtime.deliver(req["sobre"], {"mode": req["mode"], "ask_fn": nothing, "on_event": on_event, "on_start": on_start})
+    recover err
+        set r to {"agent": agent_id, "thread": th, "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+    out({"id": rid, "kind": "done", "data": r, "tag": "", "agent": r["agent"], "thread": r["thread"]})
+    bus_publish("stdio.done", {"key": req["key"]})
+    give true
+
+agent StdioReader
+    require stdin
+    let l be read_line("")
+    while l != nothing
+        bus_publish("stdio.line", l)
+        set l to read_line("")
+    bus_publish("stdio.eof", true)
+
+agent StdioJob
+    require net
+    require exec
+    require time
+    require random
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("memory")
+    require file("memory/*")
+    require file(".lampson")
+    require file(".lampson/*")
+    lampson_stdio_job(spec_json)
+
+-- un pedido ask ya leído → {ok, job, error}: el spec del trabajo (o por qué no)
+task stdio_ask(req, rid)
+    let agent_id be lower(text(when contains(req, "to") and req["to"] != nothing and text(req["to"]) != "" then req["to"] otherwise runtime.default_agent()))
+    let th be when contains(req, "thread") and req["thread"] != nothing then text(req["thread"]) otherwise ""
+    let msg be when contains(req, "text") and req["text"] != nothing then text(req["text"]) otherwise ""
+    let spec be runtime.get(agent_id)
+    let fail_r be {"agent": agent_id, "thread": th, "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": ""}
+    when spec == nothing
+        set fail_r["stopped"] to "error: no agent named '" + agent_id + "' · available: " + join(runtime.names(), ", ")
+        give {"ok": false, "done": fail_r}
+    when trim(msg) == ""
+        set fail_r["stopped"] to "error: text is required"
+        give {"ok": false, "done": fail_r}
+    let want be when contains(req, "mode") and req["mode"] != nothing then lower(text(req["mode"])) otherwise ""
+    let mode be when want == "strict" or want == "yolo" then want otherwise (when spec["permission"] == "" then "strict" otherwise "")
+    let ss be when contains(req, "session") and req["session"] != nothing then text(req["session"]) otherwise ""
+    -- la fila es por conversación: (agente, thread), o la sesión; sin ninguno, el pedido solo (va en paralelo)
+    let key be when th != "" then agent_id + "\n" + th otherwise (when ss != "" then agent_id + "\nsession:" + ss otherwise "req:" + rid)
+    let sobre be {"to": agent_id, "thread": th, "session": ss, "from": {"id": "", "name": "", "kind": "human"}, "text": msg, "images": when contains(req, "images") and type_of(req["images"]) == "list" then req["images"] otherwise [], "channel": "sdk", "meta": when contains(req, "meta") and type_of(req["meta"]) == "map" then req["meta"] otherwise {}}
+    give {"ok": true, "key": key, "job": {"id": rid, "to": agent_id, "thread": th, "mode": mode, "key": key, "sobre": sobre}}
 
 when env("LAMPSON_RUN_STDIO", "") == "1"
     share {"id": text(now())} as "lampson:run"
@@ -188,46 +252,66 @@ when env("LAMPSON_RUN_STDIO", "") == "1"
             set any_mcp to true
     when any_mcp
         mcp.start_all(8)
-    stdio_out({"kind": "ready", "data": {"agents": all_names, "protocol": 1}})
-    let line be read_line("")
-    while line != nothing
-        when trim(line) != ""
-            let req be nothing
-            try
-                set req to json_decode(line)
-            recover err
-                set req to nothing
-            when req == nothing or type_of(req) != "map"
-                set cur_id to ""
-                stdio_out({"id": "", "kind": "error", "data": "each line must be a JSON object"})
+    let sub be bus_subscribe(["stdio.line", "stdio.out", "stdio.done", "stdio.eof"], {"max_queue": 100000, "on_full": "error"})
+    spawn StdioReader
+    stdio_out({"kind": "ready", "data": {"agents": all_names, "protocol": 2}})
+    let busy be {}
+    let waiting be {}
+    let running be 0
+    let eof be false
+    let open be true
+    while open
+        let ev be bus_recv(sub, 3600)
+        when ev == nothing
+            set open to running > 0 or not eof
+        otherwise when ev["topic"] == "stdio.out"
+            stdio_out(ev["data"])
+        otherwise when ev["topic"] == "stdio.done"
+            let k be ev["data"]["key"]
+            set running to running - 1
+            let q be when contains(waiting, k) then waiting[k] otherwise []
+            when length(q) > 0
+                set waiting[k] to slice(q, 1, length(q))
+                set running to running + 1
+                spawn StdioJob with spec_json = json_encode(q[0])
             otherwise
-                set cur_id to when contains(req, "id") and req["id"] != nothing then text(req["id"]) otherwise ""
-                let op be when contains(req, "op") and req["op"] != nothing then lower(text(req["op"])) otherwise "ask"
-                when op == "ping"
-                    stdio_out({"id": cur_id, "kind": "pong"})
-                otherwise when op == "agents"
-                    stdio_out({"id": cur_id, "kind": "agents", "data": apply((n) => {"id": n, "description": runtime.get(n)["description"]}, runtime.names())})
-                otherwise when op == "ask"
-                    set cur_agent to lower(text(when contains(req, "to") and req["to"] != nothing and text(req["to"]) != "" then req["to"] otherwise runtime.default_agent()))
-                    set cur_thread to when contains(req, "thread") and req["thread"] != nothing then text(req["thread"]) otherwise ""
-                    let msg be when contains(req, "text") and req["text"] != nothing then text(req["text"]) otherwise ""
-                    let spec be runtime.get(cur_agent)
-                    when spec == nothing
-                        stdio_fail("no agent named '" + cur_agent + "' · available: " + join(runtime.names(), ", "))
-                    otherwise when trim(msg) == ""
-                        stdio_fail("text is required")
-                    otherwise
-                        let want be when contains(req, "mode") and req["mode"] != nothing then lower(text(req["mode"])) otherwise ""
-                        let mode be when want == "strict" or want == "yolo" then want otherwise (when spec["permission"] == "" then "strict" otherwise "")
-                        let sobre be {"to": cur_agent, "thread": cur_thread, "session": when contains(req, "session") and req["session"] != nothing then text(req["session"]) otherwise "", "from": {"id": "", "name": "", "kind": "human"}, "text": msg, "images": when contains(req, "images") and type_of(req["images"]) == "list" then req["images"] otherwise [], "channel": "sdk", "meta": when contains(req, "meta") and type_of(req["meta"]) == "map" then req["meta"] otherwise {}}
-                        try
-                            let r be runtime.deliver(sobre, {"mode": mode, "ask_fn": nothing, "on_event": stdio_event, "on_start": stdio_start})
-                            stdio_out({"id": cur_id, "kind": "done", "data": r, "tag": "", "agent": r["agent"], "thread": r["thread"]})
-                        recover err
-                            stdio_fail(text(err))
+                set busy[k] to false
+            when eof and running == 0
+                set open to false
+        otherwise when ev["topic"] == "stdio.eof"
+            set eof to true
+            when running == 0
+                set open to false
+        otherwise when ev["topic"] == "stdio.line"
+            let line be ev["data"]
+            when trim(line) != ""
+                let req be nothing
+                try
+                    set req to json_decode(line)
+                recover err
+                    set req to nothing
+                when req == nothing or type_of(req) != "map"
+                    stdio_out({"id": "", "kind": "error", "data": "each line must be a JSON object"})
                 otherwise
-                    stdio_out({"id": cur_id, "kind": "error", "data": "unknown op '" + op + "' (ask, agents, ping)"})
-        set line to read_line("")
+                    let rid be when contains(req, "id") and req["id"] != nothing then text(req["id"]) otherwise ""
+                    let op be when contains(req, "op") and req["op"] != nothing then lower(text(req["op"])) otherwise "ask"
+                    when op == "ping"
+                        stdio_out({"id": rid, "kind": "pong"})
+                    otherwise when op == "agents"
+                        stdio_out({"id": rid, "kind": "agents", "data": apply((n) => {"id": n, "description": runtime.get(n)["description"]}, runtime.names())})
+                    otherwise when op == "ask"
+                        let a be stdio_ask(req, rid)
+                        when not a["ok"]
+                            stdio_out({"id": rid, "kind": "done", "data": a["done"], "tag": "", "agent": a["done"]["agent"], "thread": a["done"]["thread"]})
+                        otherwise when contains(busy, a["key"]) and busy[a["key"]]
+                            let wq be when contains(waiting, a["key"]) then waiting[a["key"]] otherwise []
+                            set waiting[a["key"]] to append(wq, a["job"])
+                        otherwise
+                            set busy[a["key"]] to true
+                            set running to running + 1
+                            spawn StdioJob with spec_json = json_encode(a["job"])
+                    otherwise
+                        stdio_out({"id": rid, "kind": "error", "data": "unknown op '" + op + "' (ask, agents, ping)"})
     exit(0)
 
 let json_out be env("LAMPSON_RUN_JSON", "") == "1"

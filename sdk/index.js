@@ -9,7 +9,8 @@
 //           conversation's mailbox (queue, quiet window, mid-turn messages), exactly like a channel.
 //   LOCAL   new Lampson({ local: { workspace: "./my-project" } })
 //           starts Lampson ITSELF as a child process on this machine (`lampson run --stdio`): no hub, no port, no
-//           key. Lampson inside your program, like SQLite. Requests are answered one at a time, in order.
+//           key. Lampson inside your program, like SQLite. Different conversations run in parallel; two messages of
+//           the same conversation (agent + thread) are answered in order.
 //
 //   await lampson.ask({ agent: "shop", thread: "customer-42", text: "do you have whole-wheat bread?" })
 //     → { agent, thread, session, text, steps, usage, stopped }      (throws LampsonError if the turn failed)

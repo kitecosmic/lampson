@@ -9,7 +9,8 @@ Two ways to reach Lampson, the same methods for both:
           conversation's mailbox (queue, quiet window, mid-turn messages), exactly like a channel.
   LOCAL   Lampson(local={"workspace": "./my-project"})
           starts Lampson ITSELF as a child process on this machine (`lampson run --stdio`): no hub, no port, no key.
-          Needs the `lampson` command (npm i -g lampson, or the installer). Requests are answered one at a time.
+          Needs the `lampson` command (npm i -g lampson, or the installer). This client sends one request at a time
+          (use one Lampson per thread for parallel conversations; the process itself runs conversations in parallel).
 
     lampson.ask(agent="shop", thread="customer-42", text="do you have whole-wheat bread?")
       -> {"agent", "thread", "session", "text", "steps", "usage", "stopped"}   (raises LampsonError if the turn failed)
