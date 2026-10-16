@@ -62,6 +62,8 @@ async function openSession(id) {
   }
   loadSessions();
 }
+// objetivos y equipos: su pantalla propia (public/teams.html)
+$('#teamsBtn').onclick = () => { location.href = BASE + '/equipos'; };
 $('#new').onclick = () => { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); loadSessions(); loadTodo(); };
 // traza legible de una sesión (.lampson/trace/<sid>.log)
 async function openTrace(id) {

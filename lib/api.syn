@@ -196,3 +196,27 @@ export task objective_for(id, rec)
     when o == nothing or not apikeys.allows(rec, o["agent"])
         give nothing
     give o
+
+
+-- los equipos con su gente (rol, a quién reporta, si está trabajando ahora, lo gastado hoy), su tablero y su registro
+export task teams_view()
+    require db(".lampson/teams.db")
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let sc be teams.scan()
+    let out be []
+    each t in sc["teams"]
+        let scope be "team:" + t["id"]
+        let members be []
+        each m in t["members"]
+            let spec be runtime.get(m["agent"])
+            set members to append(members, {"agent": m["agent"], "role": m["role"], "reports_to": m["reports_to"], "description": when spec == nothing then "" otherwise spec["description"], "missing": spec == nothing, "working": mailbox.working(m["agent"], scope), "spent_today": teams.spent_today(m["agent"]), "peers": teams.peers(t, m["agent"])})
+        let ts be apply(teams.tasks(scope), (x) => {"id": x["id"], "title": x["title"], "status": x["status"], "owner": x["owner"], "notes": x["notes"], "depends": json_decode(x["depends"])})
+        let lg be apply(teams.ledger(scope, 0, 150), (r) => {"id": r["id"], "at": r["at"], "actor": r["actor"], "kind": r["kind"], "ref": r["ref"], "text": r["text"]})
+        set out to append(out, {"id": t["id"], "description": t["description"], "members": members, "talks": t["talks"], "round_minutes": t["round_minutes"], "budget_daily_tokens": t["budget_daily_tokens"], "tasks": ts, "ledger": lg})
+    give {"teams": out, "errors": sc["errors"]}

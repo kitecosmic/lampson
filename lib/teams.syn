@@ -628,6 +628,10 @@ export task obj_reply(id, txt, approved, who)
         set head to (when approved == true then "[approved by " + who + "] " otherwise "[denied by " + who + "] ") + o["question"] + (when trim(text(txt)) != "" then "\n" + text(txt) otherwise "")
     otherwise
         set head to "[" + who + " answered] " + text(txt)
+    -- sin presupuesto: seguir le da otro tramo igual al que tenía
+    when o["status"] == "paused" and o["budget_tokens"] > 0
+        open()
+        sql_exec("UPDATE objectives SET budget_tokens = spent + ? WHERE id = ?", [o["budget_tokens"], id])
     obj_set(id, {"status": "active", "reply": head, "question": "", "question_kind": ""})
     log("objective:" + text(id), who, when o["question_kind"] == "approval" then (when approved == true then "approved" otherwise "denied") otherwise "answered", "O-" + text(id), text(txt))
     give obj_get(id)

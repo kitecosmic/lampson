@@ -400,9 +400,21 @@ repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anunci
 - [x] Aprobaciones: las del buzón de siempre (cola de aprobación → UI / celular), con el permiso del archivo del agente
 
 #### 6b — Objetivos
-- [ ] Objetivo = {id, texto, agente, estado, tareas, resultado, presupuesto}; crear por API/CLI/web
-- [ ] Pestaña **Objetivos** en la web: lista, estado, tareas, actividad, resultado, aprobaciones pendientes
-- [ ] Repo de prueba: el CTO recibe un feature, trabaja en su rama en rondas y pide aprobación para mergear
+- [x] Objetivo = {id, texto, agente, estado, informe, pregunta, resultado, turnos, gasto, presupuesto} en la tabla
+      `objectives`; conversación y tablero propios (`objective:<id>`); tool `objective` (report, ask, request_approval,
+      done, fail); el pulso da un turno al terminar el anterior + `round_seconds`; esperando no gasta; sin presupuesto
+      se pausa y «seguir» da otro tramo. API `/v1/objectives` (crear, listar, ver, responder/aprobar, cancelar) y
+      la privada de la pantalla. CLI: pendiente
+- [x] Pantalla propia `/w/<slug>/equipos` (public/teams.html, css/teams.css, js/teams.js), a pantalla completa, con
+      enlace «equipos» desde la cabecera: pestaña **Objetivos** (lista, nuevo, detalle con tablero kanban, informe,
+      resultado, cancelar; registro en vivo) y franja fija de lo que espera a la persona (aprobar / denegar /
+      responder); pestaña **Equipos** con el grafo (quién reporta a quién, quién también se habla, quién trabaja
+      ahora, flechas que se encienden con cada mensaje), tablero y registro. Se actualiza cada 2,5 s
+- [x] Repo de prueba `Desktop/proyectos/empresa-demo` (API de tareas en Node, `npm test`). Corrida real con
+      glm-5.3-flash: el CTO planificó 4 tareas, creó `cto/filtro-estado`, implementó `?done=true|false` con 2 tests,
+      commiteó como «CTO (Lampson)» y pidió aprobación (1 turno, 12 pasos); aprobado por la API, mergeó a main con
+      `--no-ff` y terminó con el resultado (2.º turno, 3 pasos). 25,6k tokens de costo. 5/5 tests en main.
+      Pendiente de 6c: el commit de merge quedó con el autor del repo, no el del agente
 - [ ] Documentación (en/es/pt) con la corrida real
 
 #### 6c — Equipos
@@ -440,6 +452,14 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — 6b (Objetivos) andando de punta a punta con un modelo real (ver la fase 6b). Decisiones: un
+  objetivo es un equipo de un agente — misma base, mismo registro y mismo tablero, con scope `objective:<id>`; el
+  agente lo trabaja en su propia conversación y la tool `objective` es su único canal con la persona (informar,
+  preguntar, pedir aprobación, terminar). Aprobar algo irreversible es una REGLA del texto del objetivo y de la tool
+  (la aplicación dura de «no mergear sin aprobación» llega con las ramas por agente de 6c). Bug encontrado: el buzón
+  recibía `buffer: false` y su worker moría en silencio, dejando la conversación trabada para siempre; ahora
+  `mailbox.submit` normaliza el valor. La pantalla es una página aparte (no un panel), como pidió Joel.
 
 - **2026-10-16** — 6a (motor común de equipos) hecho. `lib/teams.syn` (archivo de equipo, grafo, SQLite con tareas,
   registro, mensajes, cursores, rondas, gasto; tools `send` y `board`) + `lib/teamrun.syn` (el pulso: entrega y

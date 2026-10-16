@@ -890,6 +890,54 @@ serve on 8080
         give fail(405, "this MCP server does not open a server-to-client stream; POST JSON-RPC messages")
 
     -- ---------- panel de la UI: API keys y canales (privadas: son de la UI, autenticadas por el hub/local) ----------
+    -- ---------- EQUIPOS Y OBJETIVOS: su pantalla propia (public/teams.html) y la API privada que la alimenta ----------
+    route "GET /w/:slug/equipos"
+        private
+        let h be headers of request
+        when env("LAMPSON_WS", "") != "" and not contains(h, "x-forwarded-host")
+            give redirect("http://127.0.0.1:8080/w/" + params.slug + "/equipos")
+        give html(read_file("public/teams.html"))
+
+    route "GET /w/:slug/api/objectives" requires auth
+        private
+        let rows be apply(teams.obj_list(), (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "updated_at": o["updated_at"], "working": mailbox.working(o["agent"], "objective:" + text(o["id"]))})
+        give {"objectives": rows, "agents": apply(where(runtime.names(), (n) => not runtime.get(n)["builtin"]), (n) => {"id": n, "description": runtime.get(n)["description"]})}
+
+    route "GET /w/:slug/api/objectives/:id" requires auth
+        private
+        let o be teams.obj_get(floor(number(params.id)))
+        when o == nothing
+            give fail(404, "no such objective")
+        let v be api.objective_view(o)
+        set v["working"] to mailbox.working(o["agent"], "objective:" + text(o["id"]))
+        give v
+
+    route "POST /w/:slug/api/objectives/add" requires auth
+        private
+        expect body {agent: text, text: text}
+        let b be json of request
+        let agent be lower(text(b["agent"]))
+        when runtime.get(agent) == nothing
+            give fail(404, "no agent named '" + agent + "'")
+        let id be teams.obj_create(agent, b["text"], {"round_seconds": when contains(b, "round_seconds") and b["round_seconds"] != nothing then b["round_seconds"] otherwise 20, "budget_tokens": when contains(b, "budget_tokens") and b["budget_tokens"] != nothing then b["budget_tokens"] otherwise 500000, "created_by": "person"})
+        give api.objective_view(teams.obj_get(id))
+
+    route "POST /w/:slug/api/objectives/:id/reply" requires auth
+        private
+        let b be json of request
+        try
+            give api.objective_view(teams.obj_reply(floor(number(params.id)), when contains(b, "text") and b["text"] != nothing then text(b["text"]) otherwise "", contains(b, "approved") and b["approved"] == true, "person"))
+        recover err
+            give fail(409, regex_replace(text(err), "^.*?:\\d+:\\d+: ", ""))
+
+    route "POST /w/:slug/api/objectives/:id/cancel" requires auth
+        private
+        give api.objective_view(teams.obj_cancel(floor(number(params.id)), "person"))
+
+    route "GET /w/:slug/api/teams" requires auth
+        private
+        give api.teams_view()
+
     route "GET /w/:slug/api/keys" requires auth
         private
         let pub be approvals.public_url()

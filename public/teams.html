@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>Lampson · equipos</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131412">
+<link rel="manifest" href="/manifest.webmanifest">
+<!-- la pantalla de equipos y objetivos: página propia, a pantalla completa (no un panel del agente de programación).
+     tokens.css = fuentes, paleta y botones de Lampson; teams.css = esta pantalla; js/teams.js = todo el comportamiento -->
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/teams.css">
+<script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="tbar">
+  <a class="back" id="back" href="#" title="volver al agente de programación">←</a>
+  <span class="brand">lampson<span class="proj" id="proj"></span></span>
+  <nav class="tabs" id="tabs">
+    <button data-tab="objectives" class="on">Objetivos</button>
+    <button data-tab="teams">Equipos</button>
+  </nav>
+  <span class="spacer"></span>
+  <span class="live" id="live" title="actualizado en vivo">en vivo</span>
+  <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
+</header>
+
+<!-- lo que espera a la persona: aprobaciones y preguntas de los objetivos (siempre visible) -->
+<section class="attention" id="attention" hidden></section>
+
+<main class="view" id="v-objectives">
+  <aside class="col list">
+    <div class="colhead"><span>Objetivos</span><button id="newObj" class="primary">+ nuevo</button></div>
+    <form class="newform" id="objForm" hidden>
+      <label>Agente <select id="fAgent"></select></label>
+      <label>¿Qué tiene que lograr?<textarea id="fText" rows="5" placeholder="Agregá a la API filtrar por estado, con tests. Trabajá en tu rama y pedí aprobación antes de mergear."></textarea></label>
+      <div class="row2">
+        <label>Ronda (s)<input id="fRound" type="number" min="5" value="20"></label>
+        <label>Presupuesto (tokens)<input id="fBudget" type="number" min="0" step="10000" value="500000"></label>
+      </div>
+      <div class="row2"><button type="submit" class="primary">Empezar</button><button type="button" id="fCancel">Cancelar</button></div>
+      <p class="ferr" id="fErr"></p>
+    </form>
+    <ul class="items" id="objList"></ul>
+  </aside>
+  <section class="col detail" id="objDetail">
+    <div class="empty">Elegí un objetivo, o creá uno con <b>+ nuevo</b>: un agente lo trabaja solo, en rondas, y te pide aprobación antes de cualquier cosa irreversible.</div>
+  </section>
+  <aside class="col timeline">
+    <div class="colhead"><span>Registro</span></div>
+    <ol class="log" id="objLog"></ol>
+  </aside>
+</main>
+
+<main class="view" id="v-teams" hidden>
+  <aside class="col list">
+    <div class="colhead"><span>Equipos</span></div>
+    <ul class="items" id="teamList"></ul>
+    <div class="hint" id="teamHint"></div>
+  </aside>
+  <section class="col detail">
+    <div class="graphwrap"><svg id="graph" role="img" aria-label="el equipo: quién reporta a quién"></svg></div>
+    <div class="teaminfo" id="teamInfo"></div>
+    <div class="board" id="teamBoard"></div>
+  </section>
+  <aside class="col timeline">
+    <div class="colhead"><span>Registro</span></div>
+    <ol class="log" id="teamLog"></ol>
+  </aside>
+</main>
+
+<script src="/js/teams.js"></script>
+</body>
+</html>

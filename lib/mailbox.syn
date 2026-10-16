@@ -97,6 +97,13 @@ export task post(k, item)
     unlock(k)
     give claim
 
+-- ¿hay un worker atendiendo la conversación (agente, thread)? (la pantalla de equipos lo muestra en vivo)
+export task working(agent, thread)
+    try
+        give state_get("mb:w:" + runtime.thread_key(agent, thread), false) == true
+    recover err
+        give false
+
 -- saca todo lo encolado
 task take(k)
     lock(k)

@@ -1796,4 +1796,6 @@ test "objetivos: la tool objective — solo en su conversación, estados, y el t
     let id2 be teams.obj_create("ttobj", "caro", {"budget_tokens": 50})
     teams.obj_turn_end(id2, 60)
     assert_eq(teams.obj_get(id2)["status"], "paused", "sin presupuesto se pausa")
+    teams.obj_reply(id2, "seguí", false, "joel")
+    assert(teams.obj_get(id2)["status"] == "active" and teams.obj_get(id2)["budget_tokens"] == 110, "seguir da otro tramo de presupuesto")
     assert_eq(teams.obj_cancel(id2, "joel")["status"], "cancelled")
