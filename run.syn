@@ -46,7 +46,8 @@ use "./lib/plugins.syn" as plugins
 use "./lib/channels.syn" as channels
 
 -- `lampson key add|list|remove`: API keys de la API /v1 de este workspace (lib/apikeys.syn, lib/api.syn)
---   LAMPSON_KEY_CMD=add [LAMPSON_KEY_NAME] [LAMPSON_KEY_AGENTS=tienda,soporte]   · list · remove LAMPSON_KEY_ID
+--   LAMPSON_KEY_CMD=add [LAMPSON_KEY_NAME] [LAMPSON_KEY_AGENTS=tienda,soporte] [LAMPSON_KEY_RATE=60]
+--                       [LAMPSON_KEY_CALLBACKS=https://a/,https://b/]   · list · remove LAMPSON_KEY_ID
 let key_cmd be env("LAMPSON_KEY_CMD", "")
 when key_cmd != ""
     let ws_path be "/w/" + env("LAMPSON_WS", "<slug>") + "/v1"
@@ -59,8 +60,20 @@ when key_cmd != ""
             when a != "*" and not contains(runtime.names(), a)
                 print("lampson key: no agent named '" + a + "' · available: " + join(runtime.names(), ", "))
                 exit(2)
-        let k be apikeys.create(env("LAMPSON_KEY_NAME", ""), ag)
-        print("API key creada (" + k["id"] + ") para " + (when contains(k["agents"], "*") then "todos los agentes" otherwise join(k["agents"], ", ")) + ". Guardala ahora: no se vuelve a mostrar.")
+        let rate_s be trim(env("LAMPSON_KEY_RATE", ""))
+        let cbs be where(apply((x) => trim(x), split(env("LAMPSON_KEY_CALLBACKS", ""), ",")), (x) => x != "")
+        each cb in cbs
+            when not (starts_with(cb, "https://") or starts_with(cb, "http://"))
+                print("lampson key: --callback must be an http(s) URL prefix, got '" + cb + "'")
+                exit(2)
+        let kopts be {"callbacks": cbs}
+        when rate_s != ""
+            when not matches(rate_s, "[0-9]{1,6}")
+                print("lampson key: --rate must be a number of requests per minute (0 = no limit)")
+                exit(2)
+            set kopts["rate"] to int(rate_s)
+        let k be apikeys.create_with(env("LAMPSON_KEY_NAME", ""), ag, kopts)
+        print("API key creada (" + k["id"] + ") para " + (when contains(k["agents"], "*") then "todos los agentes" otherwise join(k["agents"], ", ")) + " · " + (when k["rate"] == 0 then "sin límite" otherwise text(k["rate"]) + " pedidos/min") + (when length(k["callbacks"]) > 0 then " · callbacks solo a " + join(k["callbacks"], ", ") otherwise "") + ". Guardala ahora: no se vuelve a mostrar.")
         print("")
         print("  " + k["key"])
         print("")
@@ -75,7 +88,7 @@ when key_cmd != ""
         when length(ks) == 0
             print("sin API keys en este workspace (lampson key add [--agent ID] [--name NOMBRE])")
         each k in ks
-            print("  " + k["id"] + "  " + (when k["name"] == "" then "(sin nombre)" otherwise k["name"]) + "  agentes: " + join(k["agents"], ", ") + "  creada " + k["created"] + "  último uso " + (when k["last_used"] == nothing then "nunca" otherwise text(k["last_used"])))
+            print("  " + k["id"] + "  " + (when k["name"] == "" then "(sin nombre)" otherwise k["name"]) + "  agentes: " + join(k["agents"], ", ") + "  " + (when k["rate"] == 0 then "sin límite" otherwise text(k["rate"]) + "/min") + (when length(k["callbacks"]) > 0 then "  callbacks: " + join(k["callbacks"], ", ") otherwise "") + "  creada " + k["created"] + "  último uso " + (when k["last_used"] == nothing then "nunca" otherwise text(k["last_used"])))
         print("  API: " + api_base + "/messages · MCP: " + api_base + "/mcp")
     otherwise when key_cmd == "remove"
         let kid be env("LAMPSON_KEY_ID", "")

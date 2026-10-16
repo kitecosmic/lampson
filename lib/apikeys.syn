@@ -5,12 +5,15 @@
 -- La key en claro se muestra UNA vez, al crearla (`lampson key add`).
 --
 --   create(name, agents) → {id, key, name, agents}      agents: ["tienda"] o ["*"] (todos los elegibles)
+--   create_with(name, agents, {rate, callbacks})        rate = pedidos/minuto (default 120; 0 = sin límite);
+--                                                      callbacks = prefijos de URL permitidos ([] = cualquiera)
 --   check(key) → registro sin hash | nothing           (y anota last_used)
 --   allows(rec, agent) → bool
 --   list() / remove(id)
 
 export let FILE be ".lampson/api_keys.json"
 export let PREFIX be "lk_"
+export let DEFAULT_RATE be 120
 
 task hash_of(key)
     give decode(sha256("lampson-api:" + key), "hex")
@@ -32,19 +35,37 @@ task store(keys_list)
     write_file(FILE, json_encode({"keys": keys_list}))
 
 task public(k)
-    give {"id": k["id"], "name": k["name"], "agents": k["agents"], "created": k["created"], "last_used": k["last_used"]}
+    give {"id": k["id"], "name": k["name"], "agents": k["agents"], "created": k["created"], "last_used": k["last_used"], "rate": when contains(k, "rate") then k["rate"] otherwise DEFAULT_RATE, "callbacks": when contains(k, "callbacks") then k["callbacks"] otherwise []}
 
 export task create(name, agents)
     require time
     require random
     require file(".lampson")
     require file(".lampson/*")
+    give create_with(name, agents, {})
+
+export task create_with(name, agents, opts)
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
     let ag be when agents == nothing or length(agents) == 0 then ["*"] otherwise agents
+    let rate be when contains(opts, "rate") and opts["rate"] != nothing then floor(number(opts["rate"])) otherwise DEFAULT_RATE
+    let cbs be when contains(opts, "callbacks") and opts["callbacks"] != nothing then opts["callbacks"] otherwise []
     let key be PREFIX + token(24)
     let id be "k" + slice(token(16), 0, 8)
-    let rec be {"id": id, "name": text(name), "agents": ag, "hash": hash_of(key), "created": format_time(now()), "last_used": nothing}
+    let rec be {"id": id, "name": text(name), "agents": ag, "hash": hash_of(key), "created": format_time(now()), "last_used": nothing, "rate": rate, "callbacks": cbs}
     store(append(load(), rec))
-    give {"id": id, "key": key, "name": rec["name"], "agents": ag}
+    give {"id": id, "key": key, "name": rec["name"], "agents": ag, "rate": rate, "callbacks": cbs}
+
+-- ¿esta key puede pedir un callback a esta URL? sin lista = cualquiera; con lista = solo esos prefijos
+export task callback_allowed(rec, url)
+    when not contains(rec, "callbacks") or length(rec["callbacks"]) == 0
+        give true
+    each pre in rec["callbacks"]
+        when starts_with(url, pre)
+            give true
+    give false
 
 export task list()
     require file.read(".lampson")

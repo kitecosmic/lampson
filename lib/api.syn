@@ -41,8 +41,23 @@ export task authorize(h)
     require file(".lampson/*")
     let rec be apikeys.check(bearer_of(h))
     when rec == nothing
-        give {"ok": false, "key": nothing, "status": 401, "error": "missing or invalid API key (Authorization: Bearer lk_…; create one with `lampson key add`)"}
-    give {"ok": true, "key": rec, "status": 200, "error": ""}
+        give {"ok": false, "key": nothing, "status": 401, "error": "missing or invalid API key (Authorization: Bearer lk_…; create one with `lampson key add`)", "retry_after": 0}
+    -- rate limit por key: ventana de un minuto (estado de serve, compartido por todos los handlers)
+    when rec["rate"] > 0
+        let win be floor(now() / 60)
+        let n be state_incr("rl:" + rec["id"] + ":" + text(win), 1)
+        when n == 1
+            state_delete("rl:" + rec["id"] + ":" + text(win - 1))
+        when n > rec["rate"]
+            give {"ok": false, "key": rec, "status": 429, "error": "rate limit: " + text(rec["rate"]) + " requests per minute for this API key", "retry_after": 60 - floor(now() - win * 60)}
+    give {"ok": true, "key": rec, "status": 200, "error": "", "retry_after": 0}
+
+-- la respuesta de error de authorize (429 con Retry-After)
+export task refuse(a)
+    let r be fail(a["status"], a["error"])
+    when a["status"] == 429
+        give with_header(r, "Retry-After", text(a["retry_after"]))
+    give r
 
 -- los agentes que esta key puede usar: [{id, description}]
 export task agents_for(rec)
@@ -78,6 +93,8 @@ export task parse(body, rec)
     let cb be text(field(body, "callback", ""))
     when cb != "" and not (starts_with(cb, "https://") or starts_with(cb, "http://"))
         give {"ok": false, "status": 400, "error": "callback must be an http(s) URL"}
+    when cb != "" and not apikeys.callback_allowed(rec, cb)
+        give {"ok": false, "status": 403, "error": "this API key cannot send callbacks to " + cb + " (allowed: " + join(rec["callbacks"], ", ") + ")"}
     let images be field(body, "images", [])
     when type_of(images) != "list"
         set images to []

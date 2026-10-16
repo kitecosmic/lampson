@@ -745,14 +745,14 @@ serve on 8080
     route "GET /w/:slug/v1/agents" requires auth
         let a be api.authorize(headers of request)
         when not a["ok"]
-            give fail(a["status"], a["error"])
+            give api.refuse(a)
         give {"agents": api.agents_for(a["key"])}
 
     route "POST /w/:slug/v1/messages" requires auth
         expect body {text: text}
         let a be api.authorize(headers of request)
         when not a["ok"]
-            give fail(a["status"], a["error"])
+            give api.refuse(a)
         let p be api.parse(json of request, a["key"])
         when not p["ok"]
             give fail(p["status"], p["error"])
@@ -771,7 +771,7 @@ serve on 8080
         expect body {text: text}
         let a be api.authorize(headers of request)
         when not a["ok"]
-            give fail(a["status"], a["error"])
+            give api.refuse(a)
         let p be api.parse(json of request, a["key"])
         when not p["ok"]
             give fail(p["status"], p["error"])
@@ -842,7 +842,7 @@ serve on 8080
     route "GET /w/:slug/v1/jobs/:id" requires auth
         let a be api.authorize(headers of request)
         when not a["ok"]
-            give fail(a["status"], a["error"])
+            give api.refuse(a)
         let j be api.job(params.id)
         when j == nothing or j["key"] != a["key"]["id"]
             give fail(404, "no such job")

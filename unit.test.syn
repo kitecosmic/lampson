@@ -1550,3 +1550,13 @@ test "runtime: permiso por tool (approve auto|ask) — validación y opts"
     assert_eq(loop.approve_for({"approve": {"mcp_proveedor_*": "auto"}}, "mcp_otro_ask"), "")
     assert_eq(loop.approve_for(runtime.opts_for("build", "", nothing), "bash"), "", "un integrado no tiene approve")
     rm_file(runtime.PROJECT_DIR + "/rt-ap.agent.json")
+
+use "./lib/apikeys.syn" as apikeys
+
+test "apikeys: callbacks permitidos por key"
+    assert(apikeys.callback_allowed({"callbacks": []}, "https://cualquiera.com/x"), "sin lista = cualquiera")
+    assert(apikeys.callback_allowed({}, "https://cualquiera.com/x"), "keys viejas sin el campo = cualquiera")
+    let rec be {"callbacks": ["https://hooks.mi-app.com/", "https://n8n.local/webhook/"]}
+    assert(apikeys.callback_allowed(rec, "https://hooks.mi-app.com/lampson"))
+    assert(not apikeys.callback_allowed(rec, "https://hooks.mi-app.com.evil.com/x"), "el prefijo incluye la barra: no se cuela otro dominio")
+    assert(not apikeys.callback_allowed(rec, "http://169.254.169.254/latest/meta-data"))

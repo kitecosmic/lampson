@@ -9,7 +9,7 @@
 #   lampson run [--agent ID] [--thread T | --session ID] [--json] [--yolo|--strict|--ask] "mensaje"   # sin interfaz
 #       (sin mensaje lo lee de stdin; --json = eventos JSONL; ver spec/engine.md y run.syn)
 #   lampson run --stdio      # modo local: un proceso abierto, un pedido JSON por línea (lo usa el SDK)
-#   lampson key add [--agent ID[,ID]] [--name NOMBRE] · key list · key remove <id>     # API keys de la API /v1
+#   lampson key add [--agent ID[,ID]] [--name NOMBRE] [--rate N] [--callback URL] · key list · key remove <id>   # API keys /v1
 #   lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]     # Lampson como servidor MCP (stdio) para otros agentes
 #   lampson channel list · channel on|off <canal> · channel setup <canal>   # canales (Telegram, Chatwoot…)
 set -euo pipefail
@@ -45,6 +45,8 @@ while [ $# -gt 0 ]; do
         --json) export LAMPSON_RUN_JSON=1 ;;
         --stdio) export LAMPSON_RUN_STDIO=1 ;;
         --name) shift; key_name="$1" ;;
+        --rate) shift; export LAMPSON_KEY_RATE="$1" ;;
+        --callback) shift; export LAMPSON_KEY_CALLBACKS="${LAMPSON_KEY_CALLBACKS:+$LAMPSON_KEY_CALLBACKS,}$1" ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
         -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
         *) if [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;

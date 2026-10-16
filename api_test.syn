@@ -49,7 +49,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -443,6 +443,31 @@ when a2n["done"] != nothing
 rm_file(ADIR + "/rt-a2a-no.agent.json")
 rm_file(".lampson/tmp/a2a_mcp.json")
 rm_file(ADIR + "/rt-a2a.agent.json")
+
+print("límites por key: rate limit (429 + Retry-After) y callbacks solo a URLs permitidas")
+let kr be apikeys.create_with("test-rate", ["rt-api"], {"rate": 3})
+let codes be []
+let rl_headers be {}
+let ri be 0
+while ri < 4
+    set ri to ri + 1
+    let rr be http_get(BASE + "/agents", {"Authorization": "Bearer " + kr["key"]}, nothing, 10)
+    set codes to append(codes, rr["status"])
+    when rr["status"] == 429
+        set rl_headers to when contains(rr, "headers") then rr["headers"] otherwise {}
+check(codes == [200, 200, 200, 429], "rate 3/min: el cuarto pedido → 429 (" + json_encode(codes) + ")")
+let ra_val be ""
+each hk in keys(rl_headers)
+    when lower(hk) == "retry-after"
+        set ra_val to text(rl_headers[hk])
+check(ra_val != "" and int(ra_val) > 0 and int(ra_val) <= 60, "con Retry-After: " + ra_val + " s")
+check(http_get(BASE + "/agents", {"Authorization": "Bearer " + kb["key"]}, nothing, 10)["status"] == 200, "el límite es por key: otra key sigue entrando")
+let kc be apikeys.create_with("test-cb", ["rt-buf"], {"callbacks": ["http://127.0.0.1:8767/"]})
+check(post("/messages", {"to": "rt-buf", "thread": "api:cb-allowed", "text": "hola", "callback": "http://127.0.0.1:9/otro"}, kc)["status"] == 403, "callback a una URL fuera de la lista → 403")
+check(post("/messages", {"to": "rt-buf", "thread": "api:cb-allowed", "text": "hola", "callback": "http://127.0.0.1:8767/cb"}, kc)["status"] == 202, "callback a un prefijo permitido → 202")
+sleep(2.5)
+apikeys.remove(kr["id"])
+apikeys.remove(kc["id"])
 
 print("revocar")
 apikeys.remove(ka["id"])
