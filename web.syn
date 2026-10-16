@@ -881,6 +881,49 @@ serve on 8080
     route "GET /w/:slug/v1/mcp"
         give fail(405, "this MCP server does not open a server-to-client stream; POST JSON-RPC messages")
 
+    -- ---------- panel de la UI: API keys y canales (privadas: son de la UI, autenticadas por el hub/local) ----------
+    route "GET /w/:slug/api/keys" requires auth
+        private
+        let pub be approvals.public_url()
+        let base be (when pub != "" then pub otherwise "http://127.0.0.1:8080") + "/w/" + env("LAMPSON_WS", "local") + "/v1"
+        give {"keys": apikeys.list(), "api_url": base + "/messages", "mcp_url": base + "/mcp", "public": pub != "", "agents": runtime.names()}
+
+    route "POST /w/:slug/api/keys/add" requires auth
+        private
+        let b be json of request
+        let ag be when b != nothing and contains(b, "agents") and type_of(b["agents"]) == "list" then b["agents"] otherwise []
+        each a in ag
+            when a != "*" and not contains(runtime.names(), text(a))
+                give fail(400, "no agent named '" + text(a) + "'")
+        let cbs be when b != nothing and contains(b, "callbacks") and type_of(b["callbacks"]) == "list" then b["callbacks"] otherwise []
+        each cb in cbs
+            when not (starts_with(text(cb), "https://") or starts_with(text(cb), "http://"))
+                give fail(400, "a callback prefix must be an http(s) URL")
+        let ko be {"callbacks": cbs}
+        when b != nothing and contains(b, "rate") and b["rate"] != nothing and text(b["rate"]) != ""
+            set ko["rate"] to floor(number(b["rate"]))
+        give apikeys.create_with(when b != nothing and contains(b, "name") then text(b["name"]) otherwise "", ag, ko)
+
+    route "POST /w/:slug/api/keys/remove" requires auth
+        private
+        expect body {id: text}
+        give {"ok": apikeys.remove(text((json of request)["id"]))}
+
+    route "GET /w/:slug/api/channels" requires auth
+        private
+        give {"channels": channels.summary(approvals.public_url(), env("LAMPSON_WS", "local")), "public": approvals.public_url() != ""}
+
+    route "POST /w/:slug/api/channels/toggle" requires auth
+        private
+        expect body {name: text, on: bool}
+        let b be json of request
+        give {"ok": plugins.set_enabled(text(b["name"]), b["on"])}
+
+    route "POST /w/:slug/api/channels/setup" requires auth
+        private
+        expect body {name: text}
+        give channels.setup_channel(text((json of request)["name"]), approvals.public_url(), env("LAMPSON_WS", "local"))
+
     -- ---------- canales (lib/channels.syn · spec/engine.md fase 4) ----------
     -- El webhook de la plataforma. Sin auth de Lampson: la firma de la plataforma la verifica el plugin en `receive`
     -- (recibe el body exacto). GET para las verificaciones de webhook (Meta, Slack…), que el plugin contesta con "http".

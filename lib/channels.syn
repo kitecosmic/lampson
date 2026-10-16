@@ -143,6 +143,67 @@ export task route_messages(name, l, msgs)
             set accepted to accepted + 1
     give accepted
 
+-- ---------- configuración (CLI `lampson channel …` y el panel Canales de la web) ----------
+
+-- la URL del webhook de un canal: la pública si hay, si no la local del hub
+export task webhook_url(name, pub, slug)
+    give (when pub != "" then pub otherwise "http://127.0.0.1:8080") + "/w/" + (when slug == "" then "local" otherwise slug) + "/ch/" + name
+
+-- `setup`: con URL pública registra el webhook; sin ella, modo poll si el canal lo sabe hacer → {code, out}
+export task setup_channel(name, pub, slug)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let l be plugins.channel(name)
+    when l == nothing
+        give {"code": 2, "out": "the channel " + name + " is off (or is not a channel): turn it on first"}
+    when pub == "" and l["channel"]["poll"]
+        set_mode(name, "poll")
+        let pout be trim(text(plugins.invoke(l, "setup", {"mode": "poll"})))
+        give {"code": when starts_with(pout, "ERROR") then 1 otherwise 0, "out": pout + "\nmodo sin URL pública: el proceso del workspace le pide los mensajes a " + name + " (arranca solo con el workspace; `lampson --hub start` si está apagado)"}
+    when pub == ""
+        give {"code": 2, "out": "hace falta una URL pública (https) para que " + name + " llegue a este Lampson: `lampson --domain …`, un túnel, o LAMPSON_PUBLIC_URL en .env"}
+    set_mode(name, "webhook")
+    let out be trim(text(plugins.invoke(l, "setup", {"mode": "webhook", "webhook_url": webhook_url(name, pub, slug)})))
+    when contains(out, "unknown action 'setup'")
+        give {"code": 0, "out": "el canal " + name + " se configura desde la plataforma: pegá esta URL como webhook → " + webhook_url(name, pub, slug)}
+    give {"code": when starts_with(out, "ERROR") then 1 otherwise 0, "out": out}
+
+-- cada canal instalado, para la UI: {name, description, enabled, error, agent, mode, webhook_url, poll, typing, log}
+export task summary(pub, slug)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let out be []
+    each l in where(plugins.all(), (x) => x["channel"] != nothing)
+        let lines be []
+        try
+            let raw be read_file(mailbox.CHANNEL_LOG_DIR + "/" + l["name"] + ".log")
+            let all_lines be where(split(replace(raw, "\r", ""), "\n"), (x) => trim(x) != "")
+            set lines to when length(all_lines) > 12 then slice(all_lines, length(all_lines) - 12, length(all_lines)) otherwise all_lines
+        recover err
+            set lines to []
+        set out to append(out, {"name": l["name"], "description": l["description"], "enabled": l["enabled"], "error": l["error"], "agent": when l["error"] == nothing then agent_for(l["name"], l, {}) otherwise "", "mode": mode_of(l["name"]), "webhook_url": webhook_url(l["name"], pub, slug), "public": pub != "", "poll": l["channel"]["poll"], "typing": l["channel"]["typing"], "scope": l["scope"], "log": lines})
+    give out
+
 -- ---------- modo sin URL pública (poll) ----------
 
 task modes_file()

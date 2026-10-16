@@ -111,7 +111,7 @@ when ch_cmd != ""
     let pub_ch be approvals.public_url()
     let slug be env("LAMPSON_WS", "")
     task hook_url(n)
-        give (when pub_ch != "" then pub_ch otherwise "http://127.0.0.1:8080") + "/w/" + (when slug == "" then "local" otherwise slug) + "/ch/" + n
+        give channels.webhook_url(n, pub_ch, slug)
     let chs be where(plugins.all(), (l) => l["channel"] != nothing)
     when ch_cmd == "list"
         when length(chs) == 0
@@ -136,23 +136,9 @@ when ch_cmd != ""
         when not l["enabled"]
             print("lampson channel: el canal " + ch_name + " está apagado — `lampson channel on " + ch_name + "` primero")
             exit(2)
-        when pub_ch == "" and l["channel"]["poll"]
-            -- sin URL pública: modo poll (Lampson le pide los mensajes a la plataforma; no hace falta dominio ni túnel)
-            channels.set_mode(ch_name, "poll")
-            let pout be text(plugins.invoke(l, "setup", {"mode": "poll"}))
-            print(trim(pout))
-            print("modo sin URL pública: el proceso del workspace le pide los mensajes a " + ch_name + " (arranca solo con el workspace; `lampson --hub start` si está apagado)")
-            exit(when starts_with(trim(pout), "ERROR") then 1 otherwise 0)
-        when pub_ch == ""
-            print("lampson channel: hace falta una URL pública (https) para que " + ch_name + " llegue a este Lampson: `lampson --domain …`, un túnel, o LAMPSON_PUBLIC_URL en .env")
-            exit(2)
-        channels.set_mode(ch_name, "webhook")
-        let out be text(plugins.invoke(l, "setup", {"mode": "webhook", "webhook_url": hook_url(ch_name)}))
-        when contains(out, "unknown action 'setup'")
-            print("el canal " + ch_name + " se configura desde la plataforma: pegá esta URL como webhook → " + hook_url(ch_name))
-            exit(0)
-        print(trim(out))
-        exit(when starts_with(trim(out), "ERROR") then 1 otherwise 0)
+        let su be channels.setup_channel(ch_name, pub_ch, slug)
+        print(su["out"])
+        exit(su["code"])
     print("uso: lampson channel list · channel on|off <canal> · channel setup <canal>")
     exit(2)
 
