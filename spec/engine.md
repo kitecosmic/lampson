@@ -356,7 +356,19 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
       → hecho: protocolo 2, un agente por ask; misma conversación en fila, distintas en paralelo (6 s en vez de 12).
 - [ ] Otros lenguajes: generar clientes desde `/v1/openapi.json` (5a); PHP a mano si hay demanda.
 
-### Fase 6 — Orquestación (rama propia, después del motor)
+### Fase 6 — Equipos de agentes (rama `feat/teams`, desde `main` @ cdcd54d)
+
+Vocabulario fijado por Joel (2026-10-16) — vale para archivos, API, interfaz y documentación:
+
+| concepto | nombre | |
+|---|---|---|
+| un agente (`*.agent.json`) | **agente** | el mismo término de cara al usuario; nada de «asistentes» ni «empleados» |
+| el grupo que coordina | **equipo** (`team`) | `.lampson/teams/<id>.team.json` |
+| lo que hace cada uno en el equipo | **rol** | texto libre: ventas, soporte, CEO… |
+| la lista compartida de trabajo | **tablero** (`board`) con **tareas** | dueño, estado, dependencias |
+| cuándo un agente trabaja solo | **ronda** | mira si hay algo para él; sin trabajo, no gasta |
+| de un agente a otro | **mensaje** (tool `send`) | entra por el buzón, como un cliente |
+
 - [ ] Tool `send(to, text)` entre agentes → `deliver` (generaliza `delegate`)
 - [ ] Tablero compartido de tareas (estado, dueño, dependencias) — blackboard de Synsema
 - [ ] Despertadores por agente: mensaje, cron (`lib/schedule.syn`), evento; sin trabajo → no corre
@@ -392,6 +404,9 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — Arranca la fase 6 en `feat/teams`. Nombres: agente, equipo, rol, tablero/tareas, ronda, mensaje
+  (tabla en la fase 6). «Agente» también de cara al usuario: un solo término en archivos, API, interfaz y docs.
 
 - **2026-10-16** — **Pedidos por chat de punta a punta, probado con una conversación real** (modelo `glm-5.3-flash`,
   cliente escribiendo en ráfagas con pausas de 2 a 6 s, por `/v1/messages` a través del hub — el mismo buzón que
