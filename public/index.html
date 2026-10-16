@@ -69,6 +69,14 @@
     <h2 title="servers MCP conectados: globales (lampson/.lampson/mcp.json, valen para todos los proyectos) y del proyecto (.lampson/mcp.json)"><span class="caret">▸</span>MCP<span class="cnt" id="mcpCount"></span></h2>
     <div class="body" id="mcpBox"></div>
   </section>
+  <section class="sec" data-sec="keys">
+    <h2 title="API keys: dejan que una app, un bot u otro agente use los agentes de este workspace por HTTP (/v1) o MCP"><span class="caret">▸</span>API<span class="cnt" id="keysCount"></span></h2>
+    <div class="body" id="keysBox"></div>
+  </section>
+  <section class="sec" data-sec="channels">
+    <h2 title="canales: Telegram, Chatwoot (WhatsApp, Instagram, email…) y los que agregues como plugins; un agente contesta los mensajes"><span class="caret">▸</span>Canales<span class="cnt" id="channelsCount"></span></h2>
+    <div class="body" id="channelsBox"></div>
+  </section>
   <section class="sec" data-sec="lsp">
     <h2 title="language servers: el agente los usa para ver la estructura de un archivo sin leerlo (symbols) y navegar con precisión (definition, references, hover). Arrancan en la primera consulta"><span class="caret">▸</span>LSP<span class="cnt" id="lspCount"></span></h2>
     <div class="body" id="lspBox"></div>
@@ -131,6 +139,7 @@
 <script src="/js/mcp.js"></script>
 <script src="/js/lsp.js"></script>
 <script src="/js/plugins.js"></script>
+<script src="/js/engine.js"></script>
 <script src="/js/schedules.js"></script>
 <script src="/js/approvals.js"></script>
 <script src="/js/config.js"></script>

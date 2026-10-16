@@ -1,0 +1,418 @@
+-- lib/mailbox.syn — el buzón de cada conversación: fila, espera de silencio y mensajes a mitad de turno
+-- (spec/engine.md, "buffer"). Lo usan las puertas que reciben mensajes de afuera (la API /v1 y sus canales).
+--
+-- Problema: un cliente escribe "hola" / "¿precio de X?" / "¿hay stock?" en ráfaga, o con mala señal. Sin esto,
+-- tres turnos en paralelo sobre la misma sesión (el último en guardar pisa a los otros) y tres respuestas sueltas.
+--
+--   1. FILA por (agente, thread) — siempre, no se apaga: nunca dos turnos a la vez sobre la misma conversación.
+--   2. ESPERA DE SILENCIO — el turno arranca cuando pasan `quiet_s` sin mensajes nuevos, o al cumplirse `max_s`
+--      desde el primero de la ráfaga. Todos van en UN turno, ordenados por `sent_at` (la hora en que el cliente
+--      escribió, si el canal la manda) y si no por llegada. Por agente: "buffer": {"quiet_s": 3, "max_s": 15} (el
+--      default de la API) o "buffer": false (sin espera; la fila sigue).
+--   3. A MITAD DE TURNO — lo que llega mientras el agente trabaja entra por el buzón del loop (opts.inbox_fn, el
+--      mismo de los subagentes) antes de la siguiente llamada al modelo: lo ve antes de responder.
+--
+-- Mecánica (estado de `serve`, compartido por handlers y agentes; no existe bajo `run`):
+--   mb:lock:<k>  lock por conteo con state_incr (se toma si el incremento da 1; se suelta con -1)
+--   mb:q:<k>     la fila · mb:first:<k> / mb:last:<k> llegada del primero y del último de la ráfaga
+--   mb:w:<k>     hay un worker vivo para esta conversación
+--   mb:res:<id>  el resultado de cada mensaje (lo levanta quien lo mandó)
+-- El primer mensaje que encuentra la fila sin worker lanza uno (`agent MailboxWorker`); el worker junta, corre el
+-- turno con runtime.turn, publica los eventos en el bus ("lampson.mb.<k>", para las respuestas SSE), deja los
+-- resultados, entrega los callbacks (uno por lote y por URL) y se va cuando la fila queda vacía. Tomar la fila y
+-- soltar el worker ocurren bajo el mismo lock: un mensaje que llega en ese instante nunca queda huérfano.
+
+use "./runtime.syn" as runtime
+use "./loop.syn" as loop
+use "./agents.syn" as agents
+use "./approvals.syn" as approvals
+use "./permission.syn" as permission
+use "./plugins.syn" as plugins
+
+export let DEFAULT_BUFFER be {"quiet_s": 3, "max_s": 15}
+export let JOBS_DIR be ".lampson/api/jobs"
+export let APPROVAL_TIMEOUT be 180
+export let WAIT_TIMEOUT be 900
+export let CHANNEL_LOG_DIR be ".lampson/channels"
+
+-- ¿hay estado de serve? (bajo `synsema run` no: ahí cada proceso es un solo mensaje y no hace falta fila)
+export task available()
+    try
+        state_get("mb:probe", nothing)
+        give true
+    recover err
+        give false
+
+-- la conversación: (agente, thread); sin thread, la sesión; sin nada, el propio mensaje (nada que ordenar)
+export task key_of(sobre, id)
+    let th be text(sobre["thread"])
+    when th != ""
+        give runtime.thread_key(sobre["to"], th)
+    let ss be text(sobre["session"])
+    when ss != ""
+        give runtime.thread_key(sobre["to"], "session:" + ss)
+    give runtime.thread_key(sobre["to"], "msg:" + id)
+
+-- la espera de un agente: la suya, o la de la puerta (DEFAULT_BUFFER para la API); false → {0, 0}
+export task buffer_of(spec, fallback)
+    let b be fallback
+    when spec != nothing and contains(spec, "buffer") and spec["buffer"] != nothing
+        set b to spec["buffer"]
+    when b == false or b == nothing
+        give {"quiet_s": 0, "max_s": 0}
+    give b
+
+export task new_id()
+    require time
+    require random
+    give "m" + slice(text(floor(now() * 1000)), 5, 13) + slice(token(16), 0, 4)
+
+-- ---------- lock y fila ----------
+
+task lock(k)
+    require time
+    let lk be "mb:lock:" + k
+    let tries be 0
+    while state_incr(lk, 1) != 1
+        state_incr(lk, -1)
+        set tries to tries + 1
+        sleep(when tries < 50 then 0.005 otherwise 0.05)
+    give true
+
+task unlock(k)
+    state_incr("mb:lock:" + k, -1)
+
+-- encola; true si este mensaje tiene que lanzar el worker (la fila no tenía)
+export task post(k, item)
+    require time
+    lock(k)
+    let q be state_get("mb:q:" + k, [])
+    state_set("mb:q:" + k, append(q, item))
+    state_set("mb:last:" + k, now())
+    when state_get("mb:first:" + k, nothing) == nothing
+        state_set("mb:first:" + k, now())
+    let claim be not state_get("mb:w:" + k, false)
+    when claim
+        state_set("mb:w:" + k, true)
+    unlock(k)
+    give claim
+
+-- saca todo lo encolado
+task take(k)
+    lock(k)
+    let q be state_get("mb:q:" + k, [])
+    state_set("mb:q:" + k, [])
+    state_set("mb:first:" + k, nothing)
+    unlock(k)
+    give q
+
+-- el worker se va solo si la fila está vacía (bajo el lock: nadie encola en el medio)
+task release(k)
+    lock(k)
+    let q be state_get("mb:q:" + k, [])
+    let gone be length(q) == 0
+    when gone
+        state_set("mb:w:" + k, false)
+    unlock(k)
+    give gone
+
+-- espera de silencio: quiet_s sin mensajes nuevos, o max_s desde el primero
+task settle(k, buf)
+    require time
+    while true
+        let first be state_get("mb:first:" + k, nothing)
+        when first == nothing
+            give true
+        let last be state_get("mb:last:" + k, first)
+        when now() - last >= buf["quiet_s"] or now() - first >= buf["max_s"]
+            give true
+        sleep(0.1)
+
+-- espera el resultado de un mensaje (lo deja el worker)
+export task wait(id)
+    require time
+    let deadline be now() + WAIT_TIMEOUT
+    while now() < deadline
+        let r be state_get("mb:res:" + id, nothing)
+        when r != nothing
+            state_delete("mb:res:" + id)
+            give r
+        sleep(0.1)
+    give {"agent": "", "thread": "", "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: timed out waiting for the conversation's worker", "batch": [id], "lead": id}
+
+-- ---------- trabajos (callback) ----------
+
+task job_path(id)
+    give JOBS_DIR + "/" + id + ".json"
+
+export task job(id)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when not matches(id, "m[0-9a-zA-Z_-]{4,40}")
+        give nothing
+    try
+        give json_decode(read_file(job_path(id)))
+    recover err
+        give nothing
+
+export task save_job(j)
+    require file(".lampson")
+    require file(".lampson/*")
+    write_file(job_path(j["job"]), json_encode(j))
+
+task post_callback(url, payload)
+    require net
+    require env("LAMPSON_*")
+    let body be json_encode(payload)
+    let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
+    let sec be env("LAMPSON_WEBHOOK_SECRET", "")
+    when sec != ""
+        set headers["X-Lampson-Signature"] to "sha256=" + decode(hmac(body, sec), "hex")
+    -- dos intentos: un receptor que parpadea no pierde la respuesta
+    let tries be 0
+    while tries < 2
+        set tries to tries + 1
+        try
+            let r be http_post(url, body, headers, 15)
+            when r["ok"]
+                give true
+            print("[lampson mailbox] callback " + url + " respondió " + text(r["status"]))
+        recover err
+            print("[lampson mailbox] callback falló: " + text(err))
+    give false
+
+-- aprobación sin nadie en la request: la cola de lib/approvals.syn (UI, link firmado, terminal); vence → denegado
+export task approve_queue(name, args, why)
+    require time
+    require random
+    require net
+    require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let id be approvals.open("api", permission.describe_call(name, args), why, APPROVAL_TIMEOUT)
+    give approvals.wait(id, APPROVAL_TIMEOUT)
+
+-- ---------- el worker ----------
+
+task sort_key(it)
+    when contains(it, "sent_at") and it["sent_at"] != nothing
+        try
+            give number(it["sent_at"])
+        recover err
+            give it["arrived"]
+    give it["arrived"]
+
+task user_msg(it)
+    when length(it["images"]) > 0
+        give {"role": "user", "content": it["text"], "images": it["images"]}
+    give {"role": "user", "content": it["text"]}
+
+-- un lote: un turno con todos los mensajes (y los que lleguen mientras), resultados, callbacks, jobs
+task run_batch(k, spec, items)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let ordered be sort_by(items, (it) => sort_key(it))
+    let lead be ordered[0]
+    let topic be "lampson.mb." + k
+    let all be ordered
+    -- "escribiendo…" del canal (acción `typing`, si el plugin la declara): al empezar y cada ~4,5 s mientras trabaja
+    let typing_pl be nothing
+    when lead["reply_channel"] != ""
+        let tp be plugins.channel(lead["reply_channel"])
+        when tp != nothing and tp["channel"]["typing"]
+            set typing_pl to tp
+    let typing_at be 0
+    task typing()
+        when typing_pl != nothing and now() - typing_at >= 4.5
+            set typing_at to now()
+            try
+                plugins.invoke(typing_pl, "typing", {"thread": lead["reply_thread"], "meta": ordered[length(ordered) - 1]["meta"]})
+            recover err
+                set typing_at to typing_at
+    typing()
+    task publish(kind, data, tag)
+        when kind == "busy"
+            typing()
+        when kind != "busy" and kind != "idle"
+            bus_publish(topic, {"kind": kind, "data": data, "tag": tag, "agent": lead["to"], "thread": lead["thread"]})
+    let hooks be {"mode": spec["mode"], "ask_fn": approve_queue, "on_event": publish}
+    let result be nothing
+    try
+        let o be runtime.open({"to": lead["to"], "thread": lead["thread"], "session": lead["session"], "text": "", "channel": lead["channel"], "meta": lead["meta"]}, hooks)
+        bus_publish(topic, {"kind": "session", "data": {"session": o["session"], "agent": o["ctx"]["agent"], "thread": o["thread"], "batch": apply((it) => it["id"], ordered)}, "tag": "", "agent": lead["to"], "thread": lead["thread"]})
+        when o["note"] != ""
+            publish("inbox", o["note"], "")
+        -- a mitad de turno: lo que llegó mientras el agente trabajaba entra antes de la próxima llamada al modelo
+        let prev be o["ctx"]["opts"]["inbox_fn"]
+        task mid(step, tag)
+            let msgs be []
+            let halt be false
+            when prev != nothing
+                let pi be call(prev, {"step": step, "tag": tag})
+                when pi != nothing
+                    set msgs to pi["messages"]
+                    set halt to pi["stop"]
+            each it in sort_by(take(k), (x) => sort_key(x))
+                set all to append(all, it)
+                let extra be when length(it["images"]) > 0 then " [+" + text(length(it["images"])) + " image(s), visible next turn]" otherwise ""
+                set msgs to append(msgs, it["text"] + extra)
+            when length(msgs) == 0 and not halt
+                give nothing
+            give {"messages": msgs, "stop": halt}
+        let ctx be o["ctx"]
+        set ctx["opts"] to loop.with_inbox(ctx["opts"], mid, "")
+        set o["ctx"] to ctx
+        let msgs be o["messages"]
+        each it in ordered
+            set msgs to append(msgs, user_msg(it))
+        let label be join(apply((it) => it["text"], ordered), " ⏎ ")
+        let r be runtime.turn(o, msgs, label, hooks)
+        set result to {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": o["session"], "text": r["text"], "steps": r["steps"], "usage": r["usage"], "stopped": r["stopped"]}
+    recover err
+        set result to {"agent": lead["to"], "thread": lead["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+    let ids be apply((it) => it["id"], all)
+    set result["batch"] to ids
+    set result["lead"] to lead["id"]
+    each it in all
+        state_set("mb:res:" + it["id"], result)
+    bus_publish(topic, {"kind": "done", "data": result, "tag": "", "agent": result["agent"], "thread": result["thread"]})
+    -- callbacks: uno por URL distinta del lote; cada job queda done (el que encabeza) o merged (los demás)
+    let urls be []
+    each it in all
+        when it["callback"] != "" and not contains(urls, it["callback"])
+            set urls to append(urls, it["callback"])
+    each u in urls
+        let mine be where(all, (it) => it["callback"] == u)
+        let payload be {"job": mine[0]["id"], "jobs": apply((it) => it["id"], mine), "batch": ids, "status": when starts_with(result["stopped"], "error") then "error" otherwise "done", "agent": result["agent"], "thread": result["thread"], "session": result["session"], "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "meta": mine[0]["meta"]}
+        let ok be post_callback(u, payload)
+        each it in mine
+            when it["job"]
+                let j be job(it["id"])
+                when j != nothing
+                    set j["status"] to when it["id"] == mine[0]["id"] then payload["status"] otherwise "merged"
+                    set j["merged_into"] to when it["id"] == mine[0]["id"] then nothing otherwise mine[0]["id"]
+                    set j["result"] to result
+                    set j["delivered"] to ok
+                    set j["finished"] to format_time(now())
+                    save_job(j)
+    -- canales (lib/channels.syn): UNA respuesta por lote y canal, por la acción `send` del plugin. El meta del último
+    -- mensaje (ids de la plataforma más recientes). Un error del agente no se le manda al cliente: queda en el log.
+    let chans be []
+    each it in all
+        when it["reply_channel"] != "" and not contains(chans, it["reply_channel"])
+            set chans to append(chans, it["reply_channel"])
+    each ch in chans
+        let mine be where(all, (it) => it["reply_channel"] == ch)
+        let last be mine[length(mine) - 1]
+        let sent be {"channel": ch, "ok": false, "output": ""}
+        when starts_with(result["stopped"], "error") or trim(result["text"]) == ""
+            set sent["output"] to "not sent: " + (when trim(result["text"]) == "" then "empty answer" otherwise result["stopped"])
+        otherwise
+            let pl be plugins.channel(ch)
+            when pl == nothing
+                set sent["output"] to "not sent: channel '" + ch + "' is not enabled anymore"
+            otherwise
+                let out be text(plugins.invoke(pl, "send", {"thread": last["reply_thread"], "text": result["text"], "meta": last["meta"], "agent": result["agent"], "session": result["session"], "batch": ids}))
+                set sent["output"] to out
+                set sent["ok"] to not starts_with(out, "ERROR")
+        when not file_exists(CHANNEL_LOG_DIR + "/" + ch + ".log")
+            write_file(CHANNEL_LOG_DIR + "/" + ch + ".log", "")
+        append_file(CHANNEL_LOG_DIR + "/" + ch + ".log", format_time(now()) + "  " + (when sent["ok"] then "SENT " otherwise "FAIL ") + last["reply_thread"] + "  batch=" + text(length(ids)) + "  " + replace(slice(sent["output"], 0, 200), "\n", " ") + "\n")
+        bus_publish(topic, {"kind": "channel_sent", "data": sent, "tag": "", "agent": result["agent"], "thread": result["thread"]})
+    give result
+
+export task work(spec_json)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let spec be json_decode(spec_json)
+    let k be spec["key"]
+    let running be true
+    while running
+        settle(k, spec["buffer"])
+        let items be take(k)
+        when length(items) == 0
+            when release(k)
+                set running to false
+        otherwise
+            run_batch(k, spec, items)
+    give true
+
+-- MIGA runtime (igual que agents.Child): un `agent` solo ve sus parámetros, las builtins y las tasks TOP-LEVEL del
+-- entry. web.syn define `task lampson_mailbox_worker(spec_json) give mailbox.work(spec_json)`.
+agent MailboxWorker
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file("memory")
+    require file("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    lampson_mailbox_worker(spec_json)
+
+-- ---------- lo que llama la puerta ----------
+
+-- arma el item y lo encola; lanza el worker si hace falta. → {id, key}
+-- opts: {mode, buffer, callback, job, reply_channel, reply_thread}
+export task submit(sobre, opts)
+    require time
+    require random
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let id be when contains(opts, "id") then opts["id"] otherwise new_id()
+    let k be key_of(sobre, id)
+    let sent be nothing
+    when contains(sobre["meta"], "sent_at")
+        set sent to sobre["meta"]["sent_at"]
+    let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true, "reply_channel": when contains(opts, "reply_channel") then opts["reply_channel"] otherwise "", "reply_thread": when contains(opts, "reply_thread") then opts["reply_thread"] otherwise ""}
+    when post(k, item)
+        let buf be opts["buffer"]
+        spawn MailboxWorker with spec_json = json_encode({"key": k, "mode": opts["mode"], "buffer": buf})
+    give {"id": id, "key": k}

@@ -1,0 +1,572 @@
+-- lib/runtime.syn — la capa entre las puertas (terminal, web, CLI, API, canales) y el kernel (loop.run_turn)
+--
+-- Norte y contratos: spec/engine.md. En dos líneas: todo lo que entra es un SOBRE dirigido a un agente, y una
+-- sesión es (agente, thread). Las puertas llaman a deliver(); deliver elige el agente, abre la sesión, corre el
+-- turno, traza, guarda y devuelve. Así la orquestación (agentes que se mandan mensajes) es otra puerta más.
+--
+-- AGENTES = datos:
+--   integrados: los perfiles de lib/agents.syn (build, plan, review, explore, worker) — se comportan EXACTO como
+--               antes: registry/catalog/steps/prompt salen de las mismas tasks de agents.syn
+--   globales:   agents/<id>.agent.json en la instalación (<LAMPSON_HOME>/agents, enlazada en cada workspace como
+--               los plugins): valen para todos los proyectos
+--   proyecto:   workspace/.lampson/agents/<id>.agent.json — {id, description, base, system, tools, permission,
+--               steps, budget_tokens, model:{provider, model}}; pisan a un global o integrado con el mismo id
+--
+-- SESIONES: `session` en el sobre = id de archivo ya conocido (lo que mandan la web y la terminal); `thread` =
+-- identidad externa (un número de WhatsApp, "cto:tarea-17"): se mapea a una sesión con un índice en
+-- .lampson/threads/<hash>.json. Los ids nuevos son timestamp + 4 dígitos (dos clientes en el mismo segundo no
+-- pisan la misma sesión; session.list sigue ordenándolos como números).
+--
+-- NIVELES (de más alto a más bajo; una puerta usa el más alto que le sirve):
+--   deliver(sobre, hooks)              open + turn: lo que usan run.syn y POST /api/chat
+--   open(sobre, hooks) / save(o, msgs) abrir la conversación sin correr el turno (el `!comando` de la web)
+--   turn(o, messages, label, hooks)    un turno sobre mensajes ya armados: traza, run_turn, guarda (la terminal,
+--                                      que tiene el historial en memoria entre turnos)
+--   boot / system_for / opts_for       armar un agente (cfg, mensaje system, opts del loop)
+--
+-- deliver(sobre, hooks) → {agent, thread, session, text, steps, usage, stopped}
+--   sobre : {to, thread, session, from, text, images, channel, meta}   (todos opcionales menos text)
+--   hooks : {on_event, ask_fn, mode, provider, model, on_start}
+--           on_event(kind, data, tag)  eventos del loop; el runtime ya trazó cada uno en .lampson/trace/<sid>.log
+--           ask_fn(name, args, why)    aprobación humana; nothing = sin humano → lo que pida aprobación se deniega
+--           on_start(info)             antes del turno: {session, agent, thread, mode, provider, model, has_key}
+
+use "./agents.syn" as agents
+use "./tools.syn" as tools
+use "./loop.syn" as loop
+use "./provider.syn" as provider
+use "./prompt.syn" as prompt
+use "./session.syn" as session
+use "./trace.syn" as trace
+use "./mcp.syn" as mcp
+use "./plugins.syn" as plugins
+use "./tools/proc.syn" as proc
+use "./scope.syn" as scope
+
+export let PROJECT_DIR be "workspace/.lampson/agents"
+export let GLOBAL_DIR be "agents"
+export let THREADS_DIR be ".lampson/threads"
+export let SUFFIX be ".agent.json"
+let ID_RE be "[a-z0-9][a-z0-9-]{0,39}"
+let MODES be ["", "ask", "strict", "yolo"]
+let BASES be ["lampson", "none"]
+
+-- ---------- agentes ----------
+
+task builtin(id)
+    let p be agents.PROFILES[id]
+    give {"id": id, "description": "", "role": "", "base": "lampson", "system": p["addendum"], "tools": p["tools"], "scopes": {}, "approve": {}, "permission": "", "steps": 0, "budget_tokens": 0, "model": {"provider": "", "model": ""}, "builtin": true, "source": "builtin"}
+
+task field(raw, key, fallback)
+    when contains(raw, key)
+        when raw[key] != nothing
+            give raw[key]
+    give fallback
+
+-- {ok, spec, error}: valida un .agent.json ya decodificado y completa los defaults
+export task validate(raw, source)
+    when type_of(raw) != "map"
+        give {"ok": false, "spec": nothing, "error": source + ": the agent file must be a JSON object"}
+    let id be text(field(raw, "id", ""))
+    when not matches(id, ID_RE)
+        give {"ok": false, "spec": nothing, "error": source + ": id must be lowercase letters, digits and - (max 40), got '" + id + "'"}
+    let base be lower(text(field(raw, "base", "none")))
+    when not contains(BASES, base)
+        give {"ok": false, "spec": nothing, "error": source + ": base must be lampson or none"}
+    let perm be lower(text(field(raw, "permission", "")))
+    when not contains(MODES, perm)
+        give {"ok": false, "spec": nothing, "error": source + ": permission must be ask, strict or yolo"}
+    let tl be field(raw, "tools", [])
+    when type_of(tl) != "list"
+        give {"ok": false, "spec": nothing, "error": source + ": tools must be a list of tool names"}
+    -- cada tool: "read" (sin límite, permisos del modo del agente) o un objeto con
+    --   "paths": ["dir/*", …]   alcance por ruta (lib/scope.syn; solo tools de archivos)
+    --   "approve": "auto"       esta tool corre sin pedir aprobación (como en yolo, SOLO ella; lo prohibido en todos los
+    --                           modos sigue prohibido) · "ask": esta tool pide aprobación SIEMPRE, aunque el agente sea yolo
+    let names be []
+    let scopes be {}
+    let approvals_by_tool be {}
+    each t in tl
+        when type_of(t) == "map"
+            let tn be text(field(t, "name", ""))
+            let ps be field(t, "paths", nothing)
+            let ap be lower(text(field(t, "approve", "")))
+            when tn == ""
+                give {"ok": false, "spec": nothing, "error": source + ": a tool object needs a name"}
+            when ps == nothing and ap == ""
+                give {"ok": false, "spec": nothing, "error": source + ": tool '" + tn + "': an object needs \"paths\" and/or \"approve\" (or write just \"" + tn + "\")"}
+            when ap != "" and ap != "auto" and ap != "ask"
+                give {"ok": false, "spec": nothing, "error": source + ": tool '" + tn + "': approve must be auto or ask"}
+            when ps != nothing
+                when type_of(ps) != "list" or length(ps) == 0
+                    give {"ok": false, "spec": nothing, "error": source + ": tool '" + tn + "': paths must be a non-empty list"}
+                when not contains(scope.SCOPABLE, tn)
+                    give {"ok": false, "spec": nothing, "error": source + ": only " + join(scope.SCOPABLE, ", ") + " can be limited by path ('" + tn + "' cannot)"}
+                each pp in ps
+                    let n be scope.norm(pp)
+                    when not n["ok"]
+                        give {"ok": false, "spec": nothing, "error": source + ": " + n["error"]}
+                set scopes[tn] to apply((pp) => text(pp), ps)
+            when ap != ""
+                set approvals_by_tool[tn] to ap
+            set names to append(names, tn)
+        otherwise
+            set names to append(names, text(t))
+    when length(keys(scopes)) > 0
+        let leaks be where(names, (n) => contains(scope.ESCAPES, n))
+        when length(leaks) > 0
+            give {"ok": false, "spec": nothing, "error": source + ": " + join(leaks, ", ") + " can reach any file, so it cannot be combined with path-limited tools"}
+    let system be text(field(raw, "system", ""))
+    when base == "none" and trim(system) == ""
+        give {"ok": false, "spec": nothing, "error": source + ": an agent with base=none needs a system prompt"}
+    let steps be floor(number(field(raw, "steps", 0)))
+    let budget be number(field(raw, "budget_tokens", 0))
+    when steps < 0 or budget < 0
+        give {"ok": false, "spec": nothing, "error": source + ": steps and budget_tokens must be >= 0"}
+    -- espera de silencio del buzón (lib/mailbox.syn): false = sin espera; {quiet_s, max_s}; sin campo = la de la puerta
+    let buf be field(raw, "buffer", nothing)
+    when buf != nothing and buf != false
+        when type_of(buf) != "map"
+            give {"ok": false, "spec": nothing, "error": source + ": buffer must be false or {\"quiet_s\": 3, \"max_s\": 15}"}
+        let qs be number(field(buf, "quiet_s", 3))
+        let ms be number(field(buf, "max_s", 15))
+        when qs < 0 or ms < qs
+            give {"ok": false, "spec": nothing, "error": source + ": buffer needs 0 <= quiet_s <= max_s"}
+        set buf to {"quiet_s": qs, "max_s": ms}
+    let m be field(raw, "model", {})
+    when type_of(m) != "map"
+        set m to {}
+    let model be {"provider": lower(text(field(m, "provider", ""))), "model": text(field(m, "model", ""))}
+    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "scopes": scopes, "approve": approvals_by_tool, "buffer": buf, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
+
+-- {specs, errors}: los .agent.json del proyecto (un archivo roto no tumba a los demás: va a errors)
+export task load_project()
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    give load_dir(PROJECT_DIR)
+
+-- {specs, errors}: los globales de la instalación
+export task load_global()
+    require file.read("agents")
+    require file.read("agents/*")
+    give load_dir(GLOBAL_DIR)
+
+task load_dir(dir)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let specs be []
+    let errors be []
+    try
+        each e in list_dir(dir)
+            when not e["is_dir"] and ends_with(e["name"], SUFFIX)
+                let src be dir + "/" + e["name"]
+                try
+                    let v be validate(json_decode(read_file(src)), src)
+                    when v["ok"]
+                        when v["spec"]["id"] + SUFFIX != e["name"]
+                            set errors to append(errors, src + ": the file name must be <id>" + SUFFIX + " (id is '" + v["spec"]["id"] + "')")
+                        otherwise
+                            set specs to append(specs, v["spec"])
+                    otherwise
+                        set errors to append(errors, v["error"])
+                recover err
+                    set errors to append(errors, src + ": " + text(err))
+    recover err
+        set specs to specs
+    give {"specs": specs, "errors": errors}
+
+-- todos los agentes por id: integrados, después los globales y después los del proyecto (pisa el más cercano)
+export task all()
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let out be {}
+    each id in keys(agents.PROFILES)
+        set out[id] to builtin(id)
+    each s in load_global()["specs"]
+        set s["source"] to "global:" + s["source"]
+        set out[s["id"]] to s
+    each s in load_project()["specs"]
+        set out[s["id"]] to s
+    give out
+
+export task get(id)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let a be all()
+    when contains(a, id)
+        give a[id]
+    give nothing
+
+-- los que se eligen desde afuera (selector, --agent, API): worker es interno de delegate
+export task names()
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    give sort(where(keys(all()), (n) => n != "worker"))
+
+-- el agente que atiende cuando el sobre no dice `to`
+export task default_agent()
+    require env("LAMPSON_*")
+    give lower(env("LAMPSON_AGENT", "build"))
+
+-- ---------- tools de un agente del proyecto ----------
+
+-- ¿`name` entra en el allow-list? exacto, o prefijo con * al final ("plugin_pedidos_*", "mcp_*")
+export task allowed(allow_list, name)
+    each a in allow_list
+        when a == name
+            give true
+        when ends_with(a, "*")
+            when starts_with(name, slice(a, 0, length(a) - 1))
+                give true
+    give false
+
+task builtin_tool_names(spec)
+    require exec
+    require time
+    require env("LAMPSON_*")
+    require env("OS")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    give agents.tool_names({"tools": where(spec["tools"], (n) => not ends_with(n, "*"))})
+
+export task registry_of(spec)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    when spec["builtin"]
+        give agents.registry_for(spec["id"])
+    let names be builtin_tool_names(spec)
+    let reg be tools.registry_subset(names)
+    when contains(names, "delegate")
+        set reg["delegate"] to agents.delegate
+    each m in mcp.names(false)
+        when allowed(spec["tools"], m)
+            set reg[m] to "mcp"
+    each m in plugins.names(false)
+        when allowed(spec["tools"], m)
+            set reg[m] to "plugin"
+    give reg
+
+export task catalog_of(spec)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    when spec["builtin"]
+        give agents.catalog_for(spec["id"])
+    let names be builtin_tool_names(spec)
+    let cat be tools.catalog_subset(names)
+    when contains(names, "delegate")
+        set cat to append(cat, agents.DELEGATE_SPEC)
+    let extra be where(mcp.catalog(false) + plugins.catalog(false), (s) => allowed(spec["tools"], s["name"]))
+    give cat + extra
+
+-- ---------- boot: cfg + system + opts de un agente ----------
+
+task pick(a, b)
+    when a != nothing and a != ""
+        give a
+    give b
+
+task spec_or_raise(id)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let spec be get(id)
+    when spec == nothing
+        raise("no agent named '" + id + "' · available: " + join(names(), ", "))
+    give spec
+
+-- opts del loop para un agente: tools, pasos, presupuesto, buzón y modo ("" = el del agente, o LAMPSON_PERMISSION).
+-- Barato de rearmar: la terminal lo hace en cada turno (catálogo fresco si un server MCP o un plugin cambió).
+export task opts_for(id, mode, ask_fn)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let spec be spec_or_raise(id)
+    let opts be loop.default_opts(registry_of(spec), catalog_of(spec), ask_fn)
+    -- pasos: los integrados como siempre (LAMPSON_MAX_STEPS o el del perfil); uno del proyecto, el suyo si lo fija
+    set opts to loop.with_steps(opts, when spec["builtin"] or spec["steps"] == 0 then agents.steps_for(when spec["builtin"] then id otherwise "build") otherwise spec["steps"])
+    when spec["budget_tokens"] > 0
+        set opts["budget_tokens"] to spec["budget_tokens"]
+    when length(keys(spec["scopes"])) > 0
+        set opts["scopes"] to spec["scopes"]
+    when length(keys(spec["approve"])) > 0
+        set opts["approve"] to spec["approve"]
+    -- buzón de subagentes: los integrados siempre (igual que antes); uno del proyecto solo si puede delegar
+    when spec["builtin"] or contains(spec["tools"], "delegate")
+        set opts to loop.with_inbox(opts, agents.parent_inbox, "")
+    let m be lower(pick(mode, spec["permission"]))
+    when m != ""
+        set opts to loop.with_mode(opts, m)
+    give opts
+
+-- el mensaje system de un agente. base=lampson: el prompt de código (prompt.build) + el suyo; none: solo el suyo.
+-- La terminal lo arma UNA vez por sesión (el prompt cache depende de que no cambie entre turnos).
+export task system_for(id, cfg)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let spec be spec_or_raise(id)
+    when spec["base"] == "lampson"
+        give {"role": "system", "content": prompt.build(agents.env_info(cfg), spec["system"])}
+    give {"role": "system", "content": spec["system"] + "\n\n# Environment\n- Date: " + format_time(now(), "%Y-%m-%d")}
+
+-- over: {mode, provider, model} — lo que pide la puerta pisa lo del agente; vacío = lo del agente / lo configurado
+export task boot(id, over, ask_fn)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let spec be spec_or_raise(id)
+    let cfg be provider.config_for(pick(field(over, "provider", ""), spec["model"]["provider"]), pick(field(over, "model", ""), spec["model"]["model"]))
+    give {"cfg": cfg, "system": system_for(id, cfg), "opts": opts_for(id, field(over, "mode", ""), ask_fn), "agent": spec["id"], "spec": spec}
+
+-- ---------- sesiones (agente, thread) ----------
+
+export task thread_key(agent, thread)
+    give slice(decode(sha256(agent + "\n" + thread), "hex"), 0, 32)
+
+-- id de sesión nuevo que no exista: timestamp + 4 dígitos
+export task fresh_session()
+    require time
+    require random
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let base be session.new_id()
+    let i be 0
+    while i < 20
+        set i to i + 1
+        let id be base + "-" + slice(text(10000 + floor(random() * 10000)), 1, 5)
+        when not session.exists(id)
+            give id
+    raise("could not allocate a session id")
+
+-- la sesión de (agente, thread) si ya existe; "" si no
+export task thread_session(agent, thread)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when thread == ""
+        give ""
+    try
+        let idx be json_decode(read_file(THREADS_DIR + "/" + thread_key(agent, thread) + ".json"))
+        when session.exists(idx["session"])
+            give idx["session"]
+    recover err
+        give ""
+    give ""
+
+task remember_thread(agent, thread, sid)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    when thread != ""
+        write_file(THREADS_DIR + "/" + thread_key(agent, thread) + ".json", json_encode({"agent": agent, "thread": thread, "session": sid, "updated": format_time(now())}))
+
+-- ---------- deliver ----------
+
+-- abre la conversación sin correr el turno: {ctx, session, thread, messages, mode}. La usan las puertas que a
+-- veces hacen otra cosa con la sesión (el `!comando` de la web); el resto llama a deliver.
+export task open(sobre, hooks)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let id be lower(text(pick(field(sobre, "to", ""), default_agent())))
+    let ctx be boot(id, hooks, field(hooks, "ask_fn", nothing))
+    let thread be text(field(sobre, "thread", ""))
+    let sid be text(field(sobre, "session", ""))
+    when sid != "" and not session.exists(sid)
+        set sid to ""
+    when sid == ""
+        set sid to thread_session(ctx["agent"], thread)
+    let messages be [ctx["system"]]
+    let note be ""
+    when sid != ""
+        let doc be session.load(sid)
+        let prev be doc["messages"]
+        set messages to [ctx["system"]] + slice(prev, 1, length(prev))
+        when thread == "" and contains(doc["meta"], "thread")
+            set thread to text(doc["meta"]["thread"])
+        -- sesión guardada por otra corrida de lampson: sus procesos ya no viven — decírselo al modelo (una vez)
+        when session.from_other_run(doc)
+            set note to proc.resume_note(sid)
+            when note != ""
+                set messages to append(messages, {"role": "user", "content": note})
+    otherwise
+        set sid to fresh_session()
+    -- sesión actual (blackboard): la tool todo guarda su lista por sesión (lib/tools/todo.syn)
+    share {"id": sid} as "lampson:session"
+    give {"ctx": ctx, "session": sid, "thread": thread, "messages": messages, "mode": ctx["opts"]["permission_mode"], "note": note}
+
+-- guarda la sesión con su agente y thread (y el índice del thread)
+export task save(o, messages)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require env("LAMPSON_*")
+    session.save(o["session"], messages, {"title": session.title_of(messages), "agent": o["ctx"]["agent"], "thread": o["thread"]})
+    remember_thread(o["ctx"]["agent"], o["thread"], o["session"])
+
+-- corre UN turno sobre mensajes ya armados (el del usuario ya agregado): traza, run_turn, guarda.
+-- o: {ctx: {cfg, opts, agent}, session, thread} — lo que devuelve open(), o lo que arma la terminal.
+-- label: lo que se anota como turno del usuario en la traza ("" = el último mensaje de usuario).
+export task turn(o, messages, label, hooks)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let sid be o["session"]
+    let user_cb be field(hooks, "on_event", nothing)
+    task on_event(kind, data, tag)
+        trace.event(sid, kind, data, tag)
+        when user_cb != nothing
+            call(user_cb, {"kind": kind, "data": data, "tag": tag})
+    let said be label
+    when said == ""
+        each m in messages
+            when m["role"] == "user"
+                set said to text(m["content"])
+    let cfg be o["ctx"]["cfg"]
+    trace.user(sid, said, o["ctx"]["agent"], o["ctx"]["opts"]["permission_mode"], cfg["model"])
+    let result be loop.run_turn(cfg, messages, o["ctx"]["opts"], on_event)
+    trace.turn_end(sid, result)
+    save(o, result["messages"])
+    give result
+
+export task deliver(sobre, hooks)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let o be open(sobre, hooks)
+    let sid be o["session"]
+    let cfg be o["ctx"]["cfg"]
+    let start_cb be field(hooks, "on_start", nothing)
+    when start_cb != nothing
+        call(start_cb, {"info": {"session": sid, "agent": o["ctx"]["agent"], "thread": o["thread"], "mode": o["mode"], "provider": cfg["provider"], "model": cfg["model"], "has_key": cfg["has_key"]}})
+    when o["note"] != ""
+        trace.event(sid, "inbox", o["note"], "")
+        let cb be field(hooks, "on_event", nothing)
+        when cb != nothing
+            call(cb, {"kind": "inbox", "data": o["note"], "tag": ""})
+    let msg be text(field(sobre, "text", ""))
+    let umsg be {"role": "user", "content": msg}
+    let images be field(sobre, "images", [])
+    when length(images) > 0
+        set umsg to {"role": "user", "content": msg, "images": images}
+    let result be turn(o, append(o["messages"], umsg), msg, hooks)
+    give {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": sid, "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"]}

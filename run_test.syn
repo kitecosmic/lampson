@@ -1,0 +1,312 @@
+-- run_test.syn — el runtime (lib/runtime.syn) y la puerta `lampson run` (run.syn) contra el mock LLM
+-- (tests/mock_llm.syn, que este script arranca en :8765). Lo lanza tests/run.ps1 / run.sh con:
+--   LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x
+-- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
+require net
+require time
+require exec
+require random
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_*")
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file.read("plugins")
+require file.read("plugins/*")
+require file.read("agents")
+require file.read("agents/*")
+require file("memory")
+require file("memory/*")
+require file(".lampson")
+require file(".lampson/*")
+use "./lib/runtime.syn" as runtime
+use "./lib/agents.syn" as agents
+use "./lib/session.syn" as session
+
+task lampson_subagent(spec_json)
+    give agents.run_child_json(spec_json)
+
+let failures be []
+task check(cond, msg)
+    when not cond
+        set failures to append(failures, msg)
+        print("  ✗ " + msg)
+    otherwise
+        print("  ✓ " + msg)
+
+task rm_file(path)
+    when env("OS", "") == "Windows_NT"
+        run("cmd", ["/c", "del", "/q", replace(path, "/", "\\")], 10)
+    otherwise
+        run("rm", ["-f", path], 10)
+
+-- mock LLM
+let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
+let up be false
+let tries be 0
+while not up and tries < 40
+    sleep(0.25)
+    set tries to tries + 1
+    try
+        let r be http_get("http://127.0.0.1:8765/v1/models")
+        set up to r["status"] > 0
+    recover err
+        set up to false
+check(up, "mock LLM arriba en :8765")
+
+-- agentes del proyecto para el test
+let ADIR be runtime.PROJECT_DIR
+write_file(ADIR + "/rt-shop.agent.json", json_encode({"id": "rt-shop", "description": "bot de prueba", "system": "Eres el bot de una tienda.", "tools": ["ls"], "steps": 6, "permission": "strict"}))
+write_file(ADIR + "/rt-mute.agent.json", json_encode({"id": "rt-mute", "system": "Sin herramientas.", "tools": ["read"]}))
+write_file(ADIR + "/rt-askls.agent.json", json_encode({"id": "rt-askls", "system": "Pregunta siempre.", "permission": "yolo", "tools": [{"name": "ls", "approve": "ask"}]}))
+write_file(ADIR + "/rt-scoped.agent.json", json_encode({"id": "rt-scoped", "system": "Solo datos.", "tools": [{"name": "ls", "paths": ["datos/*"]}]}))
+
+let created be []
+let threads be []
+-- threads fijos de este test: se limpian también AL EMPEZAR (una corrida abortada no contamina la siguiente)
+each t in [["rt-shop", "whatsapp:+5491100000001"], ["rt-shop", "whatsapp:+5491100000002"], ["rt-shop", "cli:test-1"], ["rt-shop", "sdk-1"], ["rt-shop", "sdk-par-1"], ["rt-shop", "sdk-par-2"]]
+    let ts0 be runtime.thread_session(t[0], t[1])
+    when ts0 != ""
+        session.delete(ts0)
+    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key(t[0], t[1]) + ".json")
+
+print("deliver: un agente del proyecto, sesión por thread")
+let events be []
+task collect(kind, data, tag)
+    set events to append(events, kind)
+let started be nothing
+task on_start(info)
+    set started to info
+let r1 be runtime.deliver({"to": "rt-shop", "thread": "whatsapp:+5491100000001", "text": "ls"}, {"on_event": collect, "on_start": on_start})
+set created to append(created, r1["session"])
+set threads to append(threads, ["rt-shop", "whatsapp:+5491100000001"])
+check(r1["stopped"] == "done", "turno terminado: " + r1["stopped"])
+check(starts_with(r1["text"], "final ls"), "respuesta del agente: " + slice(r1["text"], 0, 60))
+check(r1["agent"] == "rt-shop" and r1["thread"] == "whatsapp:+5491100000001", "resultado con agente y thread")
+check(contains(events, "tool_call") and contains(events, "tool_result"), "eventos del loop llegan a la puerta")
+check(started != nothing and started["session"] == r1["session"] and started["mode"] == "strict", "on_start antes del turno con sesión y modo del agente")
+check(file_exists(".lampson/trace/" + r1["session"] + ".log"), "el runtime trazó el turno")
+let r2 be runtime.deliver({"to": "rt-shop", "thread": "whatsapp:+5491100000001", "text": "hola de nuevo"}, {})
+check(r2["session"] == r1["session"], "mismo thread → misma sesión")
+check(contains(r2["text"], "msgs=6"), "el historial siguió: " + r2["text"])
+let r3 be runtime.deliver({"to": "rt-shop", "thread": "whatsapp:+5491100000002", "text": "hola"}, {})
+set created to append(created, r3["session"])
+set threads to append(threads, ["rt-shop", "whatsapp:+5491100000002"])
+check(r3["session"] != r1["session"], "otro cliente → otra sesión")
+check(contains(r3["text"], "msgs=2"), "y arranca de cero: " + r3["text"])
+let doc be session.load(r1["session"])
+check(doc["meta"]["agent"] == "rt-shop" and doc["meta"]["thread"] == "whatsapp:+5491100000001", "la sesión guarda agente y thread")
+check(starts_with(doc["messages"][0]["content"], "Eres el bot de una tienda."), "system prompt del agente, no el de código")
+
+print("deliver: el allow-list manda")
+let denied be []
+task collect_denied(kind, data, tag)
+    when kind == "tool_denied"
+        set denied to append(denied, data["reason"])
+let r4 be runtime.deliver({"to": "rt-mute", "text": "ls"}, {"on_event": collect_denied})
+set created to append(created, r4["session"])
+check(contains(r4["text"], "unknown tool"), "una tool fuera del allow-list no corre: " + slice(r4["text"], 0, 80))
+check(contains(denied, "unknown tool"), "y la puerta ve el rechazo")
+
+print("deliver: alcance por ruta")
+let sdenied be []
+task collect_scope(kind, data, tag)
+    when kind == "tool_denied"
+        set sdenied to append(sdenied, data["reason"])
+let rs be runtime.deliver({"to": "rt-scoped", "text": "ls"}, {"on_event": collect_scope})
+set created to append(created, rs["session"])
+check(contains(rs["text"], "DENIED by scope"), "ls de la raíz con ls limitado a datos/* → denegado: " + slice(rs["text"], 0, 90))
+check(length(sdenied) == 1 and starts_with(sdenied[0], "out of scope"), "la puerta ve el rechazo por alcance")
+
+print("deliver: permiso por tool — approve ask pide aprobación aunque el agente sea yolo")
+let ra be runtime.deliver({"to": "rt-askls", "text": "ls"}, {"ask_fn": nothing})
+set created to append(created, ra["session"])
+check(contains(ra["text"], "DENIED by the user (this agent asks"), "ls con approve ask, sin humano → denegado: " + slice(ra["text"], 0, 100))
+
+print("deliver: sin humano, lo que pide aprobación se deniega")
+let r5 be runtime.deliver({"to": "build", "text": "peligro"}, {"mode": "ask", "ask_fn": nothing})
+set created to append(created, r5["session"])
+check(contains(r5["text"], "DENIED"), "bash peligroso denegado: " + slice(r5["text"], 0, 80))
+let unknown_failed be false
+try
+    runtime.deliver({"to": "nadie", "text": "x"}, {})
+recover err
+    set unknown_failed to contains(text(err), "no agent named")
+check(unknown_failed, "agente inexistente → error claro")
+
+print("lampson run (run.syn) como proceso")
+task run_cli(envs)
+    let p be proc_spawn("synsema", ["run", "run.syn"], {"env": envs, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
+    proc_close_stdin(p)
+    let deadline be now() + 60
+    let lines be []
+    let code be nothing
+    while code == nothing and now() < deadline
+        let ev be proc_recv(p, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                set code to ev["data"]["exit_code"]
+            otherwise
+                set lines to append(lines, ev["data"])
+    proc_close(p)
+    give {"code": code, "out": join(lines, "\n")}
+
+task jsonl(out)
+    let evs be []
+    each l in split(replace(out, "\r", ""), "\n")
+        when starts_with(trim(l), "{")
+            try
+                set evs to append(evs, json_decode(trim(l)))
+            recover err
+                set evs to evs
+    give evs
+
+let c1 be run_cli({"LAMPSON_AGENT": "rt-shop", "LAMPSON_THREAD": "cli:test-1", "LAMPSON_MESSAGE": "ls", "LAMPSON_RUN_JSON": "1"})
+set threads to append(threads, ["rt-shop", "cli:test-1"])
+let evs be jsonl(c1["out"])
+check(c1["code"] == 0, "sale con 0 (code " + text(c1["code"]) + ")")
+check(length(evs) > 2 and evs[0]["kind"] == "session", "primero el evento session")
+let last be when length(evs) > 0 then evs[length(evs) - 1] otherwise {"kind": ""}
+check(last["kind"] == "done" and starts_with(last["data"]["text"], "final ls"), "último: done con la respuesta")
+check(length(where(evs, (e) => e["kind"] == "tool_call" and e["agent"] == "rt-shop" and e["thread"] == "cli:test-1")) == 1, "cada evento lleva agente y thread")
+check(length(where(evs, (e) => e["kind"] == "busy" or e["kind"] == "idle")) == 0, "sin busy/idle en el JSONL")
+when last["kind"] == "done"
+    set created to append(created, last["data"]["session"])
+let c2 be run_cli({"LAMPSON_AGENT": "rt-shop", "LAMPSON_THREAD": "cli:test-1", "LAMPSON_MESSAGE": "hola"})
+check(c2["code"] == 0 and contains(c2["out"], "final directo · msgs=6"), "modo texto: solo la respuesta, y el thread siguió: " + trim(c2["out"]))
+let c3 be run_cli({"LAMPSON_AGENT": "nadie", "LAMPSON_MESSAGE": "x"})
+check(c3["code"] == 2 and contains(c3["out"], "no agent named"), "agente inexistente → código 2")
+let c4 be run_cli({"LAMPSON_AGENT": "rt-shop", "LAMPSON_MESSAGE": ""})
+check(c4["code"] == 2 and contains(c4["out"], "empty message"), "mensaje vacío → código 2")
+
+print("lampson run --stdio (modo local del SDK): un proceso abierto, pedidos JSON por línea")
+let sp be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_RUN_STDIO": "1"}, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
+let sbuf be []
+-- lee líneas JSON de stdout hasta que `until` (una task sobre el evento) dé true; devuelve todas
+task read_until(until_fn, secs)
+    let got be []
+    let deadline be now() + secs
+    while now() < deadline
+        let ev be proc_recv(sp, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                give got
+            when ev["type"] == "stdout"
+                try
+                    let m be json_decode(trim(ev["data"]))
+                    set got to append(got, m)
+                    when call(until_fn, {"m": m})
+                        give got
+                recover err
+                    print("    (stdout que no es JSON: " + slice(text(ev["data"]), 0, 80) + ")")
+    give got
+task is_ready(m)
+    give m["kind"] == "ready"
+let rd be read_until(is_ready, 60)
+check(length(rd) == 1 and rd[0]["kind"] == "ready" and contains(rd[0]["data"]["agents"], "rt-shop") and rd[0]["data"]["protocol"] == 2, "arranca y avisa ready (protocolo 2) con los agentes")
+-- conversaciones distintas en paralelo: dos asks lentos (~6 s cada uno contra el mock) terminan juntos
+let tpar be now()
+proc_send(sp, json_encode({"id": "p1", "op": "ask", "to": "rt-shop", "thread": "sdk-par-1", "text": "espera"}) + "\n" + json_encode({"id": "p2", "op": "ask", "to": "rt-shop", "thread": "sdk-par-2", "text": "espera"}) + "\n")
+let pdone be []
+task both_done(m)
+    when m["kind"] == "done" and (m["id"] == "p1" or m["id"] == "p2")
+        set pdone to append(pdone, m["id"])
+    give length(pdone) == 2
+read_until(both_done, 60)
+let dur be now() - tpar
+check(length(pdone) == 2 and dur < 10, "dos conversaciones a la vez terminan en " + text(floor(dur * 10) / 10) + " s (en serie serían ~12)")
+-- dos pedidos de una: se atienden en orden, cada evento con su id
+proc_send(sp, json_encode({"id": "a1", "op": "ask", "to": "rt-shop", "thread": "sdk-1", "text": "ls"}) + "\n" + json_encode({"id": "a2", "op": "ask", "to": "rt-shop", "thread": "sdk-1", "text": "hola"}) + "\n")
+task is_done_a2(m)
+    give m["kind"] == "done" and m["id"] == "a2"
+let evs2 be read_until(is_done_a2, 60)
+let d1 be where(evs2, (m) => m["kind"] == "done" and m["id"] == "a1")
+let d2 be where(evs2, (m) => m["kind"] == "done" and m["id"] == "a2")
+check(length(d1) == 1 and starts_with(d1[0]["data"]["text"], "final ls"), "a1 → respuesta del agente")
+check(length(where(evs2, (m) => m["id"] == "a1" and m["kind"] == "tool_call")) == 1, "los eventos de a1 llevan su id")
+check(length(d2) == 1 and d2[0]["data"]["session"] == d1[0]["data"]["session"] and contains(d2[0]["data"]["text"], "msgs=6"), "a2 sigue la misma conversación (mismo thread)")
+let order be apply((m) => m["id"], where(evs2, (m) => m["kind"] == "done"))
+check(order == ["a1", "a2"], "en orden: " + json_encode(order))
+proc_send(sp, json_encode({"id": "g1", "op": "agents"}) + "\n" + json_encode({"id": "p1", "op": "ping"}) + "\n" + "esto no es json\n" + json_encode({"id": "x1", "op": "ask", "to": "nadie", "text": "hola"}) + "\n" + json_encode({"id": "x2", "op": "ask", "to": "rt-shop", "text": " "}) + "\n")
+task is_done_x2(m)
+    give m["id"] == "x2"
+let evs3 be read_until(is_done_x2, 30)
+let ag3 be where(evs3, (m) => m["id"] == "g1")
+check(length(ag3) == 1 and contains(apply((a) => a["id"], ag3[0]["data"]), "rt-shop"), "op agents lista los agentes")
+check(length(where(evs3, (m) => m["id"] == "p1" and m["kind"] == "pong")) == 1, "op ping → pong")
+check(length(where(evs3, (m) => m["kind"] == "error" and contains(text(m["data"]), "JSON object"))) == 1, "una línea que no es JSON → error, y el proceso sigue")
+check(length(where(evs3, (m) => m["id"] == "x1" and m["kind"] == "done" and contains(m["data"]["stopped"], "no agent named"))) == 1, "agente inexistente → done con error")
+check(length(where(evs3, (m) => m["id"] == "x2" and m["kind"] == "done" and contains(m["data"]["stopped"], "text is required"))) == 1, "texto vacío → done con error")
+set created to append(created, d1[0]["data"]["session"])
+set threads to append(threads, ["rt-shop", "sdk-1"])
+set threads to append(threads, ["rt-shop", "sdk-par-1"])
+set threads to append(threads, ["rt-shop", "sdk-par-2"])
+proc_close_stdin(sp)
+let sexit be read_until(is_ready, 10)
+proc_close(sp)
+
+print("lampson mcp serve (stdio, JSON-RPC) como lo lanza un cliente MCP")
+let mp be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_MCP_SERVE": "1", "LAMPSON_MCP_AGENTS": "rt-shop,rt-mute"}, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
+-- manda un request y espera la respuesta con ese id (ignora cualquier otra línea)
+task rpc(id, method, params)
+    proc_send(mp, json_encode({"jsonrpc": "2.0", "id": id, "method": method, "params": params}) + "\n")
+    let deadline be now() + 60
+    while now() < deadline
+        let ev be proc_recv(mp, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                give {"error": "server exited"}
+            when ev["type"] == "stdout"
+                try
+                    let m be json_decode(trim(ev["data"]))
+                    when contains(m, "id") and m["id"] == id
+                        give m
+                recover err
+                    print("    (línea que no es JSON en stdout: " + slice(text(ev["data"]), 0, 80) + ")")
+    give {"error": "timeout"}
+let init be rpc(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "run_test", "version": "1"}})
+check(contains(init, "result") and init["result"]["serverInfo"]["name"] == "lampson" and contains(init["result"]["capabilities"], "tools"), "initialize → serverInfo lampson con tools")
+proc_send(mp, json_encode({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+let tl be rpc(2, "tools/list", {})
+let tnames be when contains(tl, "result") then apply((t) => t["name"], tl["result"]["tools"]) otherwise []
+check(tnames == ["ask", "agents", "history"], "tools/list → ask, agents y history")
+check(contains(tl, "result") and tl["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"] == ["rt-mute", "rt-shop"], "ask ofrece solo los agentes de LAMPSON_MCP_AGENTS")
+let a1 be rpc(3, "tools/call", {"name": "ask", "arguments": {"message": "ls", "agent": "rt-shop"}})
+let sc1 be when contains(a1, "result") then a1["result"]["structuredContent"] otherwise {}
+check(contains(a1, "result") and not a1["result"]["isError"] and starts_with(a1["result"]["content"][0]["text"], "final ls"), "ask → respuesta del agente")
+check(starts_with(text(sc1["thread"]), "mcp:") and contains(a1["result"]["content"][0]["text"], text(sc1["thread"])), "sin thread se crea uno y se devuelve para continuar")
+let a2 be rpc(4, "tools/call", {"name": "ask", "arguments": {"message": "hola", "agent": "rt-shop", "thread": sc1["thread"]}})
+check(contains(a2, "result") and a2["result"]["structuredContent"]["session"] == sc1["session"] and contains(a2["result"]["content"][0]["text"], "msgs=6"), "con el thread sigue la misma conversación")
+let a3 be rpc(5, "tools/call", {"name": "ask", "arguments": {"message": "x", "agent": "build"}})
+check(contains(a3, "result") and a3["result"]["isError"], "un agente que no se ofrece → isError")
+check(contains(rpc(6, "nope/nope", {}), "error"), "método desconocido → error JSON-RPC")
+let ag2 be rpc(7, "tools/call", {"name": "agents", "arguments": {}})
+check(contains(ag2, "result") and contains(ag2["result"]["content"][0]["text"], "rt-shop: bot de prueba"), "agents lista con descripción")
+let hi be rpc(8, "tools/call", {"name": "history", "arguments": {"thread": text(sc1["thread"]), "agent": "rt-shop"}})
+check(contains(hi, "result") and contains(hi["result"]["content"][0]["text"], "USER: ls") and contains(hi["result"]["content"][0]["text"], "AGENT: final ls") and length(hi["result"]["structuredContent"]["messages"]) == 4, "history devuelve la conversación (persona y agente)")
+check(contains(rpc(9, "tools/call", {"name": "history", "arguments": {"thread": "no-existe", "agent": "rt-shop"}}), "result"), "history de un thread sin conversación → mensaje claro, no error")
+set created to append(created, sc1["session"])
+set threads to append(threads, ["rt-shop", text(sc1["thread"])])
+proc_close(mp)
+
+-- limpieza
+-- por thread también: si un check falló a mitad, la sesión del thread igual se borra
+each t in threads
+    let ts be runtime.thread_session(t[0], t[1])
+    when ts != "" and not contains(created, ts)
+        set created to append(created, ts)
+    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key(t[0], t[1]) + ".json")
+each id in created
+    session.delete(id)
+rm_file(ADIR + "/rt-shop.agent.json")
+rm_file(ADIR + "/rt-mute.agent.json")
+rm_file(ADIR + "/rt-scoped.agent.json")
+rm_file(ADIR + "/rt-askls.agent.json")
+proc_close(mock)
+
+when length(failures) > 0
+    print("run_test: " + text(length(failures)) + " fallas")
+    raise("run_test failed")
+print("run_test: todo OK")

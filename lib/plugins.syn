@@ -8,7 +8,11 @@
 --                  "command": "python plugin.py"  (kind=exec: cualquier ejecutable — js, py, sh…)
 --                  "caps": "file.read=workspace/*" (kind=syn, opcional: techo EXTRA sobre stdout,time,env=PLUGIN_*)
 --                  "timeout": 60,
---                  "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": false}]}
+--                  "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": false}],
+--                  "config": ["CHATWOOT_TOKEN", …]   (opcional: el hijo recibe PLUGIN_<X> = LAMPSON_<X> del .env/entorno;
+--                                                     así un plugin syn con techo env=PLUGIN_* también tiene sus secretos)
+--                  "channel": {"agent": "tienda"}}   (opcional: un CANAL — lib/channels.syn. Sus acciones `receive` y
+--                                                     `send` no son tools del modelo, así que un canal puede no tener tools)
 --
 -- Cómo corre (patrón "safe runner" de la doc 22-sandbox): cada llamada es UN proceso hijo que termina.
 --   kind=syn  → `synsema run --cap-set stdout,time,env=PLUGIN_*[,caps] <entry>`: el techo lo fija el
@@ -78,14 +82,27 @@ task read_manifest(dir, name, scope, legacy)
         give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "kind=syn needs \"entry\" (the .syn file)"}
     when kind == "exec" and not contains(doc, "command")
         give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "kind=exec needs \"command\""}
-    when not contains(doc, "tools") or length(doc["tools"]) == 0
+    -- canal (lib/channels.syn): {"agent": "<id>"} — el agente que atiende si nadie dice otro
+    let channel be nothing
+    when contains(doc, "channel") and doc["channel"] != nothing
+        when type_of(doc["channel"]) != "map"
+            give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "channel must be an object, e.g. {\"agent\": \"support\"}"}
+        set channel to {"agent": when contains(doc["channel"], "agent") and doc["channel"]["agent"] != nothing then lower(text(doc["channel"]["agent"])) otherwise "", "typing": contains(doc["channel"], "typing") and doc["channel"]["typing"] == true, "poll": contains(doc["channel"], "poll") and doc["channel"]["poll"] == true}
+    let config be []
+    when contains(doc, "config") and doc["config"] != nothing
+        each ck in doc["config"]
+            when not matches(text(ck), "[A-Z][A-Z0-9_]{0,40}")
+                give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "config names are UPPER_SNAKE (got '" + text(ck) + "')"}
+            set config to append(config, text(ck))
+    let raw_tools be when contains(doc, "tools") and doc["tools"] != nothing then doc["tools"] otherwise []
+    when length(raw_tools) == 0 and channel == nothing
         give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "no tools declared"}
     let tools be []
-    each t in doc["tools"]
+    each t in raw_tools
         when not contains(t, "name") or not valid_tool_name(t["name"])
             give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "a tool has no valid name"}
         set tools to append(tools, {"name": text(t["name"]), "description": when contains(t, "description") then text(t["description"]) otherwise "", "parameters": when contains(t, "parameters") then t["parameters"] otherwise {"type": "object", "properties": {}}, "readonly": contains(t, "readonly") and t["readonly"] == true})
-    give {"ok": true, "name": name, "scope": scope, "legacy": is_legacy, "plugin": {"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "legacy": is_legacy, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools}}
+    give {"ok": true, "name": name, "scope": scope, "legacy": is_legacy, "plugin": {"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "legacy": is_legacy, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools, "channel": channel, "config": config}}
 
 task scan(dir, scope, legacy)
     let out be []
@@ -137,7 +154,7 @@ export task all()
             set l["error"] to nothing
             set out to append(out, l)
         otherwise
-            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "legacy": r["legacy"], "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "enabled": false, "error": r["error"]})
+            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "legacy": r["legacy"], "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "channel": nothing, "config": [], "enabled": false, "error": r["error"]})
     give out
 
 export task enabled()
@@ -288,11 +305,27 @@ export task call(full_name, args)
     let tl be where(l["tools"], (t) => t["name"] == parts["tool"])
     when length(tl) == 0
         give "ERROR: plugin '" + l["name"] + "' has no tool '" + parts["tool"] + "'"
+    give invoke(l, parts["tool"], args)
+
+-- corre UNA acción de un plugin encendido como proceso hijo: una tool del modelo, o `receive`/`send` de un canal
+export task invoke(l, tool, args)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
     -- PLUGIN_DIR relativa a la raíz de lampson (cwd del hijo para kind=syn); PLUGIN_WORKSPACE = la ruta real del
     -- proyecto (lampson.ps1 la exporta; sin ella, la junction). LAMP_* = los nombres viejos, por compat.
     let tool_args be json_encode(when args == nothing then {} otherwise args)
     let ws be env("LAMPSON_WORKSPACE", c.ROOT)
-    let envs be {"PLUGIN_TOOL": parts["tool"], "PLUGIN_ARGS": tool_args, "PLUGIN_DIR": l["dir"], "PLUGIN_WORKSPACE": ws, "LAMP_TOOL": parts["tool"], "LAMP_ARGS": tool_args, "LAMP_DIR": l["dir"], "LAMP_WORKSPACE": ws}
+    let envs be {"PLUGIN_TOOL": tool, "PLUGIN_ARGS": tool_args, "PLUGIN_DIR": l["dir"], "PLUGIN_WORKSPACE": ws, "LAMP_TOOL": tool, "LAMP_ARGS": tool_args, "LAMP_DIR": l["dir"], "LAMP_WORKSPACE": ws}
+    -- "config": PLUGIN_<X> = LAMPSON_<X> (secretos y ajustes del plugin, desde el .env de lampson)
+    each ck in l["config"]
+        set envs["PLUGIN_" + ck] to env("LAMPSON_" + ck, "")
     when l["kind"] == "syn"
         -- techo del manifiesto: el código del plugin no puede pedir más de lo que el humano aprobó
         give c.truncate(run_child(env("LAMPSON_SYNSEMA", "synsema"), ["run", "--cap-set", ceiling_of(l), l["dir"] + "/" + l["entry"]], ".", envs, l["timeout"]), c.MAX_OUTPUT)
@@ -310,6 +343,28 @@ export task call(full_name, args)
         otherwise
             set resolved to append(resolved, tok)
     give c.truncate(run_child(resolved[0], slice(resolved, 1, length(resolved)), c.ROOT, envs, l["timeout"]), c.MAX_OUTPUT)
+
+-- los canales encendidos (plugins con "channel"), y uno por nombre
+export task channels()
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    give where(enabled(), (l) => l["channel"] != nothing)
+
+export task channel(name)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let found be where(channels(), (l) => l["name"] == name)
+    give when length(found) == 0 then nothing otherwise found[0]
 
 -- crear un plugin DEL PROYECTO (workspace/.lampson/plugins/<name>/): escribe plugin.json + el código, revalida el
 -- manifiesto y, si es syn, corre `synsema check` sobre el entry. Como cordis_define en dsh: define y valida,
@@ -404,5 +459,5 @@ export task summary()
     require env("LAMPSON_*")
     let out be []
     each l in all()
-        set out to append(out, {"name": l["name"], "scope": l["scope"], "kind": l["kind"], "legacy": l["legacy"], "description": l["description"], "enabled": l["enabled"], "error": l["error"], "caps": when l["kind"] == "syn" and l["error"] == nothing then ceiling_of(l) otherwise "", "command": when l["kind"] == "exec" then l["command"] otherwise "", "tools": apply(l["tools"], (t) => t["name"]), "tool_specs": l["tools"], "dir": l["dir"]})
+        set out to append(out, {"name": l["name"], "scope": l["scope"], "kind": l["kind"], "legacy": l["legacy"], "description": l["description"], "enabled": l["enabled"], "error": l["error"], "caps": when l["kind"] == "syn" and l["error"] == nothing then ceiling_of(l) otherwise "", "command": when l["kind"] == "exec" then l["command"] otherwise "", "tools": apply(l["tools"], (t) => t["name"]), "tool_specs": l["tools"], "dir": l["dir"], "channel": l["channel"] != nothing})
     give out

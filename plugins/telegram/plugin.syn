@@ -1,0 +1,272 @@
+-- plugins/telegram/plugin.syn — canal Telegram (contrato en lib/channels.syn)
+--
+-- Un bot de Telegram contestado por un agente de Lampson. Gratis y sin intermediarios. Lampson lo corre con techo:
+-- stdout, time, env=PLUGIN_*, net.
+--
+--   setup    registra el webhook en Telegram (setWebhook) con la URL que le pasa `lampson channel setup telegram`
+--            y el secreto de LAMPSON_TELEGRAM_WEBHOOK_SECRET; muestra el @usuario del bot (getMe).
+--   receive  un Update de Telegram. Si hay secreto, exige X-Telegram-Bot-Api-Secret-Token (Telegram lo manda en cada
+--            webhook). Pasa los mensajes nuevos de personas: ignora ediciones, posts de canales y mensajes de otros
+--            bots. Una FOTO llega como imagen (la versión más grande hasta 1 MB, descargada con getFile; el caption es
+--            el texto); audio/documento/ubicación como una nota en el texto. Avisa "escribiendo…" apenas llega.
+--   typing   sendChatAction "typing" (Lampson la renueva mientras el agente trabaja: en Telegram dura ~5 s).
+--   poll     SIN URL PÚBLICA: getUpdates con espera larga (LAMPSON_TELEGRAM_POLL_WAIT s, 20 por defecto) desde el
+--            cursor; devuelve los mensajes convertidos igual que receive y el próximo offset.
+--   send     sendMessage al chat, en partes de hasta 4000 caracteres (Telegram corta en 4096), texto plano (sin parse
+--            mode: un markdown mal formado haría fallar el envío; se quitan los ** del modelo).
+--
+-- Config (en el .env de Lampson): LAMPSON_TELEGRAM_TOKEN=<token de @BotFather>,
+-- LAMPSON_TELEGRAM_WEBHOOK_SECRET=<cualquier texto largo: letras, números, _ y ->, LAMPSON_CHANNEL_TELEGRAM_AGENT=<el
+-- agente que atiende>. LAMPSON_TELEGRAM_API = otra base (un Bot API server propio, o los tests); por defecto la oficial.
+intent: "lampson channel plugin: Telegram bot ↔ Lampson agent"
+
+require env("PLUGIN_*")
+require net
+require time
+
+let action be env("PLUGIN_TOOL", "")
+let args be json_decode(env("PLUGIN_ARGS", "{}"))
+
+task field(m, k, fallback)
+    when m != nothing and type_of(m) == "map" and contains(m, k) and m[k] != nothing
+        give m[k]
+    give fallback
+
+task header(h, name)
+    each k in keys(h)
+        when lower(k) == name
+            give text(h[k])
+    give ""
+
+task api(method)
+    let base be env("PLUGIN_TELEGRAM_API", "")
+    when base == ""
+        set base to "https://api.telegram.org"
+    while ends_with(base, "/")
+        set base to slice(base, 0, length(base) - 1)
+    give base + "/bot" + env("PLUGIN_TELEGRAM_TOKEN", "") + "/" + method
+
+task tg(method, body)
+    let r be http_post(api(method), json_encode(body), {"Content-Type": "application/json"}, 20)
+    let d be {}
+    try
+        set d to json_decode(text(field(r, "body", "{}")))
+    recover err
+        set d to {}
+    give {"ok": r["ok"] and field(d, "ok", false) == true, "status": r["status"], "data": d}
+
+task out(m)
+    print(json_encode(m))
+
+task ignore(why)
+    out({"messages": [], "ignored": why})
+
+task need_token()
+    when env("PLUGIN_TELEGRAM_TOKEN", "") == ""
+        print("ERROR: set LAMPSON_TELEGRAM_TOKEN in Lampson's .env (the token @BotFather gave you)")
+        give false
+    give true
+
+task setup()
+    when not need_token()
+        give false
+    when text(field(args, "mode", "webhook")) == "poll"
+        -- getUpdates no funciona con un webhook registrado: se quita (los mensajes pendientes quedan)
+        let me0 be tg("getMe", {})
+        let dw be tg("deleteWebhook", {"drop_pending_updates": false})
+        when not dw["ok"]
+            print("ERROR: deleteWebhook failed (" + text(dw["status"]) + "): " + text(field(dw["data"], "description", "")))
+            give false
+        print("polling mode: " + (when me0["ok"] then "@" + text(field(field(me0["data"], "result", {}), "username", "?")) otherwise "your bot") + " — Lampson asks Telegram for new messages (no public URL needed)")
+        give true
+    let url be text(field(args, "webhook_url", ""))
+    when not starts_with(url, "https://")
+        print("ERROR: Telegram only sends webhooks to an https:// URL (got '" + url + "')")
+        give false
+    let body be {"url": url, "allowed_updates": ["message"]}
+    let sec be env("PLUGIN_TELEGRAM_WEBHOOK_SECRET", "")
+    when sec != ""
+        set body["secret_token"] to sec
+    let me be tg("getMe", {})
+    let r be tg("setWebhook", body)
+    when not r["ok"]
+        print("ERROR: setWebhook failed (" + text(r["status"]) + "): " + text(field(r["data"], "description", "")))
+        give false
+    let who be when me["ok"] then "@" + text(field(field(me["data"], "result", {}), "username", "?")) otherwise "your bot"
+    print("webhook registered: " + who + " → " + url + (when sec == "" then "  (no secret: set LAMPSON_TELEGRAM_WEBHOOK_SECRET and run setup again so only Telegram can post here)" otherwise "  (with secret token)"))
+    give true
+
+-- la foto como imagen para el modelo: la versión más grande que entre en 1 MB (Telegram manda varias resoluciones)
+task photo_image(sizes)
+    let best be nothing
+    each s in sizes
+        let sz be field(s, "file_size", 0)
+        when sz <= 1000000 and (best == nothing or sz > field(best, "file_size", 0))
+            set best to s
+    when best == nothing or env("PLUGIN_TELEGRAM_TOKEN", "") == ""
+        give nothing
+    try
+        let f be tg("getFile", {"file_id": field(best, "file_id", "")})
+        let fp be text(field(field(f["data"], "result", {}), "file_path", ""))
+        when not f["ok"] or fp == ""
+            give nothing
+        let base be api("getMe")
+        set base to slice(base, 0, length(base) - length("/bot" + env("PLUGIN_TELEGRAM_TOKEN", "") + "/getMe"))
+        let r be http_bytes("GET", base + "/file/bot" + env("PLUGIN_TELEGRAM_TOKEN", "") + "/" + fp, {}, nothing, nothing, 20)
+        when not r["ok"] or length(r["bytes"]) == 0 or length(r["bytes"]) > 1500000
+            give nothing
+        let mt be when ends_with(lower(fp), ".png") then "image/png" otherwise (when ends_with(lower(fp), ".webp") then "image/webp" otherwise "image/jpeg")
+        give {"media_type": mt, "data": decode(r["bytes"], "base64")}
+    recover err
+        give nothing
+
+task typing()
+    let meta be field(args, "meta", {})
+    let chat_id be field(meta, "chat_id", field(args, "thread", nothing))
+    when env("PLUGIN_TELEGRAM_TOKEN", "") == "" or chat_id == nothing
+        give false
+    tg("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+    print("typing")
+    give true
+
+-- un Update → el mensaje en el formato de Lampson, o nothing (lo comparten receive y poll)
+task convert(up)
+    let m be field(up, "message", nothing)
+    when m == nothing
+        give nothing
+    let who be field(m, "from", {})
+    when field(who, "is_bot", false) == true
+        give nothing
+    let content be text(field(m, "text", field(m, "caption", "")))
+    let notes be []
+    let images be []
+    when contains(m, "photo")
+        let img be photo_image(field(m, "photo", []))
+        when img != nothing
+            set images to append(images, img)
+        otherwise
+            set notes to append(notes, "[the user sent a photo that could not be loaded]")
+    when contains(m, "voice") or contains(m, "audio")
+        set notes to append(notes, "[the user sent an audio message]")
+    when contains(m, "document")
+        set notes to append(notes, "[the user sent a file: " + text(field(field(m, "document", {}), "file_name", "")) + "]")
+    when contains(m, "location")
+        set notes to append(notes, "[the user shared a location]")
+    when length(notes) > 0
+        set content to trim(content + "\n" + join(notes, "\n"))
+    when trim(content) == "" and length(images) > 0
+        set content to "[photo]"
+    let chat be field(m, "chat", {})
+    let chat_id be field(chat, "id", nothing)
+    when trim(content) == "" or chat_id == nothing
+        give nothing
+    let name be trim(text(field(who, "first_name", "")) + " " + text(field(who, "last_name", "")))
+    give {"thread": text(chat_id), "text": content, "sent_at": field(m, "date", nothing), "from": {"id": text(field(who, "id", "")), "name": name, "username": text(field(who, "username", "")), "kind": "human"}, "images": images, "meta": {"chat_id": chat_id, "message_id": field(m, "message_id", nothing), "chat_type": text(field(chat, "type", ""))}}
+
+task poll()
+    when not need_token()
+        give false
+    let wait be 20
+    try
+        set wait to int(env("PLUGIN_TELEGRAM_POLL_WAIT", "20"))
+    recover err
+        set wait to 20
+    let body be {"timeout": wait, "allowed_updates": ["message"]}
+    let cur be field(args, "cursor", nothing)
+    when cur != nothing
+        set body["offset"] to cur
+    let r be http_post(api("getUpdates"), json_encode(body), {"Content-Type": "application/json"}, wait + 10)
+    let d be {}
+    try
+        set d to json_decode(text(field(r, "body", "{}")))
+    recover err
+        set d to {}
+    when not r["ok"] or field(d, "ok", false) != true
+        print("ERROR: getUpdates failed (" + text(r["status"]) + "): " + text(field(d, "description", "")))
+        give false
+    let msgs be []
+    let next be cur
+    each up in field(d, "result", [])
+        set next to field(up, "update_id", 0) + 1
+        let m be convert(up)
+        when m != nothing
+            try
+                tg("sendChatAction", {"chat_id": m["meta"]["chat_id"], "action": "typing"})
+            recover err
+                set next to next
+            set msgs to append(msgs, m)
+    out({"messages": msgs, "cursor": next})
+    give true
+
+task receive()
+    let h be field(args, "headers", {})
+    let sec be env("PLUGIN_TELEGRAM_WEBHOOK_SECRET", "")
+    when sec != "" and header(h, "x-telegram-bot-api-secret-token") != sec
+        out({"messages": [], "http": {"status": 401, "body": "invalid secret token"}})
+        give false
+    let up be nothing
+    try
+        set up to json_decode(text(field(args, "body", "")))
+    recover err
+        ignore("body is not JSON")
+        give false
+    -- solo mensajes nuevos de personas (convert): una edición contestada otra vez sería una respuesta duplicada
+    let msg be convert(up)
+    when msg == nothing
+        ignore("not a new message from a person (edit, channel post, bot, or empty)")
+        give false
+    -- "escribiendo…" mientras el agente trabaja (dura ~5 s en Telegram; si falla no importa)
+    when env("PLUGIN_TELEGRAM_TOKEN", "") != ""
+        try
+            tg("sendChatAction", {"chat_id": msg["meta"]["chat_id"], "action": "typing"})
+        recover err
+            set msg to msg
+    out({"messages": [msg]})
+    give true
+
+-- partes de hasta `max` caracteres, cortando en un salto de línea si hay uno cerca
+task chunks(t, max)
+    let parts be []
+    let rest be t
+    while length(rest) > max
+        let cut be max
+        let head be slice(rest, 0, max)
+        let nl be split(head, "\n")
+        when length(nl) > 1
+            let last_len be length(nl[length(nl) - 1])
+            when max - last_len > max / 2
+                set cut to max - last_len
+        set parts to append(parts, trim(slice(rest, 0, cut)))
+        set rest to slice(rest, cut, length(rest))
+    when trim(rest) != ""
+        set parts to append(parts, trim(rest))
+    give parts
+
+task send()
+    when not need_token()
+        give false
+    let meta be field(args, "meta", {})
+    let chat_id be field(meta, "chat_id", field(args, "thread", nothing))
+    let t be replace(text(field(args, "text", "")), "**", "")
+    let n be 0
+    each part in chunks(t, 4000)
+        let r be tg("sendMessage", {"chat_id": chat_id, "text": part})
+        when not r["ok"]
+            print("ERROR: sendMessage failed (" + text(r["status"]) + "): " + text(field(r["data"], "description", "")))
+            give false
+        set n to n + 1
+    print("sent " + text(n) + " message(s) to chat " + text(chat_id))
+    give true
+
+when action == "setup"
+    setup()
+otherwise when action == "poll"
+    poll()
+otherwise when action == "typing"
+    typing()
+otherwise when action == "receive"
+    receive()
+otherwise when action == "send"
+    send()
+otherwise
+    print("ERROR: unknown action '" + action + "'")

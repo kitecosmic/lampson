@@ -2,6 +2,8 @@
 // títulos y contenido (GET /api/sessions/search?q=) y una previsualización de la conversación; traza.
 function forgetSession(id) { if (id === session) { session = ''; localStorage.removeItem('lampson.session'); log.innerHTML = ''; showPane('log'); empty(); } }
 async function deleteSession(id) { await api(BASE + '/api/sessions/delete', { id }); forgetSession(id); loadSessions(); }
+// etiqueta corta de una sesión: la hora HHMMSS de su id (YYYYMMDD-HHMMSS, o YYYYMMDD-HHMMSS-NNNN las del runtime)
+function sessionLabel(id) { const m = /^\d{8}-(\d{6})/.exec(id); return m ? m[1] : id.slice(-6); }
 async function loadSessions() {
   let r; try { r = await (await fetch(BASE + '/api/sessions')).json(); } catch (e) { return; }
   const box = $('#sessions'); box.innerHTML = '';
@@ -9,7 +11,7 @@ async function loadSessions() {
   if (!r.sessions.length) { box.innerHTML = '<div class="s none">todavía ninguna</div>'; return; }
   const shown = r.sessions.slice(0, 4);
   for (const s of shown) {
-    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(s.id.slice(-6)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => openSession(s.id);
+    const d = document.createElement('div'); d.className = 's' + (s.id === session ? ' active' : ''); d.innerHTML = '<span class="id">' + esc(sessionLabel(s.id)) + '</span><span class="title">' + esc(s.title || '') + '</span><span class="del tr" title="traza: qué hizo el agente en esta sesión (pasos, tools, tiempos, tokens)">≡</span><span class="del" title="borrar esta sesión">✕</span>'; d.title = s.id; d.onclick = () => openSession(s.id);
     d.querySelector('.tr').onclick = (ev) => { ev.stopPropagation(); openTrace(s.id); };
     d.querySelector('.del:not(.tr)').onclick = (ev) => { ev.stopPropagation(); inlineConfirm(d.querySelector('.del:not(.tr)'), '¿borrar?', () => deleteSession(s.id)); };
     box.appendChild(d);

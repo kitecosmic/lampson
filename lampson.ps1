@@ -8,6 +8,11 @@
 #   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS con tu dominio (opcional) · --domain off
 #   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --agent plan · --yolo|--strict|--ask · --update · --help
+#   lampson run [--agent ID] [--thread T | --session ID] [--json] [--yolo|--strict|--ask] "mensaje"   # sin interfaz
+#   lampson run --stdio      # modo local: un proceso abierto, un pedido JSON por línea (lo usa el SDK)
+#   lampson key add [--agent ID[,ID]] [--name NOMBRE] [--rate N] [--callback URL] · key list · key remove <id>   # API keys /v1
+#   lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]     # Lampson como servidor MCP (stdio) para otros agentes
+#   lampson channel list · channel on|off <canal> · channel setup <canal>   # canales (Telegram, Chatwoot…)
 #
 # Cómo funciona (ver SPEC-WORKSPACES.md): .lampson\ws\<slug>\ es el cwd del proceso del workspace, con una junction
 # `workspace` al proyecto y junctions a lib/public/skills/plugins/memory de esta instalación. El registro y los procesos
@@ -18,7 +23,16 @@ $caller = (Get-Location).Path
 
 # --- args: acepta --flag y -Flag, sin distinguir mayúsculas ---
 $Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Hub = ""; $Install = ""; $Domain = $null; $Email = ""; $Pair = $null
+$Run = $false; $Message = @(); $Thread = ""; $Session = ""; $Json = $false; $Key = ""; $KeyName = ""; $KeyId = ""; $McpServe = $false; $ChannelCmd = ""; $ChannelName = ""; $Stdio = $false; $KeyRate = ""; $KeyCallbacks = @()
 $i = 0
+# `lampson run …`: subcomando sin interfaz (run.syn, spec/engine.md); las palabras sueltas son el mensaje
+if ($args.Count -gt 0 -and ([string]$args[0]).ToLower() -eq "run") { $Run = $true; $i = 1 }
+# `lampson key add|list|remove …`: API keys (también corre run.syn, con LAMPSON_KEY_CMD)
+# `lampson mcp serve …`: servidor MCP por stdio (run.syn con LAMPSON_MCP_SERVE)
+if ($args.Count -gt 1 -and ([string]$args[0]).ToLower() -eq "mcp" -and ([string]$args[1]).ToLower() -eq "serve") { $Run = $true; $McpServe = $true; $i = 2 }
+# `lampson channel list|on|off|setup <canal>` (run.syn con LAMPSON_CHANNEL_CMD)
+if ($args.Count -gt 0 -and ([string]$args[0]).ToLower() -eq "channel") { $Run = $true; $ChannelCmd = $(if ($args.Count -gt 1) { ([string]$args[1]).ToLower() } else { "list" }); $i = 2 }
+if ($args.Count -gt 0 -and ([string]$args[0]).ToLower() -eq "key") { $Run = $true; $Key = $(if ($args.Count -gt 1) { ([string]$args[1]).ToLower() } else { "help" }); $i = 2 }
 while ($i -lt $args.Count) {
     $a = [string]$args[$i]
     switch -Regex ($a.ToLower()) {
@@ -35,9 +49,16 @@ while ($i -lt $args.Count) {
         '^--?(strict|s)$'       { $Perm = "strict" }
         '^--?(ask)$'            { $Perm = "ask" }
         '^--?(permission|p)$'   { $i++; $Perm = ([string]$args[$i]).ToLower() }
+        '^--?thread$'           { $i++; $Thread = [string]$args[$i] }
+        '^--?session$'          { $i++; $Session = [string]$args[$i] }
+        '^--?json$'             { $Json = $true }
+        '^--?stdio$'            { $Stdio = $true }
+        '^--?name$'             { $i++; $KeyName = [string]$args[$i] }
+        '^--?rate$'             { $i++; $KeyRate = [string]$args[$i] }
+        '^--?callback$'         { $i++; $KeyCallbacks += [string]$args[$i] }
         '^--?(update|u)$'       { Write-Host "actualizando Lampson en $here"; git -C $here pull --ff-only origin main; Write-Host ("lampson " + (git -C $here rev-parse --short HEAD)); exit $LASTEXITCODE }
-        '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 8 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
-        default                 { if ($Workspace -eq "" -and -not $a.StartsWith("-")) { $Workspace = $a } else { Write-Error "argumento desconocido: $a (probá lampson --help)"; exit 1 } }
+        '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 9 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
+        default                 { if ($ChannelCmd -ne "" -and -not $a.StartsWith("-")) { $ChannelName = $a } elseif ($Key -ne "" -and -not $a.StartsWith("-")) { $KeyId = $a } elseif ($Run -and -not $a.StartsWith("-")) { $Message += $a } elseif ($Workspace -eq "" -and -not $a.StartsWith("-")) { $Workspace = $a } else { Write-Error "argumento desconocido: $a (probá lampson --help)"; exit 1 } }
     }
     $i++
 }
@@ -73,7 +94,8 @@ function Invoke-Cli([string]$cmd, [string]$ws) {
     $out = & synsema run cli.syn 2>&1
     if ($LASTEXITCODE -ne 0) { $out | ForEach-Object { Write-Host $_ }; throw "cli.syn falló ($cmd)" }
     $lines = @($out | ForEach-Object { [string]$_ })
-    $lines | Select-Object -SkipLast 1 | ForEach-Object { Write-Host $_ }
+    # en `lampson run` la salida es del programa que llama (JSONL): lo informativo va a stderr
+    $lines | Select-Object -SkipLast 1 | ForEach-Object { if ($Run) { [Console]::Error.WriteLine($_) } else { Write-Host $_ } }
     return ($lines[-1] | ConvertFrom-Json)
 }
 
@@ -139,7 +161,8 @@ try {
     if ($target -eq $here) { Write-Error "no montes el propio directorio de lampson como workspace"; exit 1 }
 
     # registrar/preparar el workspace y asegurar hub + proceso
-    $r = Invoke-Cli "ensure" $target
+    # `run`, `key`, `channel` y `mcp serve` no necesitan servidor: solo la carpeta del workspace (sin hub)
+    $r = Invoke-Cli $(if ($Run) { "prepare" } else { "ensure" }) $target
     $wsDir = Join-Path $here ($r.dir -replace '/', '\')
     if ($Web) {
         Write-Host ("Lampson web · " + $r.url + "   (workspace " + $r.slug + $(if ($r.alive) { " ● vivo" } else { " ○ arrancando" }) + ")")
@@ -157,9 +180,28 @@ try {
         if ($r.judge_model) { $env:SYNSEMA_JUDGE_MODEL = $r.judge_model }
         if ($r.judge_key) { $env:TYPESAFE_API_KEY = $r.judge_key }
         $envFile = Join-Path $here ".env"
-        if (Test-Path -LiteralPath $envFile) { synsema run --env-file $envFile chat.syn } else { synsema run chat.syn }
-    } finally { Pop-Location }
+        $entry = "chat.syn"
+        if ($Run) {
+            # sin interfaz: los permisos los fija el flag, o el agente (run.syn: strict si el agente no dice nada)
+            $entry = "run.syn"
+            $env:LAMPSON_MESSAGE = ($Message -join " "); $env:LAMPSON_RUN_PERMISSION = $Perm
+            $env:LAMPSON_THREAD = $Thread; $env:LAMPSON_SESSION = $Session; $env:LAMPSON_RUN_JSON = $(if ($Json) { "1" } else { "" })
+            $env:LAMPSON_KEY_CMD = $Key; $env:LAMPSON_KEY_NAME = $KeyName; $env:LAMPSON_KEY_ID = $KeyId; $env:LAMPSON_KEY_AGENTS = $Agent
+            $env:LAMPSON_KEY_RATE = $KeyRate; $env:LAMPSON_KEY_CALLBACKS = ($KeyCallbacks -join ",")
+            $env:LAMPSON_MCP_SERVE = $(if ($McpServe) { "1" } else { "" }); $env:LAMPSON_MCP_AGENTS = $(if ($McpServe) { $Agent } else { "" })
+            $env:LAMPSON_CHANNEL_CMD = $ChannelCmd; $env:LAMPSON_CHANNEL_NAME = $ChannelName
+            $env:LAMPSON_RUN_STDIO = $(if ($Stdio) { "1" } else { "" })
+        }
+        if (Test-Path -LiteralPath $envFile) { synsema run --env-file $envFile $entry } else { synsema run $entry }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        # `lampson` corre este script dentro de TU sesión de PowerShell: lo de `run`/`key` no debe quedar en el entorno
+        # (un LAMPSON_SESSION que queda haría que el próximo `lampson` retome esa sesión sin pedirlo)
+        if ($Run) { foreach ($v in "LAMPSON_MESSAGE","LAMPSON_RUN_PERMISSION","LAMPSON_THREAD","LAMPSON_SESSION","LAMPSON_RUN_JSON","LAMPSON_KEY_CMD","LAMPSON_KEY_NAME","LAMPSON_KEY_ID","LAMPSON_KEY_AGENTS","LAMPSON_MCP_SERVE","LAMPSON_MCP_AGENTS","LAMPSON_CHANNEL_CMD","LAMPSON_CHANNEL_NAME","LAMPSON_RUN_STDIO","LAMPSON_KEY_RATE","LAMPSON_KEY_CALLBACKS") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue } }
+    }
 } finally {
     Pop-Location
     try { [Console]::OutputEncoding = $prevOutEnc } catch {}
 }
+if ($Run) { exit $exitCode }

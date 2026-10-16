@@ -1,0 +1,73 @@
+-- tests/mock_callback.syn — receptor de callbacks para api_test.syn (el canal `http` de la API /v1)
+--
+--   synsema serve tests/mock_callback.syn        (puerto 8767)
+--
+--   POST /cb     guarda el body y la firma (X-Lampson-Signature) que llegaron
+--   GET  /last   {count, body, signature} del último callback
+require serve(8767)
+require time
+
+serve on 8767
+    route "POST /cb"
+        let sig be ""
+        let h be headers of request
+        each k in keys(h)
+            when lower(k) == "x-lampson-signature"
+                set sig to text(h[k])
+        let n be state_get("count")
+        state_set("count", (when n == nothing then 0 otherwise n) + 1)
+        state_set("last", {"body": json of request, "signature": sig})
+        give {"ok": true}
+
+    -- la API de Chatwoot que usa plugins/chatwoot (send): guarda el mensaje y el token que llegaron
+    route "POST /api/v1/accounts/:account/conversations/:conv/messages"
+        let tok be ""
+        let h be headers of request
+        each k in keys(h)
+            when lower(k) == "api_access_token"
+                set tok to text(h[k])
+        let n be state_get("cw_count")
+        state_set("cw_count", (when n == nothing then 0 otherwise n) + 1)
+        state_set("cw_last", {"account": params.account, "conversation": params.conv, "token": tok, "body": json of request})
+        give {"id": 999}
+
+    route "GET /chatwoot/last"
+        let n be state_get("cw_count")
+        let l be state_get("cw_last")
+        give {"count": when n == nothing then 0 otherwise n, "last": l}
+
+    -- la Bot API de Telegram que usa plugins/telegram: /bot<TOKEN>/<método>; guarda cada llamada
+    route "POST /:bot/:method"
+        let calls be state_get("tg_calls")
+        let entry be {"bot": params.bot, "method": params.method, "body": json of request}
+        state_set("tg_calls", append(when calls == nothing then [] otherwise calls, entry))
+        when params.method == "getMe"
+            give {"ok": true, "result": {"id": 1, "is_bot": true, "username": "lampson_test_bot"}}
+        when params.method == "getFile"
+            give {"ok": true, "result": {"file_id": "x", "file_path": "photos/p1.jpg"}}
+        -- getUpdates (modo sin URL pública): lo encolado desde el offset pedido; sin espera larga (el poller duerme 1 s)
+        when params.method == "getUpdates"
+            let qd be state_get("tg_queue")
+            let queued be when qd == nothing then [] otherwise qd
+            let b be json of request
+            let off be when b != nothing and contains(b, "offset") and b["offset"] != nothing then b["offset"] otherwise 0
+            give {"ok": true, "result": where(queued, (u) => u["update_id"] >= off)}
+        give {"ok": true, "result": true}
+
+    -- la descarga de un archivo (getFile → /file/bot<TOKEN>/<file_path>): unos bytes de JPEG
+    route "GET /file/:bot/*path"
+        give binary(bytes("FFD8FFE000104A46494600010100", "hex"), "image/jpeg")
+
+    route "POST /telegram/queue"
+        let qd be state_get("tg_queue")
+        state_set("tg_queue", append(when qd == nothing then [] otherwise qd, json of request))
+        give {"ok": true}
+
+    route "GET /telegram/calls"
+        let calls be state_get("tg_calls")
+        give {"calls": when calls == nothing then [] otherwise calls}
+
+    route "GET /last"
+        let n be state_get("count")
+        let l be state_get("last")
+        give {"count": when n == nothing then 0 otherwise n, "body": when l == nothing then nothing otherwise l["body"], "signature": when l == nothing then "" otherwise l["signature"]}

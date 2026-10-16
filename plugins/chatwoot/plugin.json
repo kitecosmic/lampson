@@ -1,0 +1,11 @@
+{
+  "name": "chatwoot",
+  "description": "Channel: answer your Chatwoot inbox (WhatsApp, Instagram, Facebook, email, web chat… everything Chatwoot connects) with a Lampson agent.",
+  "kind": "syn",
+  "entry": "plugin.syn",
+  "caps": "net",
+  "timeout": 30,
+  "config": ["CHATWOOT_URL", "CHATWOOT_TOKEN", "CHATWOOT_WEBHOOK_SECRET"],
+  "channel": {"agent": ""},
+  "tools": []
+}

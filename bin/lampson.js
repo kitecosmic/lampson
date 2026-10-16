@@ -22,7 +22,7 @@ const home = process.env.LAMPSON_HOME || path.join(os.homedir(), 'lampson');
 const marker = path.join(home, '.npm-installed');
 
 // what gets copied into the home: the runtime, never state. Keep in sync with "files" in package.json.
-const CODE = ['lib', 'public', 'skills', 'chat.syn', 'web.syn', 'hub.tpl.syn', 'edge.syn', 'cli.syn', 'lampson.ps1', 'lampson.sh', 'lampson.cmd', '.env.example', 'README.md', 'LICENSE'];
+const CODE = ['lib', 'public', 'skills', 'chat.syn', 'run.syn', 'web.syn', 'hub.tpl.syn', 'edge.syn', 'cli.syn', 'lampson.ps1', 'lampson.sh', 'lampson.cmd', '.env.example', 'README.md', 'LICENSE'];
 
 // copia un archivo; en unix, los scripts de shell y los .syn salen con LF aunque el paquete se haya armado
 // en Windows (un CRLF en lampson.sh rompe bash: "set: pipefail\r: invalid option")
@@ -47,7 +47,7 @@ function sync() {
   fs.mkdirSync(home, { recursive: true });
   // the folders every workspace links to (lib/workspaces.syn LINKS): if `memory/` does not exist when the
   // link is made, the link is born dangling and memory(write) fails with "No such file or directory"
-  for (const d of ['memory', 'plugins']) fs.mkdirSync(path.join(home, d), { recursive: true });
+  for (const d of ['memory', 'plugins', 'agents']) fs.mkdirSync(path.join(home, d), { recursive: true });
   for (const item of CODE) {
     const src = path.join(pkgDir, item);
     if (!fs.existsSync(src)) continue;

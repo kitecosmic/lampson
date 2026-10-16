@@ -59,6 +59,18 @@ try {
     $env:LAMPSON_PROVIDER = "openai"; $env:LAMPSON_WIRE = "openai"; $env:LAMPSON_BASE_URL = "http://127.0.0.1:8765/v1"; $env:LAMPSON_API_KEY = "x"
     synsema run agents_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # runtime (deliver, agentes del proyecto, sesión por thread) y la puerta `lampson run` contra el mismo mock
+    synsema run run_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # API /v1 (keys, JSON, SSE, callback firmado) contra web.syn de verdad en :47990
+    synsema run api_test.syn
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # el SDK de JavaScript (sdk/), modo local (run.syn --stdio) y modo servidor (web.syn en :47996)
+    node tests/sdk_test.mjs
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # el SDK de Python (sdk/python), los mismos dos modos (web.syn en :47997)
+    python tests/sdk_test.py
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     $env:LAMPSON_NO_CONFIG = $prevNoCfg
 } finally {

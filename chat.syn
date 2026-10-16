@@ -25,6 +25,8 @@ require file.read("skills")
 require file.read("skills/*")
 require file.read("plugins")
 require file.read("plugins/*")
+require file.read("agents")
+require file.read("agents/*")
 require file("memory")
 require file("memory/*")
 require file(".lampson")
@@ -58,6 +60,7 @@ use "./lib/sched_run.syn" as sched_run
 use "./lib/approvals.syn" as approvals
 use "./lib/computer.syn" as computer
 use "./lib/judge.syn" as jdg
+use "./lib/runtime.syn" as runtime
 
 -- ---------- UI de terminal ----------
 -- Colores ANSI (Windows Terminal, PowerShell 7, cualquier terminal moderna). LAMPSON_NO_COLOR=1 los apaga.
@@ -255,8 +258,8 @@ task busy_off()
             set waited to waited + 1
 
 -- tag = "" para el agente principal; los subagentes en background NO pasan por acá (escriben su log)
+-- el runtime (runtime.turn) ya trazó cada evento en .lampson/trace/<sid>.log: acá solo se dibuja
 task on_event(kind, data, tag)
-    trace.event(sid, kind, data, tag)
     when kind == "busy"
         busy_on(data["label"], data["kind"])
     otherwise when kind == "idle"
@@ -435,8 +438,8 @@ task complete_args(cmd, head, last)
             give []
         give apply((s) => s["id"], schedule.summary())
     when cmd == "/agent"
-        -- solo los perfiles elegibles por el usuario: `worker` es interno de delegate (agents.names lo filtra)
-        give agents.names()
+        -- los elegibles por el usuario (integrados + workspace/.lampson/agents): `worker` es interno de delegate
+        give runtime.names()
     give []
 
 -- rutas del workspace que empiezan con el prefijo escrito (directorios con "/" final para seguir completando)
@@ -549,7 +552,7 @@ task show_config(cfg, ws, profile, mode, opts)
     print("")
     print("  proveedor   " + cfg["provider"] + " (" + cfg["wire"] + " → " + cfg["base_url"] + ")")
     print("  modelo      " + cfg["model"] + "   max_tokens " + text(cfg["max_tokens"]) + "   timeout " + text(floor(cfg["timeout"])) + "s")
-    print("  agente      " + profile + "   tools: " + join(agents.tool_names(agents.profile(profile)), ", "))
+    print("  agente      " + profile + "   tools: " + join(agents.tool_names(runtime.get(profile)), ", "))
     print("  permisos    " + mode)
     print("  límites     " + text(opts["max_steps"]) + " pasos/turno · " + text(floor(opts["budget_tokens"])) + " tokens/turno · compacta a " + text(floor(opts["compact_at_tokens"])))
     print("  workspace   " + ws)
@@ -864,16 +867,27 @@ when not provider.configured() and cfg["provider"] != "ollama"
 let env_info be agents.env_info(cfg)
 let profile be lower(env("LAMPSON_AGENT", "build"))
 -- `--agent worker` (o cualquier nombre desconocido): worker es interno de delegate, no un perfil de sesión
-when not contains(agents.names(), profile)
-    print("agente '" + profile + "' no disponible · disponibles: " + join(agents.names(), ", ") + " · uso build")
+when not contains(runtime.names(), profile)
+    print("agente '" + profile + "' no disponible · disponibles: " + join(runtime.names(), ", ") + " · uso build")
     set profile to "build"
+-- un agente del proyecto con "model" propio corre con ese modelo (los integrados y los que no dicen, con el configurado).
+-- /model lo cambia para la sesión, como siempre.
+task cfg_for_agent(p)
+    let spec be runtime.get(p)
+    when spec != nothing and (spec["model"]["provider"] != "" or spec["model"]["model"] != "")
+        give provider.config_for(spec["model"]["provider"], spec["model"]["model"])
+    give provider.config()
+set cfg to cfg_for_agent(profile)
+set env_info to agents.env_info(cfg)
+-- agentes por lib/runtime.syn (integrados y los del proyecto): el system prompt se arma una vez por sesión/cambio
+-- de agente (prompt cache); las opts en cada turno (catálogo fresco)
 task system_for(p)
-    give {"role": "system", "content": prompt.build(env_info, agents.addendum_for(p))}
+    give runtime.system_for(p, cfg)
 task opts_for(p, mode)
-    let o be loop.default_opts(agents.registry_for(p), agents.catalog_for(p), ask_user)
-    set o to loop.with_steps(o, agents.steps_for(p))
-    set o to loop.with_inbox(o, agents.parent_inbox, "")
-    give loop.with_mode(o, mode)
+    give runtime.opts_for(p, mode, ask_user)
+-- lo que runtime.turn / runtime.save necesitan de esta terminal: agente, cfg, opts y la sesión actual
+task turn_ctx()
+    give {"ctx": {"cfg": cfg, "opts": opts, "agent": profile}, "session": sid, "thread": ""}
 
 -- Subagente en background: `agent Child` (lib/agents.syn) corre en un hilo con intérprete propio y solo
 -- puede llamar tasks TOP-LEVEL de este programa — esta es su única puerta de entrada al harness.
@@ -901,6 +915,8 @@ agent Sched
     require file.read("skills/*")
     require file.read("plugins")
     require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
     require file("memory")
     require file("memory/*")
     require file(".lampson")
@@ -1042,14 +1058,11 @@ while running
             print("")
             print("  " + cyan("✉ " + first_line(m, 140)))
             set messages to append(messages, {"role": "user", "content": m})
-        trace.user(sid, "(turno automático por aviso de subagente)", profile, mode, cfg["model"])
         set opts to opts_for(profile, mode)
-        let result be loop.run_turn(cfg, messages, opts, on_event)
-        trace.turn_end(sid, result)
+        let result be runtime.turn(turn_ctx(), messages, "(turno automático por aviso de subagente)", {"on_event": on_event})
         set messages to result["messages"]
         set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}
         print(dim("  ─── " + text(result["steps"]) + " pasos · " + fmt_tokens(result["usage"]["input"] + result["usage"]["output"]) + " tokens · turno automático por subagente"))
-        session.save(sid, messages, {"title": session.title_of(messages)})
         flush()
     otherwise
         let saved be settings.load()
@@ -1449,16 +1462,21 @@ while running
         otherwise when starts_with(input, "/agent")
             let want be trim(slice(input, 6, length(input)))
             when want == ""
-                print("agente=" + profile + " · disponibles: " + join(agents.names(), ", "))
-            otherwise when contains(agents.names(), want)
+                print("agente=" + profile + " · disponibles: " + join(runtime.names(), ", "))
+            otherwise when contains(runtime.names(), want)
                 set profile to want
+                let prev_model be cfg["provider"] + "/" + cfg["model"]
+                set cfg to cfg_for_agent(profile)
+                set env_info to agents.env_info(cfg)
+                when cfg["provider"] + "/" + cfg["model"] != prev_model
+                    print("modelo=" + cfg["provider"] + "/" + cfg["model"] + " (el del agente " + profile + ")")
                 set system_msg to system_for(profile)
                 set opts to opts_for(profile, mode)
                 -- el system prompt cambia con el perfil; el historial se conserva (cambiar de agente no borra la conversación)
                 set messages to [system_msg] + slice(messages, 1, length(messages))
-                print("agente=" + profile + " · tools: " + join(agents.profile(profile)["tools"], ", "))
+                print("agente=" + profile + " · tools: " + join(runtime.get(profile)["tools"], ", "))
             otherwise
-                print("no existe el agente " + want + " · disponibles: " + join(agents.names(), ", "))
+                print("no existe el agente " + want + " · disponibles: " + join(runtime.names(), ", "))
         otherwise when starts_with(input, "/")
             print("  " + suggest(input))
         otherwise when starts_with(input, "!")
@@ -1471,20 +1489,18 @@ while running
                 flush()
                 let out be run_interactive(cmd)
                 set messages to append(messages, {"role": "user", "content": "[The user ran this command in the shell themselves]\n$ " + cmd + "\n" + tools.truncate(out, 6000)})
-                session.save(sid, messages, {"title": session.title_of(messages)})
+                runtime.save(turn_ctx(), messages)
         otherwise
             when length(pending_images) > 0
                 set messages to append(messages, {"role": "user", "content": input, "images": pending_images})
                 set pending_images to []
             otherwise
                 set messages to append(messages, {"role": "user", "content": input})
-            trace.user(sid, input, profile, mode, cfg["model"])
             -- catálogo fresco por turno: si el turno anterior conectó/quitó un server MCP, sus tools
             -- entran/salen acá (con los mismos servers el catálogo es idéntico → el prompt cache no se corta)
             set opts to opts_for(profile, mode)
             let t0 be now()
-            let result be loop.run_turn(cfg, messages, opts, on_event)
-            trace.turn_end(sid, result)
+            let result be runtime.turn(turn_ctx(), messages, input, {"on_event": on_event})
             set messages to result["messages"]
             set total_usage to {"input": total_usage["input"] + result["usage"]["input"], "output": total_usage["output"] + result["usage"]["output"]}
             let summary be text(result["steps"]) + (when result["steps"] == 1 then " paso" otherwise " pasos") + " · " + fmt_tokens(result["usage"]["input"] + result["usage"]["output"]) + " tokens · " + ui.fmt_duration(now() - t0)
@@ -1503,7 +1519,6 @@ while running
                 print(dim("  ─── " + summary))
             otherwise
                 print(dim("  ─── " + summary))
-            session.save(sid, messages, {"title": session.title_of(messages)})
     flush()
 -- los procesos gestionados (servidores) y los subagentes en background mueren con lampson
 share true as "lampson:spinner:stop"

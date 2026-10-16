@@ -80,7 +80,17 @@ export task list()
                     set out to out
     recover err
         give []
-    give sort_by(out, (s) => 0 - number(replace(replace(s["id"], "-", ""), "test", "")))
+    give sort_by(out, (s) => 0 - id_key(s["id"]))
+
+-- orden de los ids: YYYYMMDD-HHMMSS (terminal, web) y YYYYMMDD-HHMMSS-NNNN (lib/runtime.syn: dos threads en el mismo
+-- segundo). 18 dígitos no entran exactos en un float → int, con el timestamp × 10000 + sufijo para que viejos y
+-- nuevos queden en orden de creación. Un id que no es de dígitos (test-…) va al final.
+export task id_key(id)
+    let d be replace(replace(id, "-", ""), "test", "")
+    when not matches(d, "[0-9]+") or length(d) < 14
+        give 0
+    let suffix be slice(d, 14, length(d))
+    give int(slice(d, 0, 14)) * 10000 + (when suffix == "" then 0 otherwise int(slice(suffix, 0, 4)))
 
 -- Búsqueda de texto en las sesiones de ESTE proyecto (título y contenido de los mensajes user/assistant):
 -- [{id, updated, title, snippet}] — snippet = el primer trozo donde aparece `q`. Vacío = todas (sin snippet).

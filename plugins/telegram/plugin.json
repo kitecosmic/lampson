@@ -1,0 +1,11 @@
+{
+  "name": "telegram",
+  "description": "Channel: a Telegram bot answered by a Lampson agent. Free, no middleman: create the bot with @BotFather, put its token in .env, then `lampson channel setup telegram`.",
+  "kind": "syn",
+  "entry": "plugin.syn",
+  "caps": "net",
+  "timeout": 30,
+  "config": ["TELEGRAM_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_API"],
+  "channel": {"agent": "", "typing": true, "poll": true},
+  "tools": []
+}

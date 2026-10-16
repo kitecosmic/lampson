@@ -17,3 +17,13 @@ tests/*.txt
 *.tgz
 # hub generado desde hub.tpl.syn por lib/workspaces.syn
 hub.syn
+
+# bytecode de Python (sdk/python, tests)
+__pycache__/
+*.pyc
+# build del SDK de Python
+sdk/python/dist/
+sdk/python/build/
+sdk/python/*.egg-info/
+# agentes globales del usuario (<LAMPSON_HOME>/agents): contenido suyo, como memory/
+/agents/

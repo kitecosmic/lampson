@@ -27,8 +27,8 @@ export let HUB_FILE be "hub.syn"
 export let HUB_TEMPLATE be "hub.tpl.syn"
 -- rango alto para no chocar con lo que usan las apps (3000, 5173, 8000, 8080-8090…): solo el hub queda en 8080
 let FIRST_PORT be 47101
-let LINKS be ["lib", "public", "skills", "plugins", "memory"]
-let COPIES be ["web.syn", "chat.syn"]
+let LINKS be ["lib", "public", "skills", "plugins", "memory", "agents"]
+let COPIES be ["web.syn", "chat.syn", "run.syn"]
 
 task is_win()
     give env("OS", "") == "Windows_NT"
@@ -215,6 +215,7 @@ export task prepare(w)
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     let d be dir_of(w["slug"])
     let h be home()
     let sep be when is_win() then "\\" otherwise "/"
@@ -235,7 +236,13 @@ export task prepare(w)
         ensure_link(d + "/" + n, h + sep + n)
     ensure_link(d + "/.lampson/global", h + sep + ".lampson")
     each f in COPIES
-        write_file(d + "/" + f, read_file(f))
+        -- run.syn (lampson run, 0.2.11): un hub viejo en memoria no tiene el permiso de leerlo → se saltea y el
+        -- workspace enciende igual; la próxima vez que el hub arranque con el template nuevo se copia
+        try
+            write_file(d + "/" + f, read_file(f))
+        recover err
+            when f != "run.syn"
+                raise(err)
     give d
 
 -- estado guardado ANTES de los workspaces (en <home>/.lampson, separado por slug en cada registro): sesiones y trazas
@@ -295,6 +302,7 @@ export task ensure(path)
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     require file.read("hub.tpl.syn")
     require file("hub.syn")
     migrate_ports()
@@ -353,6 +361,12 @@ task hub_routes(w)
     each m in ["GET", "POST"]
         set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/api/*path\" requires auth\n        proxy to \"" + base + "\"")
     set lines to append(lines, "    route \"GET /w/" + w["slug"] + "/approve/*path\"\n        proxy to \"" + base + "\"")
+    -- la API /v1 para apps (lib/api.syn) tampoco: la autentica el proceso del workspace con su API key (Bearer lk_…)
+    each m in ["GET", "POST"]
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/v1/*path\"\n        proxy to \"" + base + "\"")
+    -- los webhooks de los canales (lib/channels.syn) tampoco: la firma de la plataforma la verifica el plugin
+    each m in ["GET", "POST"]
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/ch/*path\"\n        proxy to \"" + base + "\"")
     give join(lines, "\n")
 
 -- reescribe hub.syn desde la plantilla si cambió (bajo --watch, el hub se reinicia solo)
@@ -407,6 +421,7 @@ export task start_ws(w)
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     require file.read(".env")
     -- encender levanta la pausa manual
     when contains(w, "paused") and w["paused"] == true
@@ -725,6 +740,10 @@ export task should_live(w, hc)
         give true
     when schedules_on_disk(w) > 0
         give true
+    -- con API keys (lib/apikeys.syn) el workspace atiende apps (un bot, un webhook): apagarlo por inactividad haría
+    -- que el próximo mensaje encuentre un 502 en el hub
+    when api_keys_on_disk(w) > 0
+        give true
     let ih be idle_hours()
     when ih == 0
         give true
@@ -732,6 +751,12 @@ export task should_live(w, hc)
     give now() - last < ih * 3600
 
 -- tareas encendidas según el json del workspace (sirve aunque el proceso esté apagado)
+task api_keys_on_disk(w)
+    try
+        give length(json_decode(read_file(dir_of(w["slug"]) + "/.lampson/api_keys.json"))["keys"])
+    recover err
+        give 0
+
 task schedules_on_disk(w)
     try
         let doc be json_decode(read_file(dir_of(w["slug"]) + "/.lampson/schedules.json"))
@@ -750,6 +775,7 @@ export task tick()
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     when migrate_ports() and hub_alive()
         restart_hub_later()
     keep_edge()

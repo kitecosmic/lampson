@@ -19,7 +19,12 @@
 --     loop.execute las despacha acá (no son tasks Synsema: los args son libres). permission.syn: ask por
 --     defecto (una tool de terceros con efectos fuera del workspace), yolo permite, strict deniega; las
 --     de solo lectura (annotations.readOnlyHint) están también en plan/review/explore.
--- Sin HTTP/SSE por ahora (stdio cubre casi todos los servers publicados); es el siguiente paso natural.
+-- HTTP ("Streamable HTTP", 2026-10-16): {"mcpServers": {"proveedor": {"url": "https://…/w/x/v1/mcp",
+--   "headers": {"Authorization": "Bearer ${LAMPSON_PROVEEDOR_KEY}"}}}} — el formato de Claude Code. ${LAMPSON_*} se
+--   expande desde el entorno/.env (la key no queda escrita en el mcp.json). Sin supervisor: start_all hace el
+--   handshake por HTTP (guarda Mcp-Session-Id si el server lo da) y cada llamada es un POST; la respuesta puede venir
+--   como JSON o como SSE (text/event-stream: se busca el mensaje con ese id). Así un Lampson usa los agentes de otro
+--   Lampson (agente ↔ agente) como tools: mcp_proveedor_ask.
 
 use "./tools/common.syn" as c
 
@@ -52,7 +57,9 @@ task read_config(path, scope)
                 when contains(s, "disabled")
                     set disabled to s["disabled"] == true
                 when valid_name(name) and contains(s, "command") and not disabled
-                    set out to append(out, {"name": name, "command": text(s["command"]), "args": when contains(s, "args") then s["args"] otherwise [], "env": when contains(s, "env") then s["env"] otherwise {}, "cwd": when contains(s, "cwd") then text(s["cwd"]) otherwise "workspace", "scope": scope})
+                    set out to append(out, {"name": name, "command": text(s["command"]), "args": when contains(s, "args") then s["args"] otherwise [], "env": when contains(s, "env") then s["env"] otherwise {}, "cwd": when contains(s, "cwd") then text(s["cwd"]) otherwise "workspace", "scope": scope, "url": ""})
+                otherwise when valid_name(name) and contains(s, "url") and not disabled
+                    set out to append(out, {"name": name, "command": "", "args": [], "env": {}, "cwd": "", "scope": scope, "url": text(s["url"]), "headers": when contains(s, "headers") and type_of(s["headers"]) == "map" then s["headers"] otherwise {}})
     recover err
         give out
     give out
@@ -76,6 +83,96 @@ export task servers()
     each n in sort_by(keys(by_name), (x) => x)
         set out to append(out, by_name[n])
     give out
+
+-- ---------- transporte HTTP ----------
+
+-- "${LAMPSON_X}" → el valor de LAMPSON_X (solo LAMPSON_*: lo que el programa puede leer)
+export task expand(v)
+    require env("LAMPSON_*")
+    let out be text(v)
+    let guard be 0
+    while contains(out, "${") and guard < 20
+        set guard to guard + 1
+        let a be length(split(out, "${")[0])
+        let rest be slice(out, a + 2, length(out))
+        when not contains(rest, "}")
+            give out
+        let nm be split(rest, "}")[0]
+        let val be when starts_with(nm, "LAMPSON_") then env(nm, "") otherwise ""
+        set out to slice(out, 0, a) + val + slice(rest, length(nm) + 1, length(rest))
+    give out
+
+task header_of(h, name)
+    each k in keys(h)
+        when lower(k) == name
+            give text(h[k])
+    give ""
+
+-- un request JSON-RPC por HTTP → {msg, session} (msg = la respuesta con ese id, o {error})
+export task http_rpc(s, session, id, method, params, timeout)
+    require net
+    require env("LAMPSON_*")
+    let hs be {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18"}
+    each k in keys(s["headers"])
+        set hs[k] to expand(s["headers"][k])
+    when session != ""
+        set hs["Mcp-Session-Id"] to session
+    let body be {"jsonrpc": "2.0", "method": method, "params": params}
+    when id != nothing
+        set body["id"] to id
+    let r be nothing
+    try
+        set r to http_post(s["url"], json_encode(body), hs, timeout)
+    recover err
+        give {"msg": {"error": "cannot reach " + s["url"] + ": " + text(err)}, "session": session}
+    let rh be when contains(r, "headers") then r["headers"] otherwise {}
+    let sid be header_of(rh, "mcp-session-id")
+    let new_session be when sid != "" then sid otherwise session
+    when id == nothing
+        give {"msg": {"result": {}}, "session": new_session}
+    when not r["ok"]
+        give {"msg": {"error": "HTTP " + text(r["status"]) + ": " + slice(text(when contains(r, "body") then r["body"] otherwise ""), 0, 200)}, "session": new_session}
+    let raw be text(when contains(r, "body") then r["body"] otherwise "")
+    -- SSE: "data: {…}" por evento; el que tiene nuestro id es la respuesta
+    when contains(lower(header_of(rh, "content-type")), "text/event-stream")
+        each l in split(replace(raw, "\r", ""), "\n")
+            when starts_with(l, "data:")
+                try
+                    let m be json_decode(trim(slice(l, 5, length(l))))
+                    when contains(m, "id") and m["id"] == id
+                        give {"msg": m, "session": new_session}
+                recover err
+                    set raw to raw
+        give {"msg": {"error": "no response with id " + text(id) + " in the event stream"}, "session": new_session}
+    try
+        give {"msg": json_decode(raw), "session": new_session}
+    recover err
+        give {"msg": {"error": "not JSON: " + slice(raw, 0, 200)}, "session": new_session}
+
+-- handshake + tools/list de un server HTTP; deja el estado en el blackboard como el supervisor stdio
+task connect_http(s)
+    require net
+    require time
+    require env("LAMPSON_*")
+    let key be "mcp:" + s["name"]
+    share {"status": "starting", "tools": [], "error": nothing, "started": now(), "transport": "http", "session": ""} as key
+    let a be http_rpc(s, "", 1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "lampson", "version": "0.2"}}, 30)
+    when contains(a["msg"], "error")
+        share {"status": "error", "tools": [], "error": "initialize failed: " + text(a["msg"]["error"]), "started": now(), "transport": "http", "session": ""} as key
+        give false
+    let sess be a["session"]
+    http_rpc(s, sess, nothing, "notifications/initialized", {}, 15)
+    let l be http_rpc(s, sess, 2, "tools/list", {}, 30)
+    let tools be []
+    when contains(l["msg"], "result") and contains(l["msg"]["result"], "tools")
+        each t in l["msg"]["result"]["tools"]
+            let ro be false
+            when contains(t, "annotations") and contains(t["annotations"], "readOnlyHint")
+                set ro to t["annotations"]["readOnlyHint"] == true
+            set tools to append(tools, {"name": t["name"], "description": when contains(t, "description") then t["description"] otherwise "", "inputSchema": when contains(t, "inputSchema") then t["inputSchema"] otherwise {"type": "object", "properties": {}}, "readonly": ro})
+    share {"status": "ready", "tools": tools, "error": nothing, "started": now(), "transport": "http", "session": sess} as key
+    bus_publish("mcp." + s["name"], {"name": s["name"], "status": "ready", "tools": length(tools)})
+    give true
 
 -- ---------- supervisor: un agente por server ----------
 -- Parámetros del spawn: name, command, args_json, env_json, cwd (un agente no ve el módulo: todo va por spawn,
@@ -203,11 +300,15 @@ export task start_all(wait_s)
     require file(".lampson/*")
     require file("workspace")
     require file("workspace/*")
+    require net
     let list be servers()
     each s in list
         let st be state(s["name"])
         when st == nothing or (st["status"] != "ready" and st["status"] != "starting")
-            spawn McpSup with name = s["name"], command = s["command"], args_json = json_encode(s["args"]), env_json = json_encode(s["env"]), cwd = s["cwd"]
+            when s["url"] != ""
+                connect_http(s)
+            otherwise
+                spawn McpSup with name = s["name"], command = s["command"], args_json = json_encode(s["args"]), env_json = json_encode(s["env"]), cwd = s["cwd"]
     let waited be 0
     while waited < wait_s * 10 and length(where(list, (s) => state(s["name"]) == nothing or state(s["name"])["status"] == "starting")) > 0
         sleep(0.1)
@@ -265,8 +366,9 @@ export task add_server(name, command_line, env_map, scope)
     require file("workspace/*")
     when not valid_name(name)
         raise("invalid server name '" + text(name) + "' (letters, digits, - or _, max 32)")
-    let parsed be parse_command(command_line)
-    when parsed["command"] == ""
+    let is_url be starts_with(trim(text(command_line)), "https://") or starts_with(trim(text(command_line)), "http://")
+    let parsed be when is_url then {"command": "", "args": []} otherwise parse_command(command_line)
+    when parsed["command"] == "" and not is_url
         raise("empty command")
     let sc be when scope == "project" then "project" otherwise "global"
     let path be config_path(sc)
@@ -278,16 +380,24 @@ export task add_server(name, command_line, env_map, scope)
     when not contains(doc, "mcpServers")
         set doc["mcpServers"] to {}
     let entry be {"command": parsed["command"], "args": parsed["args"]}
-    when env_map != nothing
+    when is_url
+        -- un server HTTP: env_map son sus headers (p. ej. {"Authorization": "Bearer ${LAMPSON_PROVEEDOR_KEY}"})
+        set entry to {"url": trim(text(command_line))}
+        when env_map != nothing and length(keys(env_map)) > 0
+            set entry["headers"] to env_map
+    otherwise when env_map != nothing
         when length(keys(env_map)) > 0
             set entry["env"] to env_map
     let servers_map be doc["mcpServers"]
     set servers_map[name] to entry
     set doc["mcpServers"] to servers_map
     write_file(path, json_encode(doc))
-    -- reconexión: si ya había un supervisor con este nombre, apagarlo antes de arrancar el nuevo
+    -- reconexión: si ya había un supervisor con este nombre, apagarlo antes de arrancar el nuevo (uno HTTP no tiene
+    -- proceso: se olvida su estado y start_all reconecta)
     let st be state(name)
-    when st != nothing
+    when is_url
+        share nothing as "mcp:" + name
+    otherwise when st != nothing
         when st["status"] == "ready" or st["status"] == "starting"
             bus_publish("mcp.stop." + name, {})
             let w be 0
@@ -342,7 +452,7 @@ export task summary()
     let out be []
     each s in servers()
         let st be state(s["name"])
-        set out to append(out, {"name": s["name"], "scope": s["scope"], "command": s["command"] + " " + join(apply((a) => text(a), s["args"]), " "), "status": when st == nothing then "off" otherwise st["status"], "error": when st == nothing then nothing otherwise st["error"], "tools": when st == nothing then [] otherwise apply((t) => t["name"], st["tools"])})
+        set out to append(out, {"name": s["name"], "scope": s["scope"], "command": when s["url"] != "" then s["url"] otherwise s["command"] + " " + join(apply((a) => text(a), s["args"]), " "), "status": when st == nothing then "off" otherwise st["status"], "error": when st == nothing then nothing otherwise st["error"], "tools": when st == nothing then [] otherwise apply((t) => t["name"], st["tools"])})
     give out
 
 -- ---------- tools para el modelo ----------
@@ -383,6 +493,7 @@ task split_name(full)
 
 -- llamada: request por bus al supervisor, respuesta por bus; el contenido vuelve como texto para el modelo
 export task call(full_name, args)
+    require net
     require time
     require file(".lampson")
     require file(".lampson/*")
@@ -394,6 +505,14 @@ export task call(full_name, args)
     let st be state(parts["server"])
     when st == nothing or st["status"] != "ready"
         raise("MCP server '" + parts["server"] + "' is not ready (" + (when st == nothing then "off" otherwise st["status"]) + ")")
+    when contains(st, "transport") and st["transport"] == "http"
+        let srv be where(servers(), (x) => x["name"] == parts["server"])
+        when length(srv) == 0
+            raise("MCP server '" + parts["server"] + "' is not configured anymore")
+        let hr be http_rpc(srv[0], st["session"], floor(now() * 1000), "tools/call", {"name": parts["tool"], "arguments": when args == nothing then {} otherwise args}, CALL_TIMEOUT)
+        when contains(hr["msg"], "error")
+            raise("MCP error: " + text(hr["msg"]["error"]))
+        give render(hr["msg"]["result"])
     let id be text(floor(now() * 1000000))
     let sub be bus_subscribe("mcp.res." + parts["server"] + "." + id)
     bus_publish("mcp.req." + parts["server"], {"id": id, "method": "tools/call", "params": {"name": parts["tool"], "arguments": when args == nothing then {} otherwise args}})

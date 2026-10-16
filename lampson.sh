@@ -6,11 +6,26 @@
 #   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS propio (opcional) · --domain off
 #   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --workspace /ruta [--agent plan] [--yolo|--strict|--ask] · --update
+#   lampson run [--agent ID] [--thread T | --session ID] [--json] [--yolo|--strict|--ask] "mensaje"   # sin interfaz
+#       (sin mensaje lo lee de stdin; --json = eventos JSONL; ver spec/engine.md y run.syn)
+#   lampson run --stdio      # modo local: un proceso abierto, un pedido JSON por línea (lo usa el SDK)
+#   lampson key add [--agent ID[,ID]] [--name NOMBRE] [--rate N] [--callback URL] · key list · key remove <id>   # API keys /v1
+#   lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]     # Lampson como servidor MCP (stdio) para otros agentes
+#   lampson channel list · channel on|off <canal> · channel setup <canal>   # canales (Telegram, Chatwoot…)
 set -euo pipefail
 # se lo llama por el symlink `lampson` (~/.local/bin): la carpeta es donde vive el script de verdad
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 caller="$(pwd)"
 ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
+run=0; msg=""; perm_flag=""; key=""; key_name=""; key_id=""; mcp_serve=""; ch_cmd=""; ch_name=""
+# `lampson run …`: subcomando sin interfaz (run.syn); las palabras sueltas son el mensaje, no el workspace
+if [ "${1:-}" = run ]; then run=1; shift; fi
+# `lampson key add|list|remove …`: API keys (también corre run.syn, con LAMPSON_KEY_CMD)
+# `lampson mcp serve …`: servidor MCP por stdio (run.syn con LAMPSON_MCP_SERVE)
+if [ "${1:-}" = mcp ] && [ "${2:-}" = serve ]; then run=1; mcp_serve=1; shift 2; fi
+# `lampson channel list|on|off|setup <canal>` (run.syn con LAMPSON_CHANNEL_CMD)
+if [ "${1:-}" = channel ]; then run=1; ch_cmd="${2:-list}"; shift; [ $# -gt 0 ] && shift; fi
+if [ "${1:-}" = key ]; then run=1; key="${2:-help}"; shift; [ $# -gt 0 ] && shift; fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --web) web=1 ;;
@@ -22,12 +37,19 @@ while [ $# -gt 0 ]; do
         --uninstall) install=uninstall ;;
         --workspace) shift; ws="$1" ;;
         --agent) shift; export LAMPSON_AGENT="$1" ;;
-        --yolo|--dangerously-skip-permissions) export LAMPSON_PERMISSION=yolo ;;
-        --strict) export LAMPSON_PERMISSION=strict ;;
-        --ask) export LAMPSON_PERMISSION=ask ;;
+        --yolo|--dangerously-skip-permissions) export LAMPSON_PERMISSION=yolo; perm_flag=yolo ;;
+        --strict) export LAMPSON_PERMISSION=strict; perm_flag=strict ;;
+        --ask) export LAMPSON_PERMISSION=ask; perm_flag=ask ;;
+        --thread) shift; export LAMPSON_THREAD="$1" ;;
+        --session) shift; export LAMPSON_SESSION="$1" ;;
+        --json) export LAMPSON_RUN_JSON=1 ;;
+        --stdio) export LAMPSON_RUN_STDIO=1 ;;
+        --name) shift; key_name="$1" ;;
+        --rate) shift; export LAMPSON_KEY_RATE="$1" ;;
+        --callback) shift; export LAMPSON_KEY_CALLBACKS="${LAMPSON_KEY_CALLBACKS:+$LAMPSON_KEY_CALLBACKS,}$1" ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
-        -*) echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
-        *) ws="$1" ;;
+        -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
+        *) if [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
     esac
     shift
 done
@@ -130,7 +152,8 @@ if [ "$install" = uninstall ]; then systemctl --user disable --now lampson-hub.s
 [ -d "$ws" ] || { echo "el workspace no existe o no es un directorio: $ws" >&2; exit 1; }
 ws="$(cd "$ws" && pwd -P)"
 [ "$ws" = "$HOME" ] || [ "$ws" = "/" ] && { echo "'$ws' no es un proyecto" >&2; exit 1; }
-r="$(cli ensure "$ws")"
+# `run`, `key`, `channel` y `mcp serve` no necesitan servidor: solo la carpeta del workspace (sin hub)
+r="$(cli "$([ "$run" = 1 ] && echo prepare || echo ensure)" "$ws")"
 slug="$(json "$r" slug)"; port="$(json "$r" port)"; url="$(json "$r" url)"; dir="$(json "$r" dir)"
 if [ "$web" = 1 ]; then
     echo "Lampson web · $url   (workspace $slug)"
@@ -144,4 +167,12 @@ jp="$(json "$r" judge_provider)"; jm="$(json "$r" judge_model)"; jk="$(json "$r"
 [ -n "$jp" ] && export SYNSEMA_JUDGE_PROVIDER="$jp"
 [ -n "$jm" ] && export SYNSEMA_JUDGE_MODEL="$jm"
 [ -n "$jk" ] && export TYPESAFE_API_KEY="$jk"
-if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" chat.syn; else exec synsema run chat.syn; fi
+entry=chat.syn
+if [ "$run" = 1 ]; then
+    # sin interfaz: los permisos los fija el flag, o el agente (run.syn: strict si el agente no dice nada)
+    entry=run.syn; export LAMPSON_MESSAGE="$msg" LAMPSON_RUN_PERMISSION="$perm_flag"
+    export LAMPSON_KEY_CMD="$key" LAMPSON_KEY_NAME="$key_name" LAMPSON_KEY_ID="$key_id" LAMPSON_KEY_AGENTS="${LAMPSON_AGENT:-}"
+    export LAMPSON_CHANNEL_CMD="$ch_cmd" LAMPSON_CHANNEL_NAME="$ch_name"
+    export LAMPSON_MCP_SERVE="$mcp_serve" LAMPSON_MCP_AGENTS="$([ -n "$mcp_serve" ] && echo "${LAMPSON_AGENT:-}")"
+fi
+if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" "$entry"; else exec synsema run "$entry"; fi

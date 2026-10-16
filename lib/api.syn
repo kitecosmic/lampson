@@ -1,0 +1,153 @@
+-- lib/api.syn — la API HTTP /v1 de un workspace (spec/engine.md, fase 2). Las rutas viven en web.syn; acá la lógica.
+--
+--   GET  /w/<slug>/v1/agents        los agentes que la key puede usar
+--   POST /w/<slug>/v1/messages      un sobre → respuesta. Tres formas:
+--        {"to", "thread", "text", "images", "from", "meta"}               → JSON con el resultado (espera el turno)
+--        … + "stream": true                                             → SSE: los mismos eventos que `lampson run --json`
+--        … + "callback": "https://…"                                     → 202 {job} enseguida; el resultado va por POST
+--                                                                         al callback (canal `http`: WhatsApp, n8n…)
+--   GET  /w/<slug>/v1/jobs/<id>     estado de un trabajo asíncrono
+--
+-- Auth: SIEMPRE `Authorization: Bearer lk_…` (lib/apikeys.syn), también por loopback: el hub reenvía /v1 sin pedir
+-- passkey y este proceso confía en todo lo que le llega del hub, así que la key es la única puerta.
+-- Todo mensaje pasa por el buzón de su conversación (lib/mailbox.syn): fila por (agente, thread), espera de silencio
+-- ("buffer" del agente; default 3 s / tope 15 s) y lo que llega a mitad de turno entra al turno en curso. Los
+-- mensajes de una ráfaga reciben la MISMA respuesta, con "batch" (ids del lote) y "lead" (el que lo encabeza).
+-- Permisos: el modo del agente, o strict si no dice. En `ask`, la aprobación sale por la cola de lib/approvals.syn
+-- (UI, link firmado al webhook, /approve en la terminal) y vence → denegado. Nunca se auto-aprueba.
+-- Callback: UN POST por lote y URL: {job, jobs, batch, status, agent, thread, session, text, steps, usage, stopped,
+-- meta}; con LAMPSON_WEBHOOK_SECRET va firmado (X-Lampson-Signature: sha256=<hmac hex>). Los demás jobs del lote
+-- quedan "merged" (merged_into = el que encabeza).
+
+use "./runtime.syn" as runtime
+use "./apikeys.syn" as apikeys
+use "./mailbox.syn" as mailbox
+
+
+-- la key del header Authorization (o nothing)
+export task bearer_of(h)
+    let a be ""
+    each k in keys(h)
+        when lower(k) == "authorization"
+            set a to text(h[k])
+    when starts_with(lower(a), "bearer ")
+        give trim(slice(a, 7, length(a)))
+    give nothing
+
+-- {ok, key, status, error}: la key válida, o por qué no
+export task authorize(h)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    let rec be apikeys.check(bearer_of(h))
+    when rec == nothing
+        give {"ok": false, "key": nothing, "status": 401, "error": "missing or invalid API key (Authorization: Bearer lk_…; create one with `lampson key add`)", "retry_after": 0}
+    -- rate limit por key: ventana de un minuto (estado de serve, compartido por todos los handlers)
+    when rec["rate"] > 0
+        let win be floor(now() / 60)
+        let n be state_incr("rl:" + rec["id"] + ":" + text(win), 1)
+        when n == 1
+            state_delete("rl:" + rec["id"] + ":" + text(win - 1))
+        when n > rec["rate"]
+            give {"ok": false, "key": rec, "status": 429, "error": "rate limit: " + text(rec["rate"]) + " requests per minute for this API key", "retry_after": 60 - floor(now() - win * 60)}
+    give {"ok": true, "key": rec, "status": 200, "error": "", "retry_after": 0}
+
+-- la respuesta de error de authorize (429 con Retry-After)
+export task refuse(a)
+    let r be fail(a["status"], a["error"])
+    when a["status"] == 429
+        give with_header(r, "Retry-After", text(a["retry_after"]))
+    give r
+
+-- los agentes que esta key puede usar: [{id, description}]
+export task agents_for(rec)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let out be []
+    each id in runtime.names()
+        when apikeys.allows(rec, id)
+            set out to append(out, {"id": id, "description": runtime.get(id)["description"]})
+    give out
+
+task field(m, k, fallback)
+    when contains(m, k)
+        when m[k] != nothing
+            give m[k]
+    give fallback
+
+-- {ok, sobre, callback, stream, status, error}: el body de POST /v1/messages ya validado contra la key
+export task parse(body, rec)
+    require env("LAMPSON_*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    when body == nothing or type_of(body) != "map"
+        give {"ok": false, "status": 400, "error": "body must be a JSON object"}
+    let msg be text(field(body, "text", ""))
+    when trim(msg) == ""
+        give {"ok": false, "status": 400, "error": "text is required"}
+    let target be lower(text(field(body, "to", runtime.default_agent())))
+    when not contains(runtime.names(), target)
+        give {"ok": false, "status": 404, "error": "no agent named '" + target + "'"}
+    when not apikeys.allows(rec, target)
+        give {"ok": false, "status": 403, "error": "this API key cannot use agent '" + target + "'"}
+    let cb be text(field(body, "callback", ""))
+    when cb != "" and not (starts_with(cb, "https://") or starts_with(cb, "http://"))
+        give {"ok": false, "status": 400, "error": "callback must be an http(s) URL"}
+    when cb != "" and not apikeys.callback_allowed(rec, cb)
+        give {"ok": false, "status": 403, "error": "this API key cannot send callbacks to " + cb + " (allowed: " + join(rec["callbacks"], ", ") + ")"}
+    let images be field(body, "images", [])
+    when type_of(images) != "list"
+        set images to []
+    let from be field(body, "from", {})
+    when type_of(from) != "map"
+        set from to {}
+    let meta be field(body, "meta", {})
+    when type_of(meta) != "map"
+        set meta to {}
+    -- la hora en que el cliente escribió (unix s), si el canal la da: ordena una ráfaga que llegó desordenada
+    when contains(body, "sent_at") and body["sent_at"] != nothing
+        set meta["sent_at"] to body["sent_at"]
+    let sobre be {"to": target, "thread": text(field(body, "thread", "")), "session": text(field(body, "session", "")), "from": from, "text": msg, "images": images, "channel": text(field(body, "channel", "http")), "meta": meta}
+    give {"ok": true, "status": 200, "error": "", "sobre": sobre, "callback": cb, "stream": field(body, "stream", false) == true}
+
+-- el modo de un agente por la API: el suyo, y si no dice → strict (nadie en la request para preguntarle)
+export task mode_for(spec)
+    give when spec != nothing and spec["permission"] != "" then "" otherwise "strict"
+
+-- opts del buzón (lib/mailbox.syn) para un sobre ya validado
+export task mailbox_opts(sobre)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let spec be runtime.get(sobre["to"])
+    give {"mode": mode_for(spec), "buffer": mailbox.buffer_of(spec, mailbox.DEFAULT_BUFFER)}
+
+-- registro de un trabajo con callback (lo completa el worker del buzón al entregar)
+export task create_job(id, rec, sobre, callback)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    mailbox.save_job({"job": id, "status": "queued", "key": rec["id"], "agent": sobre["to"], "thread": sobre["thread"], "callback": callback, "created": format_time(now()), "result": nothing, "delivered": false, "merged_into": nothing})
+
+export task job(id)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    give mailbox.job(id)
+
+-- MCP por HTTP (lib/mcp_server.syn): un `ask` pasa por el buzón de su conversación. Entre agentes no hay espera de
+-- silencio salvo que el agente la configure (`buffer`): la fila sí, siempre.
+export task mcp_deliver(sobre, mode)
+    require time
+    require random
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let spec be runtime.get(sobre["to"])
+    let s be mailbox.submit(sobre, {"mode": mode, "buffer": mailbox.buffer_of(spec, false)})
+    give mailbox.wait(s["id"])
