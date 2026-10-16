@@ -333,9 +333,10 @@ task execute(tc, opts, on_event)
         otherwise when registry[name] == "plugin"
             set out to text(plugins.call(name, args))
         -- equipos: send/board saben quién llama por opts.agent_id (el modelo no lo elige: se pisa lo que mande)
-        otherwise when name == "send" or name == "board"
+        otherwise when name == "send" or name == "board" or name == "objective"
             let targs be args
             set targs["_agent"] to when contains(opts, "agent_id") then opts["agent_id"] otherwise ""
+            set targs["_scope"] to when contains(opts, "scope") then opts["scope"] otherwise ""
             set out to text(call_tool(registry[name], targs))
         otherwise
             set out to text(call_tool(registry[name], args))

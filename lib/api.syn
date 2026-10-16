@@ -22,6 +22,7 @@
 use "./runtime.syn" as runtime
 use "./apikeys.syn" as apikeys
 use "./mailbox.syn" as mailbox
+use "./teams.syn" as teams
 
 
 -- la key del header Authorization (o nothing)
@@ -151,3 +152,47 @@ export task mcp_deliver(sobre, mode)
     let spec be runtime.get(sobre["to"])
     let s be mailbox.submit(sobre, {"mode": mode, "buffer": mailbox.buffer_of(spec, false)})
     give mailbox.wait(s["id"])
+
+
+-- ---------- objetivos (lib/teams.syn) ----------
+-- un objetivo con su tablero y su registro, como lo devuelve la API
+export task objective_view(o)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    let scope be "objective:" + text(o["id"])
+    let ts be apply(teams.tasks(scope), (t) => {"id": t["id"], "title": t["title"], "status": t["status"], "owner": t["owner"], "notes": t["notes"], "depends": json_decode(t["depends"])})
+    let lg be apply(teams.ledger(scope, 0, 100), (r) => {"id": r["id"], "at": r["at"], "actor": r["actor"], "kind": r["kind"], "ref": r["ref"], "text": r["text"]})
+    give {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "result": o["result"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "round_seconds": o["round_seconds"], "created_at": o["created_at"], "updated_at": o["updated_at"], "tasks": ts, "ledger": lg}
+
+-- POST /v1/objectives: {agent, text, round_seconds?, budget_tokens?} → {ok, id} / {ok: false, status, error}
+export task create_objective(body, rec)
+    require db(".lampson/teams.db")
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let agent be lower(text(field(body, "agent", "")))
+    when agent == ""
+        give {"ok": false, "status": 400, "error": "agent is required"}
+    when runtime.get(agent) == nothing
+        give {"ok": false, "status": 404, "error": "no agent named '" + agent + "'"}
+    when not apikeys.allows(rec, agent)
+        give {"ok": false, "status": 403, "error": "this API key can't use agent '" + agent + "'"}
+    when trim(text(field(body, "text", ""))) == ""
+        give {"ok": false, "status": 400, "error": "text is required"}
+    let id be teams.obj_create(agent, field(body, "text", ""), {"round_seconds": field(body, "round_seconds", 20), "budget_tokens": field(body, "budget_tokens", 500000), "created_by": "api:" + rec["name"]})
+    give {"ok": true, "id": id}
+
+-- el objetivo si la key puede verlo (su agente), si no nothing
+export task objective_for(id, rec)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    let o be teams.obj_get(floor(number(id)))
+    when o == nothing or not apikeys.allows(rec, o["agent"])
+        give nothing
+    give o

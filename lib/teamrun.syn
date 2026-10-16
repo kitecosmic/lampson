@@ -44,6 +44,42 @@ export task deliver_to(team, agent, sender, head)
     mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, false)})
     give true
 
+-- un turno del objetivo `o` en su conversación (thread objective:<id>)
+export task deliver_objective(o)
+    require db(".lampson/teams.db")
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let spec be runtime.get(o["agent"])
+    when spec == nothing
+        teams.obj_set(o["id"], {"status": "failed", "result": "no agent file for '" + o["agent"] + "'"})
+        give false
+    let txt be teams.obj_turn_text(o)
+    teams.obj_set(o["id"], {"last_start": now(), "turns": o["turns"] + 1, "reply": ""})
+    let sobre be {"to": o["agent"], "thread": "objective:" + text(o["id"]), "session": "", "from": "lampson", "text": txt, "images": [], "channel": "objective", "meta": {"objective": o["id"]}}
+    mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, false)})
+    give true
+
+-- ¿le toca un turno? activo, el anterior terminó y pasaron round_seconds (el primero, enseguida; una respuesta de la
+-- persona, enseguida también)
+export task objective_due(o)
+    require time
+    when o["status"] != "active"
+        give false
+    when o["turns"] == 0
+        give true
+    -- el turno anterior sigue (o murió sin cerrar: a los 15 min se da por perdido y se sigue)
+    when o["last_end"] < o["last_start"] and now() - o["last_start"] < 900
+        give false
+    when o["reply"] != ""
+        give true
+    give now() - o["last_end"] >= o["round_seconds"]
+
 export task tick()
     require db(".lampson/teams.db")
     require time
@@ -54,10 +90,14 @@ export task tick()
     require file.read("workspace/*")
     require file.read("agents")
     require file.read("agents/*")
+    let n be 0
+    each o in teams.obj_list()
+        when objective_due(o)
+            when deliver_objective(o)
+                set n to n + 1
     let teams_now be teams.all()
     when length(teams_now) == 0
-        give 0
-    let n be 0
+        give n
     each m in teams.pending()
         let tid be slice(m["scope"], 5, length(m["scope"]))
         let found be where(teams_now, (t) => t["id"] == tid)

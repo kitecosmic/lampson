@@ -416,6 +416,8 @@ export task submit(sobre, opts)
         set sent to sobre["meta"]["sent_at"]
     let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true, "reply_channel": when contains(opts, "reply_channel") then opts["reply_channel"] otherwise "", "reply_thread": when contains(opts, "reply_thread") then opts["reply_thread"] otherwise ""}
     when post(k, item)
-        let buf be opts["buffer"]
+        -- el worker espera {quiet_s, max_s}: false/nothing (sin espera) se normaliza acá — con `false` el worker
+        -- moría al primer settle y la conversación quedaba trabada (visto 2026-10-16)
+        let buf be when contains(opts, "buffer") and type_of(opts["buffer"]) == "map" then opts["buffer"] otherwise buffer_of(nothing, false)
         spawn MailboxWorker with spec_json = json_encode({"key": k, "mode": opts["mode"], "buffer": buf})
     give {"id": id, "key": k}

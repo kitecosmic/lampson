@@ -946,6 +946,58 @@ serve on 8080
         let r be channels.handle(params.name, {"method": "GET", "path": request.path, "query": query, "headers": headers of request, "body": ""})
         give respond(r["body"], r["ctype"], r["status"])
 
+    -- OBJETIVOS (lib/teams.syn): lo que le pedís a un agente para que trabaje solo hasta terminarlo
+    route "POST /w/:slug/v1/objectives" requires auth
+        expect body {agent: text, text: text}
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let c be api.create_objective(json of request, a["key"])
+        when not c["ok"]
+            give fail(c["status"], c["error"])
+        state_set("lampson:last_used", now())
+        give respond(json_encode(api.objective_view(teams.obj_get(c["id"]))), "application/json", 201)
+
+    route "GET /w/:slug/v1/objectives" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let mine be where(teams.obj_list(), (o) => apikeys.allows(a["key"], o["agent"]))
+        give {"objectives": apply(mine, (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "turns": o["turns"], "spent": o["spent"], "updated_at": o["updated_at"]})}
+
+    route "GET /w/:slug/v1/objectives/:id" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let o be api.objective_for(params.id, a["key"])
+        when o == nothing
+            give fail(404, "no such objective")
+        give api.objective_view(o)
+
+    route "POST /w/:slug/v1/objectives/:id/reply" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let o be api.objective_for(params.id, a["key"])
+        when o == nothing
+            give fail(404, "no such objective")
+        let b be json of request
+        let txt be when contains(b, "text") and b["text"] != nothing then text(b["text"]) otherwise ""
+        let ok be contains(b, "approved") and b["approved"] == true
+        try
+            give api.objective_view(teams.obj_reply(o["id"], txt, ok, "api:" + a["key"]["name"]))
+        recover err
+            give fail(409, regex_replace(text(err), "^.*?:\\d+:\\d+: ", ""))
+
+    route "POST /w/:slug/v1/objectives/:id/cancel" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let o be api.objective_for(params.id, a["key"])
+        when o == nothing
+            give fail(404, "no such objective")
+        give api.objective_view(teams.obj_cancel(o["id"], "api:" + a["key"]["name"]))
+
     route "GET /w/:slug/v1/jobs/:id" requires auth
         let a be api.authorize(headers of request)
         when not a["ok"]

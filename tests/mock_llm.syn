@@ -115,6 +115,21 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("board", {"action": "add", "title": "login de B", "owner": "rt-team-b"})])
             give reply_text("final equipo-b · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        -- objetivos (lib/teams.syn): el primer turno planifica (board), informa y pide aprobación; aprobado, termina
+        when starts_with(q, "[objective o-")
+            when tools_seen == 0
+                give reply_tools([tool_call("board", {"action": "add", "title": "paso 1: preparar el cambio"})])
+            when tools_seen == 1
+                give reply_tools([tool_call("objective", {"action": "report", "message": "plan listo, cambio preparado"})])
+            when tools_seen == 2
+                give reply_tools([tool_call("objective", {"action": "request_approval", "message": "mergear la rama al main"})])
+            give reply_text("final objetivo · esperando aprobación")
+        when starts_with(q, "[approved by")
+            when msgs[length(msgs) - 1]["role"] == "user"
+                give reply_tools([tool_call("objective", {"action": "done", "message": "mergeado; correr npm test para verificar"})])
+            give reply_text("final objetivo · hecho")
+        when starts_with(q, "[round] keep working on o-")
+            give reply_text("final ronda · nada nuevo")
         -- "piensa": el modelo tarda 3 s y contesta sin tools (lo que llega mientras escribe tiene que rehacer la respuesta)
         when starts_with(q, "piensa")
             sleep(3)
