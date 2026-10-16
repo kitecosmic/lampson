@@ -44,6 +44,16 @@ task wait_up(url)
     give false
 
 let BASE be "http://127.0.0.1:47990/w/test/v1"
+
+-- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"]]
+task purge_threads()
+    each t in TEST_THREADS
+        let ts be runtime.thread_session(t[0], t[1])
+        when ts != ""
+            session.delete(ts)
+        rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key(t[0], t[1]) + ".json")
+purge_threads()
 let ADIR be runtime.PROJECT_DIR
 write_file(ADIR + "/rt-api.agent.json", json_encode({"id": "rt-api", "description": "agente de la API", "system": "Bot de prueba.", "tools": ["ls"], "permission": "strict", "buffer": false}))
 write_file(ADIR + "/rt-buf.agent.json", json_encode({"id": "rt-buf", "system": "Bot con espera.", "tools": [], "buffer": {"quiet_s": 1, "max_s": 6}}))
@@ -139,7 +149,12 @@ print("buzón: una ráfaga del mismo cliente es UN turno (orden por sent_at)")
 task fire(job)
     sleep(job["delay"])
     let r be http_post(BASE + "/messages", json_encode(job["body"]), {"Authorization": "Bearer " + job["key"], "Content-Type": "application/json"}, 120)
-    give {"status": r["status"], "json": json_decode(text(r["body"]))}
+    let d be {"session": "", "batch": [], "text": "", "steps": 0}
+    try
+        set d to json_decode(text(r["body"]))
+    recover err
+        set d to {"session": "", "batch": [], "text": "(not JSON: " + slice(text(r["body"]), 0, 80) + ")", "steps": 0}
+    give {"status": r["status"], "json": d}
 let burst be parallel_map(fire, [
     {"delay": 0, "key": kb["key"], "body": {"to": "rt-buf", "thread": "api:rafaga", "text": "tres", "sent_at": 300}},
     {"delay": 0.1, "key": kb["key"], "body": {"to": "rt-buf", "thread": "api:rafaga", "text": "uno", "sent_at": 100}},
@@ -198,21 +213,18 @@ check(apikeys.list() != nothing and length(where(apikeys.list(), (k) => k["id"] 
 
 -- limpieza
 apikeys.remove(kb["id"])
-each t in ["api:cliente-1", "api:cliente-2", "api:cliente-3", "api:par-1", "api:par-2"]
-    let ts be runtime.thread_session("rt-api", t)
-    when ts != "" and not contains(created, ts)
-        set created to append(created, ts)
-    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key("rt-api", t) + ".json")
+purge_threads()
 each id in created
-    session.delete(id)
+    when id != nothing and id != ""
+        when session.exists(id)
+            session.delete(id)
 when jid != ""
     rm_file(".lampson/api/jobs/" + jid + ".json")
 rm_file(ADIR + "/rt-api.agent.json")
 rm_file(ADIR + "/rt-api2.agent.json")
 rm_file(ADIR + "/rt-buf.agent.json")
 rm_file(ADIR + "/rt-mid.agent.json")
-each pair in [["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"]]
-    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key(pair[0], pair[1]) + ".json")
+
 proc_close(web)
 proc_close(cbs)
 proc_close(mock)

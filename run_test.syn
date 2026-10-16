@@ -62,6 +62,12 @@ write_file(ADIR + "/rt-scoped.agent.json", json_encode({"id": "rt-scoped", "syst
 
 let created be []
 let threads be []
+-- threads fijos de este test: se limpian también AL EMPEZAR (una corrida abortada no contamina la siguiente)
+each t in [["rt-shop", "whatsapp:+5491100000001"], ["rt-shop", "whatsapp:+5491100000002"], ["rt-shop", "cli:test-1"]]
+    let ts0 be runtime.thread_session(t[0], t[1])
+    when ts0 != ""
+        session.delete(ts0)
+    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key(t[0], t[1]) + ".json")
 
 print("deliver: un agente del proyecto, sesión por thread")
 let events be []
@@ -166,6 +172,47 @@ let c3 be run_cli({"LAMPSON_AGENT": "nadie", "LAMPSON_MESSAGE": "x"})
 check(c3["code"] == 2 and contains(c3["out"], "no agent named"), "agente inexistente → código 2")
 let c4 be run_cli({"LAMPSON_AGENT": "rt-shop", "LAMPSON_MESSAGE": ""})
 check(c4["code"] == 2 and contains(c4["out"], "empty message"), "mensaje vacío → código 2")
+
+print("lampson mcp serve (stdio, JSON-RPC) como lo lanza un cliente MCP")
+let mp be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_MCP_SERVE": "1", "LAMPSON_MCP_AGENTS": "rt-shop,rt-mute"}, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
+-- manda un request y espera la respuesta con ese id (ignora cualquier otra línea)
+task rpc(id, method, params)
+    proc_send(mp, json_encode({"jsonrpc": "2.0", "id": id, "method": method, "params": params}) + "\n")
+    let deadline be now() + 60
+    while now() < deadline
+        let ev be proc_recv(mp, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                give {"error": "server exited"}
+            when ev["type"] == "stdout"
+                try
+                    let m be json_decode(trim(ev["data"]))
+                    when contains(m, "id") and m["id"] == id
+                        give m
+                recover err
+                    print("    (línea que no es JSON en stdout: " + slice(text(ev["data"]), 0, 80) + ")")
+    give {"error": "timeout"}
+let init be rpc(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "run_test", "version": "1"}})
+check(contains(init, "result") and init["result"]["serverInfo"]["name"] == "lampson" and contains(init["result"]["capabilities"], "tools"), "initialize → serverInfo lampson con tools")
+proc_send(mp, json_encode({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+let tl be rpc(2, "tools/list", {})
+let tnames be when contains(tl, "result") then apply((t) => t["name"], tl["result"]["tools"]) otherwise []
+check(tnames == ["ask", "agents"], "tools/list → ask y agents")
+check(contains(tl, "result") and tl["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"] == ["rt-mute", "rt-shop"], "ask ofrece solo los agentes de LAMPSON_MCP_AGENTS")
+let a1 be rpc(3, "tools/call", {"name": "ask", "arguments": {"message": "ls", "agent": "rt-shop"}})
+let sc1 be when contains(a1, "result") then a1["result"]["structuredContent"] otherwise {}
+check(contains(a1, "result") and not a1["result"]["isError"] and starts_with(a1["result"]["content"][0]["text"], "final ls"), "ask → respuesta del agente")
+check(starts_with(text(sc1["thread"]), "mcp:") and contains(a1["result"]["content"][0]["text"], text(sc1["thread"])), "sin thread se crea uno y se devuelve para continuar")
+let a2 be rpc(4, "tools/call", {"name": "ask", "arguments": {"message": "hola", "agent": "rt-shop", "thread": sc1["thread"]}})
+check(contains(a2, "result") and a2["result"]["structuredContent"]["session"] == sc1["session"] and contains(a2["result"]["content"][0]["text"], "msgs=6"), "con el thread sigue la misma conversación")
+let a3 be rpc(5, "tools/call", {"name": "ask", "arguments": {"message": "x", "agent": "build"}})
+check(contains(a3, "result") and a3["result"]["isError"], "un agente que no se ofrece → isError")
+check(contains(rpc(6, "nope/nope", {}), "error"), "método desconocido → error JSON-RPC")
+let ag2 be rpc(7, "tools/call", {"name": "agents", "arguments": {}})
+check(contains(ag2, "result") and contains(ag2["result"]["content"][0]["text"], "rt-shop: bot de prueba"), "agents lista con descripción")
+set created to append(created, sc1["session"])
+set threads to append(threads, ["rt-shop", text(sc1["thread"])])
+proc_close(mp)
 
 -- limpieza
 -- por thread también: si un check falló a mitad, la sesión del thread igual se borra
