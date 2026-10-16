@@ -1,0 +1,112 @@
+-- run.syn — Lampson sin interfaz: un mensaje entra, el agente trabaja, la respuesta sale (spec/engine.md, fase 1)
+--
+--   lampson run "resumí los cambios de hoy"                     -- texto final por stdout
+--   echo "hola" | lampson run --agent soporte --thread whatsapp:+54911… --json
+--
+-- Corre como chat.syn: cwd = .lampson/ws/<slug> con la junction `workspace` (los launchers lo preparan).
+-- Entrada por entorno (los launchers la arman desde los flags):
+--   LAMPSON_MESSAGE          el mensaje; vacío → se lee stdin hasta EOF
+--   LAMPSON_AGENT            el agente (integrado o workspace/.lampson/agents/<id>.agent.json); default build
+--   LAMPSON_THREAD           identidad externa de la conversación (cliente, canal, tarea): misma → misma sesión
+--   LAMPSON_SESSION          o el id de una sesión ya existente
+--   LAMPSON_RUN_JSON=1       eventos JSONL por stdout (uno por línea) y al final {"kind":"done",…}
+--   LAMPSON_RUN_PERMISSION   ask|strict|yolo; vacío → el del agente, y si no dice → strict
+-- Sin humano delante: lo que pida aprobación se DENIEGA (no hay ask_fn); el modelo lo ve y lo informa.
+-- Código de salida: 0 ok · 1 el turno terminó en error · 2 uso inválido (agente inexistente, mensaje vacío).
+
+intent: "Headless Lampson: deliver one message to an agent and print its answer (or the event stream as JSONL)"
+
+require net
+require time
+require stdin
+require exec
+require random
+require env("LAMPSON_*")
+require env("OS")
+require secret("LAMPSON_*")
+require judge
+require file("workspace")
+require file("workspace/*")
+require file.read("skills")
+require file.read("skills/*")
+require file.read("plugins")
+require file.read("plugins/*")
+require file("memory")
+require file("memory/*")
+require file(".lampson")
+require file(".lampson/*")
+
+use "./lib/runtime.syn" as runtime
+use "./lib/agents.syn" as agents
+use "./lib/mcp.syn" as mcp
+
+-- Subagente en background: `agent Child` (lib/agents.syn) solo llama tasks TOP-LEVEL del programa de entrada
+task lampson_subagent(spec_json)
+    give agents.run_child_json(spec_json)
+
+let json_out be env("LAMPSON_RUN_JSON", "") == "1"
+let agent_id be runtime.default_agent()
+let thread be env("LAMPSON_THREAD", "")
+
+task fail_usage(msg)
+    when json_out
+        print(json_encode({"kind": "error", "data": msg, "tag": "", "agent": agent_id, "thread": thread}))
+    otherwise
+        print("lampson run: " + msg)
+    exit(2)
+
+let spec be runtime.get(agent_id)
+when spec == nothing
+    fail_usage("no agent named '" + agent_id + "' · available: " + join(runtime.names(), ", "))
+
+let message be env("LAMPSON_MESSAGE", "")
+when message == ""
+    let lines be []
+    let l be read_line("")
+    while l != nothing
+        set lines to append(lines, l)
+        set l to read_line("")
+    set message to join(lines, "\n")
+when trim(message) == ""
+    fail_usage("empty message (pass it as an argument or on stdin)")
+
+let mode be lower(env("LAMPSON_RUN_PERMISSION", ""))
+when mode == "" and spec["permission"] == ""
+    set mode to "strict"
+
+-- servers MCP solo si el agente puede usarlos (arrancarlos cuesta hasta unos segundos)
+when contains(spec["tools"], "mcp") or length(where(spec["tools"], (t) => starts_with(t, "mcp_"))) > 0
+    mcp.start_all(8)
+
+share {"id": text(now())} as "lampson:run"
+share {"kind": "cli"} as "lampson:ui"
+
+task emit_json(kind, data, tag)
+    when kind != "busy" and kind != "idle"
+        print(json_encode({"kind": kind, "data": data, "tag": tag, "agent": agent_id, "thread": thread}))
+        flush()
+
+task on_start(info)
+    set thread to info["thread"]
+    when json_out
+        print(json_encode({"kind": "session", "data": info, "tag": "", "agent": info["agent"], "thread": info["thread"]}))
+        flush()
+
+let sobre be {"to": agent_id, "thread": thread, "session": env("LAMPSON_SESSION", ""), "from": {"id": "", "name": "", "kind": "human"}, "text": message, "channel": "cli", "meta": {}}
+let hooks be {"mode": mode, "ask_fn": nothing, "on_start": on_start, "on_event": when json_out then emit_json otherwise nothing}
+let result be nothing
+try
+    set result to runtime.deliver(sobre, hooks)
+recover err
+    set result to {"agent": agent_id, "thread": thread, "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+
+when json_out
+    print(json_encode({"kind": "done", "data": result, "tag": "", "agent": result["agent"], "thread": result["thread"]}))
+otherwise
+    when starts_with(result["stopped"], "error")
+        print("lampson run: " + result["stopped"])
+    otherwise
+        print(result["text"])
+flush()
+when starts_with(result["stopped"], "error")
+    exit(1)

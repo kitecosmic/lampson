@@ -28,6 +28,7 @@
     "skills/",
     "plugins/",
     "chat.syn",
+    "run.syn",
     "web.syn",
     "hub.tpl.syn",
     "edge.syn",

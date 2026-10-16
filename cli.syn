@@ -23,6 +23,7 @@ require file(".lampson/*")
 require file.read("web.syn")
 require file.read(".env")
 require file.read("chat.syn")
+require file.read("run.syn")
 require file.read("hub.tpl.syn")
 require file("hub.syn")
 

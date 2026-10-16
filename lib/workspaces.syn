@@ -28,7 +28,7 @@ export let HUB_TEMPLATE be "hub.tpl.syn"
 -- rango alto para no chocar con lo que usan las apps (3000, 5173, 8000, 8080-8090…): solo el hub queda en 8080
 let FIRST_PORT be 47101
 let LINKS be ["lib", "public", "skills", "plugins", "memory"]
-let COPIES be ["web.syn", "chat.syn"]
+let COPIES be ["web.syn", "chat.syn", "run.syn"]
 
 task is_win()
     give env("OS", "") == "Windows_NT"
@@ -215,6 +215,7 @@ export task prepare(w)
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     let d be dir_of(w["slug"])
     let h be home()
     let sep be when is_win() then "\\" otherwise "/"
@@ -235,7 +236,13 @@ export task prepare(w)
         ensure_link(d + "/" + n, h + sep + n)
     ensure_link(d + "/.lampson/global", h + sep + ".lampson")
     each f in COPIES
-        write_file(d + "/" + f, read_file(f))
+        -- run.syn (lampson run, 0.2.11): un hub viejo en memoria no tiene el permiso de leerlo → se saltea y el
+        -- workspace enciende igual; la próxima vez que el hub arranque con el template nuevo se copia
+        try
+            write_file(d + "/" + f, read_file(f))
+        recover err
+            when f != "run.syn"
+                raise(err)
     give d
 
 -- estado guardado ANTES de los workspaces (en <home>/.lampson, separado por slug en cada registro): sesiones y trazas
@@ -295,6 +302,7 @@ export task ensure(path)
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     require file.read("hub.tpl.syn")
     require file("hub.syn")
     migrate_ports()
@@ -407,6 +415,7 @@ export task start_ws(w)
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     require file.read(".env")
     -- encender levanta la pausa manual
     when contains(w, "paused") and w["paused"] == true
@@ -750,6 +759,7 @@ export task tick()
     require file(".lampson/*")
     require file.read("web.syn")
     require file.read("chat.syn")
+    require file.read("run.syn")
     when migrate_ports() and hub_alive()
         restart_hub_later()
     keep_edge()

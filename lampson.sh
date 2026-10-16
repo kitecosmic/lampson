@@ -6,11 +6,16 @@
 #   lampson --domain lampson.midominio.com --email vos@midominio.com   # HTTPS propio (opcional) · --domain off
 #   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --workspace /ruta [--agent plan] [--yolo|--strict|--ask] · --update
+#   lampson run [--agent ID] [--thread T | --session ID] [--json] [--yolo|--strict|--ask] "mensaje"   # sin interfaz
+#       (sin mensaje lo lee de stdin; --json = eventos JSONL; ver spec/engine.md y run.syn)
 set -euo pipefail
 # se lo llama por el symlink `lampson` (~/.local/bin): la carpeta es donde vive el script de verdad
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 caller="$(pwd)"
 ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
+run=0; msg=""; perm_flag=""
+# `lampson run …`: subcomando sin interfaz (run.syn); las palabras sueltas son el mensaje, no el workspace
+if [ "${1:-}" = run ]; then run=1; shift; fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --web) web=1 ;;
@@ -22,12 +27,15 @@ while [ $# -gt 0 ]; do
         --uninstall) install=uninstall ;;
         --workspace) shift; ws="$1" ;;
         --agent) shift; export LAMPSON_AGENT="$1" ;;
-        --yolo|--dangerously-skip-permissions) export LAMPSON_PERMISSION=yolo ;;
-        --strict) export LAMPSON_PERMISSION=strict ;;
-        --ask) export LAMPSON_PERMISSION=ask ;;
+        --yolo|--dangerously-skip-permissions) export LAMPSON_PERMISSION=yolo; perm_flag=yolo ;;
+        --strict) export LAMPSON_PERMISSION=strict; perm_flag=strict ;;
+        --ask) export LAMPSON_PERMISSION=ask; perm_flag=ask ;;
+        --thread) shift; export LAMPSON_THREAD="$1" ;;
+        --session) shift; export LAMPSON_SESSION="$1" ;;
+        --json) export LAMPSON_RUN_JSON=1 ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
-        -*) echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
-        *) ws="$1" ;;
+        -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
+        *) if [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
     esac
     shift
 done
@@ -144,4 +152,9 @@ jp="$(json "$r" judge_provider)"; jm="$(json "$r" judge_model)"; jk="$(json "$r"
 [ -n "$jp" ] && export SYNSEMA_JUDGE_PROVIDER="$jp"
 [ -n "$jm" ] && export SYNSEMA_JUDGE_MODEL="$jm"
 [ -n "$jk" ] && export TYPESAFE_API_KEY="$jk"
-if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" chat.syn; else exec synsema run chat.syn; fi
+entry=chat.syn
+if [ "$run" = 1 ]; then
+    # sin interfaz: los permisos los fija el flag, o el agente (run.syn: strict si el agente no dice nada)
+    entry=run.syn; export LAMPSON_MESSAGE="$msg" LAMPSON_RUN_PERMISSION="$perm_flag"
+fi
+if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" "$entry"; else exec synsema run "$entry"; fi
