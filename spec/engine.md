@@ -195,7 +195,20 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       (incluida la red local). Aceptable porque la key es de confianza; evaluar una allow-list por key.
 
 ### Fase 3 — `lampson mcp serve`
-- [ ] Lampson como servidor MCP: `ask(agent, thread, message)`, `agents()`, `threads(agent)`
+- [x] Lampson como servidor MCP por stdio (`lib/mcp_server.syn`, dentro de `run.syn` con `LAMPSON_MCP_SERVE=1`):
+      `lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]`. Tools `ask(message, agent?, thread?)` y `agents()`.
+      Sin thread, `ask` crea uno (`mcp:…`) y lo devuelve en el texto y en `structuredContent` para continuar. Con un
+      solo agente ofrecido, `ask` no pide `agent`. Sin humano → `strict` salvo que el agente diga otra cosa.
+- [x] Test en `run_test.syn` (JSON-RPC por stdin como un cliente real: initialize, tools/list, ask, continuación por
+      thread, agente no ofrecido, método desconocido) y a mano por el launcher en `e-commerce` con el modelo real:
+      stdout solo JSON-RPC, stderr vacío.
+
+**Pendientes que salieron en la fase 3:**
+- [ ] `threads(agent)` / historial de una conversación (se dejó fuera: el cliente ya guarda su thread).
+- [ ] Los requests se atienden de a uno (un `ask` largo demora al siguiente); el cliente MCP típico espera igual.
+- [ ] Notificaciones de progreso (`notifications/progress`) mientras el agente trabaja.
+- [ ] Ejemplo de configuración para Claude Desktop / Cursor (va con la documentación final; en Windows el comando
+      es `lampson.cmd`).
 
 ### Fase 4 — Canales como plugins
 - [ ] Tipo de plugin `channel` en `plugin.json` (ruta webhook entrante + comando `send`)
@@ -215,7 +228,7 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
 
 ## Estado
 
-**Fase actual:** 3 — `lampson mcp serve`. Fases 1 y 2 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** 4 — canales como plugins. Fases 1, 2 (con el buzón) y 3 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 

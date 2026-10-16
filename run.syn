@@ -40,6 +40,7 @@ use "./lib/runtime.syn" as runtime
 use "./lib/agents.syn" as agents
 use "./lib/mcp.syn" as mcp
 use "./lib/apikeys.syn" as apikeys
+use "./lib/mcp_server.syn" as mcp_server
 
 -- `lampson key add|list|remove`: API keys de la API /v1 de este workspace (lib/apikeys.syn, lib/api.syn)
 --   LAMPSON_KEY_CMD=add [LAMPSON_KEY_NAME] [LAMPSON_KEY_AGENTS=tienda,soporte]   · list · remove LAMPSON_KEY_ID
@@ -75,6 +76,25 @@ when key_cmd != ""
     otherwise
         print("uso: lampson key add [--agent ID[,ID]] [--name NOMBRE] · lampson key list · lampson key remove <id>")
         exit(2)
+    exit(0)
+
+-- `lampson mcp serve`: Lampson como servidor MCP por stdio (lib/mcp_server.syn); stdout queda SOLO para JSON-RPC
+when env("LAMPSON_MCP_SERVE", "") == "1"
+    let offered be mcp_server.offered()
+    when length(offered) == 0
+        print(json_encode({"jsonrpc": "2.0", "id": nothing, "error": {"code": -32603, "message": "no agents match LAMPSON_MCP_AGENTS"}}))
+        exit(2)
+    share {"id": text(now())} as "lampson:run"
+    share {"kind": "mcp"} as "lampson:ui"
+    -- servers MCP propios de Lampson solo si algún agente ofrecido puede usarlos
+    let uses_mcp be false
+    each n in offered
+        let ts be runtime.get(n)["tools"]
+        when contains(ts, "mcp") or length(where(ts, (t) => starts_with(t, "mcp_"))) > 0
+            set uses_mcp to true
+    when uses_mcp
+        mcp.start_all(8)
+    mcp_server.serve()
     exit(0)
 
 -- Subagente en background: `agent Child` (lib/agents.syn) solo llama tasks TOP-LEVEL del programa de entrada

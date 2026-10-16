@@ -1,0 +1,142 @@
+-- lib/mcp_server.syn — Lampson COMO servidor MCP (spec/engine.md, fase 3): `lampson mcp serve`
+--
+-- Lo inverso de lib/mcp.syn (que es el CLIENTE): acá Claude Desktop, Cursor u otro agente lanzan a Lampson y usan
+-- sus agentes como tools. Transporte stdio: JSON-RPC 2.0, un mensaje por línea en stdin, respuestas por stdout
+-- (nada más puede escribir en stdout mientras sirve).
+--
+-- Tools:
+--   ask(message, agent?, thread?)  un mensaje a un agente; mismo thread = misma conversación. Sin thread se crea uno
+--                                  y se devuelve, para seguir la conversación en la próxima llamada.
+--   agents()                       los agentes disponibles (con LAMPSON_MCP_AGENTS, solo esos)
+-- Permisos: sin humano delante → el modo del agente, y si no dice, strict (lo peligroso se deniega y el agente lo
+-- informa en su respuesta).
+
+use "./runtime.syn" as runtime
+
+export let PROTOCOL be "2025-06-18"
+
+-- los agentes que este servidor ofrece: LAMPSON_MCP_AGENTS ("tienda,plan") o todos los elegibles
+export task offered()
+    require env("LAMPSON_*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let want be where(apply((x) => lower(trim(x)), split(env("LAMPSON_MCP_AGENTS", ""), ",")), (x) => x != "")
+    when length(want) == 0
+        give runtime.names()
+    give where(runtime.names(), (n) => contains(want, n))
+
+export task tools_list(agents_list)
+    let ask_props be {"message": {"type": "string", "description": "What to ask or tell the agent, in plain words."}, "thread": {"type": "string", "description": "Conversation id. Pass the thread returned by a previous ask to continue that conversation; omit it to start a new one."}}
+    when length(agents_list) > 1
+        set ask_props["agent"] to {"type": "string", "enum": agents_list, "description": "Which Lampson agent answers (see the agents tool). Default: " + agents_list[0] + "."}
+    give [
+        {"name": "ask", "description": "Send a message to a Lampson agent working in the user's project and get its answer. The agent can use its own tools (read files, run checks…) within its permissions. Same thread = same conversation.", "inputSchema": {"type": "object", "properties": ask_props, "required": ["message"]}},
+        {"name": "agents", "description": "List the Lampson agents this server offers, with what each one is for.", "inputSchema": {"type": "object", "properties": {}}}
+    ]
+
+task reply(id, result)
+    print(json_encode({"jsonrpc": "2.0", "id": id, "result": result}))
+    flush()
+
+task reply_error(id, code, msg)
+    print(json_encode({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}}))
+    flush()
+
+task text_result(t, structured, is_error)
+    give {"content": [{"type": "text", "text": t}], "structuredContent": structured, "isError": is_error}
+
+-- tools/call → resultado MCP
+export task call(name, args, agents_list)
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    when name == "agents"
+        let rows be apply((n) => {"id": n, "description": runtime.get(n)["description"]}, agents_list)
+        let lines be apply((r) => "- " + r["id"] + (when r["description"] != "" then ": " + r["description"] otherwise ""), rows)
+        give text_result(join(lines, "\n"), {"agents": rows}, false)
+    when name != "ask"
+        give text_result("unknown tool '" + text(name) + "'", {}, true)
+    let msg be when contains(args, "message") then text(args["message"]) otherwise ""
+    when trim(msg) == ""
+        give text_result("message is required", {}, true)
+    let agent be when contains(args, "agent") and args["agent"] != nothing and text(args["agent"]) != "" then lower(text(args["agent"])) otherwise agents_list[0]
+    when not contains(agents_list, agent)
+        give text_result("no agent named '" + agent + "' here · available: " + join(agents_list, ", "), {}, true)
+    let thread be when contains(args, "thread") and args["thread"] != nothing then text(args["thread"]) otherwise ""
+    when thread == ""
+        set thread to "mcp:" + slice(token(16), 0, 10)
+    let spec be runtime.get(agent)
+    let mode be when spec["permission"] != "" then "" otherwise "strict"
+    let r be nothing
+    try
+        set r to runtime.deliver({"to": agent, "thread": thread, "session": "", "from": {"id": "", "name": "", "kind": "agent"}, "text": msg, "images": [], "channel": "mcp", "meta": {}}, {"mode": mode, "ask_fn": nothing})
+    recover err
+        give text_result("error: " + text(err), {"agent": agent, "thread": thread}, true)
+    let failed be starts_with(r["stopped"], "error")
+    let body be when failed then r["stopped"] otherwise r["text"]
+    let footer be "\n\n[lampson · agent " + agent + " · thread " + thread + " — pass this thread to continue the conversation]"
+    give text_result(body + footer, {"agent": agent, "thread": thread, "session": r["session"], "text": r["text"], "steps": r["steps"], "stopped": r["stopped"]}, failed)
+
+-- el loop stdio: hasta EOF
+export task serve()
+    require stdin
+    require net
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("skills")
+    require file.read("skills/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("memory")
+    require file.read("memory/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    require secret("LAMPSON_*")
+    let agents_list be offered()
+    let line be read_line("")
+    while line != nothing
+        when trim(line) != ""
+            let req be nothing
+            try
+                set req to json_decode(line)
+            recover err
+                reply_error(nothing, -32700, "parse error")
+            when req != nothing
+                let id be when contains(req, "id") then req["id"] otherwise nothing
+                let method be when contains(req, "method") then text(req["method"]) otherwise ""
+                let params be when contains(req, "params") and req["params"] != nothing then req["params"] otherwise {}
+                -- notificaciones (sin id): no se responden
+                when id == nothing
+                    set id to nothing
+                otherwise when method == "initialize"
+                    reply(id, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "lampson", "version": "0.2"}, "instructions": "Lampson agents working in the user's project. Use `agents` to see who is available and `ask` to talk to one; keep the returned thread to continue a conversation."})
+                otherwise when method == "ping"
+                    reply(id, {})
+                otherwise when method == "tools/list"
+                    reply(id, {"tools": tools_list(agents_list)})
+                otherwise when method == "tools/call"
+                    let args be when contains(params, "arguments") and params["arguments"] != nothing then params["arguments"] otherwise {}
+                    reply(id, call(text(params["name"]), args, agents_list))
+                otherwise
+                    reply_error(id, -32601, "method not found: " + method)
+        set line to read_line("")
+    give true
