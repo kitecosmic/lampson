@@ -139,15 +139,35 @@ try {
         }
         exit 0
     }
-    # --- arranque al iniciar sesión: Tarea Programada que corre el hub (synsema daemon, --watch) ---
+    # --- arranque al iniciar sesión: Tarea Programada; sin permiso para crearla, un .vbs en la carpeta Inicio ---
+    $startupVbs = Join-Path ([Environment]::GetFolderPath("Startup")) "lampson-hub.vbs"
     if ($Install -eq "install") {
-        $cmd = "cmd /c cd /d `"$here`" && set LAMPSON_HOME=$here && synsema serve hub.syn > .lampson\hub.log 2>&1"
-        schtasks /Create /F /TN "Lampson hub" /SC ONLOGON /TR $cmd | Out-Null
-        Write-Host "instalado: el hub de Lampson arranca al iniciar sesión (Tarea Programada «Lampson hub»). Arrancándolo ahora…"
+        $cmd = "cmd /c cd /d `"$here`" && set LAMPSON_HOME=$here&& synsema serve hub.syn > .lampson\hub.log 2>&1"
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        $out = schtasks /Create /F /TN "Lampson hub" /SC ONLOGON /TR $cmd 2>&1
+        $ErrorActionPreference = $prev
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "instalado: el hub de Lampson arranca al iniciar sesión (Tarea Programada «Lampson hub»). Arrancándolo ahora…"
+        } else {
+            $q = $cmd.Replace('"', '""')
+            $vbs = "' Lampson hub: lo arranca Windows al iniciar sesion. Quitar con: lampson --uninstall`r`nCreateObject(""WScript.Shell"").Run ""$q"", 0, False`r`n"
+            try {
+                [IO.File]::WriteAllText($startupVbs, $vbs, [Text.Encoding]::ASCII)
+                Write-Host "instalado: el hub de Lampson arranca al iniciar sesión (carpeta Inicio: $startupVbs — la Tarea Programada pidió permisos de administrador). Arrancándolo ahora…"
+            } catch {
+                Write-Error ("no pude instalar el arranque: schtasks dijo «" + ($out -join " ") + "» y la carpeta Inicio falló: " + $_.Exception.Message); exit 1
+            }
+        }
         $null = Invoke-Cli "hub-start" ""
         exit 0
     }
-    if ($Install -eq "uninstall") { schtasks /Delete /F /TN "Lampson hub" | Out-Null; Write-Host "quitado el arranque al iniciar sesión (el hub sigue corriendo hasta lampson --hub stop)"; exit 0 }
+    if ($Install -eq "uninstall") {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+        schtasks /Delete /F /TN "Lampson hub" 2>&1 | Out-Null
+        $ErrorActionPreference = $prev
+        if (Test-Path $startupVbs) { Remove-Item $startupVbs -Force }
+        Write-Host "quitado el arranque al iniciar sesión (el hub sigue corriendo hasta lampson --hub stop)"; exit 0
+    }
 
     # --- resolver el proyecto: explícito > directorio actual (si no es el propio lampson) ---
     if ($Workspace -eq "" -and $caller -ne $here) { $Workspace = $caller }
