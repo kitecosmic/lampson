@@ -39,6 +39,7 @@ use "./trace.syn" as trace
 use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
 use "./tools/proc.syn" as proc
+use "./scope.syn" as scope
 
 export let PROJECT_DIR be "workspace/.lampson/agents"
 export let THREADS_DIR be ".lampson/threads"
@@ -51,7 +52,7 @@ let BASES be ["lampson", "none"]
 
 task builtin(id)
     let p be agents.PROFILES[id]
-    give {"id": id, "description": "", "role": "", "base": "lampson", "system": p["addendum"], "tools": p["tools"], "permission": "", "steps": 0, "budget_tokens": 0, "model": {"provider": "", "model": ""}, "builtin": true, "source": "builtin"}
+    give {"id": id, "description": "", "role": "", "base": "lampson", "system": p["addendum"], "tools": p["tools"], "scopes": {}, "permission": "", "steps": 0, "budget_tokens": 0, "model": {"provider": "", "model": ""}, "builtin": true, "source": "builtin"}
 
 task field(raw, key, fallback)
     when contains(raw, key)
@@ -75,7 +76,29 @@ export task validate(raw, source)
     let tl be field(raw, "tools", [])
     when type_of(tl) != "list"
         give {"ok": false, "spec": nothing, "error": source + ": tools must be a list of tool names"}
-    let names be apply((t) => text(t), tl)
+    -- cada tool: "read" (sin límite) o {"name": "read", "paths": ["dir/*", …]} (lib/scope.syn)
+    let names be []
+    let scopes be {}
+    each t in tl
+        when type_of(t) == "map"
+            let tn be text(field(t, "name", ""))
+            let ps be field(t, "paths", [])
+            when tn == "" or type_of(ps) != "list" or length(ps) == 0
+                give {"ok": false, "spec": nothing, "error": source + ": a tool object needs a name and a non-empty paths list"}
+            when not contains(scope.SCOPABLE, tn)
+                give {"ok": false, "spec": nothing, "error": source + ": only " + join(scope.SCOPABLE, ", ") + " can be limited by path ('" + tn + "' cannot)"}
+            each pp in ps
+                let n be scope.norm(pp)
+                when not n["ok"]
+                    give {"ok": false, "spec": nothing, "error": source + ": " + n["error"]}
+            set names to append(names, tn)
+            set scopes[tn] to apply((pp) => text(pp), ps)
+        otherwise
+            set names to append(names, text(t))
+    when length(keys(scopes)) > 0
+        let leaks be where(names, (n) => contains(scope.ESCAPES, n))
+        when length(leaks) > 0
+            give {"ok": false, "spec": nothing, "error": source + ": " + join(leaks, ", ") + " can reach any file, so it cannot be combined with path-limited tools"}
     let system be text(field(raw, "system", ""))
     when base == "none" and trim(system) == ""
         give {"ok": false, "spec": nothing, "error": source + ": an agent with base=none needs a system prompt"}
@@ -87,7 +110,7 @@ export task validate(raw, source)
     when type_of(m) != "map"
         set m to {}
     let model be {"provider": lower(text(field(m, "provider", ""))), "model": text(field(m, "model", ""))}
-    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
+    give {"ok": true, "error": "", "spec": {"id": id, "description": text(field(raw, "description", "")), "role": text(field(raw, "role", "")), "base": base, "system": system, "tools": names, "scopes": scopes, "permission": perm, "steps": steps, "budget_tokens": budget, "model": model, "builtin": false, "source": source}}
 
 -- {specs, errors}: los .agent.json del proyecto (un archivo roto no tumba a los demás: va a errors)
 export task load_project()
@@ -249,6 +272,8 @@ export task opts_for(id, mode, ask_fn)
     set opts to loop.with_steps(opts, when spec["builtin"] or spec["steps"] == 0 then agents.steps_for(when spec["builtin"] then id otherwise "build") otherwise spec["steps"])
     when spec["budget_tokens"] > 0
         set opts["budget_tokens"] to spec["budget_tokens"]
+    when length(keys(spec["scopes"])) > 0
+        set opts["scopes"] to spec["scopes"]
     -- buzón de subagentes: los integrados siempre (igual que antes); uno del proyecto solo si puede delegar
     when spec["builtin"] or contains(spec["tools"], "delegate")
         set opts to loop.with_inbox(opts, agents.parent_inbox, "")

@@ -141,14 +141,15 @@ orquestación va en su propia rama.
 - [x] `chat.syn` pasa por el runtime (`system_for`, `opts_for`, `turn`, `save`); `/agent` ve los del proyecto —
       probado a mano por PTY contra el mock: turno con tool, `/agent plan`, segundo turno, traza sin duplicados
 - [x] README / guide: "Use it from your app" y "Headless: `lampson run`"
-- [ ] Merge de `feat/engine` a `main` (cierra la fase 1)
+- [ ] ~~Merge de `feat/engine` a `main` al cerrar la fase 1~~ → se mergea al final del motor (ver Estado)
 
 **Pendientes que salieron en la fase 1** (no bloquean; se toman cuando toque):
-- [ ] **Alcance por ruta en el allow-list** (visto 2026-10-16 con el agente `tienda` de prueba): `"tools": ["read"]`
-      permite leer *cualquier* archivo del workspace. Si un cliente logra manipular al modelo, podría sacar un `.env`.
-      Propuesta: `"tools": [{"name": "read", "paths": [".lampson/tienda/*"]}]`, que el runtime haga cumplir antes de
-      llamar a la tool. Mientras tanto, para agentes de cara al público: un plugin con una acción concreta
-      (`catalogo_buscar`) en vez de `read`.
+- [x] **Alcance por ruta en el allow-list, opcional** (visto 2026-10-16 con el agente `tienda` de prueba):
+      `"tools": ["read"]` sigue siendo todo el workspace (código, uso personal); `{"name": "read", "paths":
+      [".lampson/tienda/*"]}` lo limita. `lib/scope.syn`, lo hace cumplir `loop.execute` con la ruta real (`c.ws`).
+      Solo read/write/edit/ls/find/grep; con tools limitadas no se permiten bash/process/delegate/lsp/computer_use
+      (leerían cualquier archivo por otro camino). Probado con el modelo real: un agente "ingenuo" pidió `.env.prueba`
+      → denegado por alcance.
 - [ ] En la terminal, un agente del proyecto con `model` propio usa igual el modelo configurado (`chat.syn` tiene
       su `cfg` global para `/model`). Web y `lampson run` sí lo respetan.
 - [ ] Agentes globales (`<LAMPSON_HOME>/agents/`): sumar `agents` a `LINKS` de `lib/workspaces.syn` y a `bin/lampson.js`.
@@ -183,8 +184,9 @@ orquestación va en su propia rama.
 
 ## Estado
 
-**Fase actual:** 1 — completa, falta el merge a `main`. **Rama:** `feat/engine` (desde `main` @ 61fae00).
-**Próximo paso:** merge de la fase 1; después fase 2 (API HTTP `/v1` + canal `http`).
+**Fase actual:** 2 — API HTTP `/v1` + canal `http`. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
+sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 
 ## Ramas
 
@@ -196,6 +198,9 @@ orquestación va en su propia rama.
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — No se mergea a `main` por fase: se termina y prueba todo el motor y recién ahí se documenta y se
+  mergea. El alcance por ruta es **opcional**: sin `paths` el agente ve todo (uso personal, código, modelo local).
 
 - **2026-10-16** — Fase 1 hecha. Decisiones del camino:
   - La terminal **no** pasa por `deliver`: tiene el historial en memoria y lo modifica entre turnos (notas de

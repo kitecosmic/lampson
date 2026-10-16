@@ -1,0 +1,62 @@
+-- lib/scope.syn — alcance por ruta de las tools de archivos (opcional, por agente; spec/engine.md)
+--
+-- Un agente del proyecto puede limitar una tool de archivos a ciertas rutas del workspace:
+--   "tools": ["read"]                                          -- todo el workspace (lo de siempre)
+--   "tools": [{"name": "read", "paths": [".lampson/tienda/*"]}]  -- solo eso
+-- Patrones, relativos a la raíz del workspace: "dir/*" (o "dir/**") = la carpeta y todo lo de adentro;
+-- "a/b.json" = ese archivo; "*" = todo el workspace. Sin comodines en otro lugar (nada de "*.json").
+--
+-- Lo hace cumplir loop.execute ANTES de correr la tool (opts["scopes"] = {tool: [patrones]}), con el mismo
+-- c.ws() que usan las tools para resolver la ruta: lo que se compara es la ruta real, no el texto del modelo.
+-- Una tool que lee cualquier archivo por otro camino (bash, process, delegate, lsp, computer_use) no puede
+-- convivir con tools limitadas en el mismo agente: lo rechaza runtime.validate.
+
+use "./tools/common.syn" as c
+
+export let SCOPABLE be ["read", "write", "edit", "ls", "find", "grep"]
+export let ESCAPES be ["bash", "process", "delegate", "lsp", "computer_use"]
+
+-- {ok, real, recursive, error}
+export task norm(pattern)
+    let p be trim(replace(text(pattern), "\\", "/"))
+    let recursive be false
+    when p == "*" or p == "**"
+        give {"ok": true, "real": c.ROOT, "recursive": true, "error": ""}
+    when c.ends_with(p, "/**")
+        set p to slice(p, 0, length(p) - 3)
+        set recursive to true
+    otherwise when c.ends_with(p, "/*")
+        set p to slice(p, 0, length(p) - 2)
+        set recursive to true
+    when p == "" or contains(p, "*")
+        give {"ok": false, "real": "", "recursive": false, "error": "path pattern '" + text(pattern) + "': use 'dir/*' (a folder and everything in it), an exact file, or '*' (whole workspace)"}
+    try
+        give {"ok": true, "real": c.ws(p), "recursive": recursive, "error": ""}
+    recover err
+        give {"ok": false, "real": "", "recursive": false, "error": "path pattern '" + text(pattern) + "' escapes the workspace"}
+
+task covers(n, real)
+    when n["recursive"]
+        give real == n["real"] or starts_with(real, n["real"] + "/")
+    give real == n["real"]
+
+-- "" si la llamada entra en el alcance; si no, el motivo (lo ve el modelo)
+export task violation(name, args, patterns)
+    let raw be nothing
+    when contains(args, "path")
+        set raw to args["path"]
+    let real be ""
+    try
+        set real to c.ws(raw)
+    recover err
+        give "path outside the workspace"
+    -- resultados largos guardados por el propio loop (.lampson/spill): ya pasaron por este alcance
+    when starts_with(real, ".lampson/spill/")
+        give ""
+    each p in patterns
+        let n be norm(p)
+        when n["ok"]
+            when covers(n, real)
+                give ""
+    let shown be when raw == nothing or text(raw) == "" then "." otherwise text(raw)
+    give "this agent's " + name + " is limited to " + join(patterns, ", ") + " — '" + shown + "' is outside"

@@ -1424,3 +1424,50 @@ test "session: ids viejos (14 dígitos) y del runtime (18) en orden de creación
     assert(session.id_key("20261016-122626-0002") > session.id_key("20261016-122626-0001"))
     assert_eq(session.id_key("test-rt-thread"), 0)
     assert_eq(session.id_key("test-20261016-122626"), session.id_key("20261016-122626"), "los test- se ordenan como antes")
+
+use "./lib/scope.syn" as scope
+
+test "scope: patrones — carpeta/*, archivo exacto, * todo; nada de comodines sueltos ni escapes"
+    assert(scope.norm(".lampson/tienda/*")["recursive"])
+    assert_eq(scope.norm(".lampson/tienda/*")["real"], "workspace/.lampson/tienda")
+    assert_eq(scope.norm("./datos/**")["real"], "workspace/datos")
+    assert(not scope.norm("a/b.json")["recursive"])
+    assert_eq(scope.norm("*")["real"], "workspace")
+    assert(not scope.norm("*.json")["ok"], "comodín suelto")
+    assert(not scope.norm("a/*/b")["ok"])
+    assert(not scope.norm("../otro/*")["ok"], "escape con ..")
+    assert(not scope.norm("C:/Windows/*")["ok"], "absoluto")
+
+test "scope: violation compara la ruta real que usaría la tool"
+    let ps be [".lampson/tienda/*", "README.md"]
+    assert_eq(scope.violation("read", {"path": ".lampson/tienda/catalogo.json"}, ps), "")
+    assert_eq(scope.violation("read", {"path": "./.lampson/tienda/catalogo.json"}, ps), "", "./ al frente")
+    assert_eq(scope.violation("read", {"path": ".lampson\\tienda\\catalogo.json"}, ps), "", "barras de Windows")
+    assert_eq(scope.violation("ls", {"path": ".lampson/tienda"}, ps), "", "la carpeta misma")
+    assert_eq(scope.violation("read", {"path": "README.md"}, ps), "")
+    assert(scope.violation("read", {"path": ".env"}, ps) != "")
+    assert(scope.violation("read", {"path": ".lampson/tiendas/x"}, ps) != "", "prefijo de nombre no es la carpeta")
+    assert(scope.violation("read", {"path": ".lampson/tienda/../../.env"}, ps) != "", "..")
+    assert(scope.violation("ls", {}, ps) != "", "sin path = raíz del workspace")
+    assert(contains(scope.violation("read", {"path": ".env"}, ps), "limited to"))
+    assert_eq(scope.violation("read", {"path": ".lampson/spill/call-1.txt"}, ps), "", "spill del propio loop")
+    assert_eq(scope.violation("grep", {"path": "src"}, ["*"]), "", "* = todo")
+
+test "runtime: tools con paths — validación y opts"
+    let v be runtime.validate({"id": "rt-s", "system": "x", "tools": [{"name": "read", "paths": [".lampson/tienda/*"]}, "fetch"]}, "x")
+    assert(v["ok"], v["error"])
+    assert_eq(v["spec"]["tools"], ["read", "fetch"])
+    assert_eq(v["spec"]["scopes"], {"read": [".lampson/tienda/*"]})
+    assert_eq(runtime.validate({"id": "rt-s", "system": "x", "tools": ["read"]}, "x")["spec"]["scopes"], {}, "string = sin límite")
+    assert(not runtime.validate({"id": "a", "system": "x", "tools": [{"name": "bash", "paths": ["x/*"]}]}, "x")["ok"], "bash no se limita por ruta")
+    assert(not runtime.validate({"id": "a", "system": "x", "tools": [{"name": "read", "paths": []}]}, "x")["ok"], "paths vacío")
+    assert(not runtime.validate({"id": "a", "system": "x", "tools": [{"name": "read", "paths": ["*.env"]}]}, "x")["ok"])
+    let leak be runtime.validate({"id": "a", "system": "x", "tools": [{"name": "read", "paths": ["x/*"]}, "bash"]}, "x")
+    assert(not leak["ok"] and contains(leak["error"], "bash"), "read limitado + bash = fuga")
+    assert(not runtime.validate({"id": "a", "system": "x", "tools": [{"name": "read", "paths": ["x/*"]}, "delegate"]}, "x")["ok"], "delegate lanza hijos sin límite")
+    assert(runtime.validate({"id": "a", "system": "x", "tools": ["read", "bash", "delegate"]}, "x")["ok"], "sin paths, todo como siempre")
+    write_file(runtime.PROJECT_DIR + "/rt-s.agent.json", json_encode({"id": "rt-s", "system": "x", "tools": [{"name": "read", "paths": ["datos/*"]}]}))
+    let o be runtime.opts_for("rt-s", "", nothing)
+    assert_eq(o["scopes"], {"read": ["datos/*"]})
+    assert(not contains(runtime.opts_for("build", "", nothing), "scopes"), "un integrado no tiene scopes")
+    rm_file(runtime.PROJECT_DIR + "/rt-s.agent.json")

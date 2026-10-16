@@ -58,6 +58,7 @@ check(up, "mock LLM arriba en :8765")
 let ADIR be runtime.PROJECT_DIR
 write_file(ADIR + "/rt-shop.agent.json", json_encode({"id": "rt-shop", "description": "bot de prueba", "system": "Eres el bot de una tienda.", "tools": ["ls"], "steps": 6, "permission": "strict"}))
 write_file(ADIR + "/rt-mute.agent.json", json_encode({"id": "rt-mute", "system": "Sin herramientas.", "tools": ["read"]}))
+write_file(ADIR + "/rt-scoped.agent.json", json_encode({"id": "rt-scoped", "system": "Solo datos.", "tools": [{"name": "ls", "paths": ["datos/*"]}]}))
 
 let created be []
 let threads be []
@@ -99,6 +100,16 @@ let r4 be runtime.deliver({"to": "rt-mute", "text": "ls"}, {"on_event": collect_
 set created to append(created, r4["session"])
 check(contains(r4["text"], "unknown tool"), "una tool fuera del allow-list no corre: " + slice(r4["text"], 0, 80))
 check(contains(denied, "unknown tool"), "y la puerta ve el rechazo")
+
+print("deliver: alcance por ruta")
+let sdenied be []
+task collect_scope(kind, data, tag)
+    when kind == "tool_denied"
+        set sdenied to append(sdenied, data["reason"])
+let rs be runtime.deliver({"to": "rt-scoped", "text": "ls"}, {"on_event": collect_scope})
+set created to append(created, rs["session"])
+check(contains(rs["text"], "DENIED by scope"), "ls de la raíz con ls limitado a datos/* → denegado: " + slice(rs["text"], 0, 90))
+check(length(sdenied) == 1 and starts_with(sdenied[0], "out of scope"), "la puerta ve el rechazo por alcance")
 
 print("deliver: sin humano, lo que pide aprobación se deniega")
 let r5 be runtime.deliver({"to": "build", "text": "peligro"}, {"mode": "ask", "ask_fn": nothing})
@@ -167,6 +178,7 @@ each id in created
     session.delete(id)
 rm_file(ADIR + "/rt-shop.agent.json")
 rm_file(ADIR + "/rt-mute.agent.json")
+rm_file(ADIR + "/rt-scoped.agent.json")
 proc_close(mock)
 
 when length(failures) > 0
