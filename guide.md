@@ -284,6 +284,48 @@ lampson --workspace /other  # pick a project without cd
 lampson --help
 ```
 
+### Headless: `lampson run`
+
+The same agent without a UI: one message in, the answer (or the event stream) out. For apps, bots, scripts and
+other agents. The design and roadmap live in [spec/engine.md](spec/engine.md).
+
+```bash
+lampson run "what does src/auth do?"                            # final answer on stdout
+lampson run --agent plan "review the last commit"               # any built-in or project agent
+echo "hola" | lampson run --agent shop --thread whatsapp:+54911… --json   # message from stdin, JSONL out
+lampson run --session 20261016-122626 "and the tests?"          # continue a known session
+```
+
+- `--thread T` is the conversation's identity outside Lampson (a phone number, a ticket, `cto:task-17`). The
+  same agent + thread always lands in the same session, so every customer has their own history.
+- `--json` prints one JSON object per line: `session` first, then the loop's events (`assistant`, `tool_call`,
+  `tool_result`, `tool_denied`, `usage`, `inbox`, `error`…), each with `agent` and `thread`, and `done` last
+  with `{text, steps, usage, stopped, session}`.
+- Nobody is there to approve, so anything that would ask is **denied** (the model sees it and says so). The mode
+  is the flag (`--ask|--strict|--yolo`), else the agent's, else `strict`.
+- Exit code: 0 ok · 1 the turn ended in an error · 2 bad usage (unknown agent, empty message).
+
+**Agents are files.** Besides the built-ins (`build`, `plan`, `review`, `explore`), a project can define its
+own in `.lampson/agents/<id>.agent.json` (the file name must match the id):
+
+```json
+{
+  "id": "shop",
+  "description": "Answers the bakery's customers",
+  "base": "none",
+  "system": "You are the assistant of Sol Bakery. Be brief and kind…",
+  "tools": ["plugin_catalog_search", "plugin_orders_*"],
+  "permission": "strict",
+  "steps": 12,
+  "budget_tokens": 60000,
+  "model": {"provider": "", "model": ""}
+}
+```
+
+`base: "lampson"` puts the coding agent's prompt (tools, project rules, AGENTS.md) before `system`; `"none"` uses
+only `system`. `tools` is an exact allow-list — built-in tools by name, plugin and MCP tools by full name or a
+`prefix_*` — and the model never sees anything else. Project agents also show up in `/agent` and the web.
+
 In the REPL, `/` lists every command (`/agent`, `/ask` `/yolo` `/strict`, `/model`, `/config`,
 `/files`, `/procs`, `/logs <name>`, `/stop <name>`, `/kill <pid>`, `/skills`, `/sessions`,
 `/resume <id>`, `/tokens`, `/flags`). `!cmd` runs a command yourself.

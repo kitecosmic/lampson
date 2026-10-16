@@ -94,6 +94,22 @@ Plugins are yours and local: any language, no sandbox unless you write them in S
 [lamps.sh](https://lamps.sh): `lamp add <ref>`, then `lamp mcp` as an MCP server in Lampson. (Until 0.2.6
 plugins were called *lamps*; old `.lampson/lamps/` folders and `LAMP_*` variables still work for now.)
 
+## Use it from your app
+
+Lampson also runs **headless**, as the engine behind something else — a bot that answers your shop's
+messages, a script that asks it about a database, another agent that delegates to it:
+
+```sh
+lampson run "summarize what changed today"                      # prints the answer
+echo "do you have whole-wheat bread?" | lampson run --agent shop --thread whatsapp:+5491122334455 --json
+```
+
+An agent is a file: `.lampson/agents/shop.agent.json` in your project, with its own prompt, the exact tools it
+may use and its permissions (`strict` by default when nobody is there to approve). Same `--thread` → same
+conversation, so each customer keeps their own history. `--json` streams every step as JSON lines.
+Details in [guide.md](guide.md#headless-lampson-run); where this is going (HTTP API, MCP server, channels,
+agent teams) in [spec/engine.md](spec/engine.md).
+
 ## Also in the box
 
 Sub-agents that work in parallel · skills (`SKILL.md` procedures, anything on [skills.sh](https://skills.sh)
