@@ -19,6 +19,23 @@ serve on 8767
         state_set("last", {"body": json of request, "signature": sig})
         give {"ok": true}
 
+    -- la API de Chatwoot que usa plugins/chatwoot (send): guarda el mensaje y el token que llegaron
+    route "POST /api/v1/accounts/:account/conversations/:conv/messages"
+        let tok be ""
+        let h be headers of request
+        each k in keys(h)
+            when lower(k) == "api_access_token"
+                set tok to text(h[k])
+        let n be state_get("cw_count")
+        state_set("cw_count", (when n == nothing then 0 otherwise n) + 1)
+        state_set("cw_last", {"account": params.account, "conversation": params.conv, "token": tok, "body": json of request})
+        give {"id": 999}
+
+    route "GET /chatwoot/last"
+        let n be state_get("cw_count")
+        let l be state_get("cw_last")
+        give {"count": when n == nothing then 0 otherwise n, "last": l}
+
     route "GET /last"
         let n be state_get("count")
         let l be state_get("last")

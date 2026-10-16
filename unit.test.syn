@@ -1491,3 +1491,39 @@ test "mailbox: espera por agente y clave de la conversación"
     assert(mailbox.key_of(s1, "m1") != mailbox.key_of({"to": "otro", "thread": "wa:1", "session": ""}, "m1"), "otro agente → otra fila")
     let s2 be {"to": "tienda", "thread": "", "session": ""}
     assert(mailbox.key_of(s2, "m1") != mailbox.key_of(s2, "m2"), "sin thread ni sesión: cada mensaje es su propia fila")
+
+use "./lib/channels.syn" as channels
+
+test "plugins: un canal puede no tener tools; config pasa los secretos; el chatwoot oficial se lee bien"
+    let cw be where(plugins.all(), (l) => l["name"] == "chatwoot")
+    assert_eq(length(cw), 1, "plugins/chatwoot viene con lampson")
+    assert(cw[0]["error"] == nothing, text(cw[0]["error"]))
+    assert_eq(cw[0]["channel"], {"agent": ""})
+    assert_eq(cw[0]["config"], ["CHATWOOT_URL", "CHATWOOT_TOKEN", "CHATWOOT_WEBHOOK_SECRET"])
+    assert_eq(cw[0]["tools"], [])
+    let d be plugins.PROJECT_DIR
+    write_file(d + "/rt-ch/plugin.json", json_encode({"kind": "exec", "command": "node ch.js", "channel": {"agent": "Tienda"}}))
+    write_file(d + "/rt-bad/plugin.json", json_encode({"kind": "exec", "command": "node x.js", "config": ["minusculas"], "channel": {}}))
+    write_file(d + "/rt-notools/plugin.json", json_encode({"kind": "exec", "command": "node x.js"}))
+    let all be plugins.all()
+    let ch be where(all, (l) => l["name"] == "rt-ch")[0]
+    assert(ch["error"] == nothing and ch["channel"]["agent"] == "tienda", "canal sin tools es válido; el agente en minúsculas")
+    assert(contains(text(where(all, (l) => l["name"] == "rt-bad")[0]["error"]), "UPPER_SNAKE"))
+    assert(contains(text(where(all, (l) => l["name"] == "rt-notools")[0]["error"]), "no tools"), "sin tools y sin channel sigue siendo un error")
+    assert(not contains(apply((l) => l["name"], plugins.channels()), "rt-ch"), "apagado no es un canal activo")
+    each n in ["rt-ch", "rt-bad", "rt-notools"]
+        rm_file(d + "/" + n + "/plugin.json")
+        when env("OS", "") == "Windows_NT"
+            run("cmd", ["/c", "rmdir", replace(d + "/" + n, "/", "\\")], 10)
+        otherwise
+            run("rmdir", [d + "/" + n], 10)
+
+test "canales: la salida de receive y a qué agente va"
+    assert(channels.parse_output("{\"messages\": []}")["ok"])
+    assert(channels.parse_output("log suelto\n{\"messages\": [{\"thread\": \"1\", \"text\": \"x\"}]}")["ok"], "la última línea JSON")
+    assert(not channels.parse_output("ERROR: plugin timed out")["ok"])
+    assert(not channels.parse_output("no es json")["ok"])
+    let l be {"channel": {"agent": "tienda"}}
+    assert_eq(channels.agent_for("chatwoot", l, {"agent": "Soporte"}), "soporte", "el mensaje manda")
+    assert_eq(channels.agent_for("chatwoot", l, {}), "tienda", "si no, el del manifiesto")
+    assert_eq(channels.agent_for("chatwoot", {"channel": {"agent": ""}}, {}), runtime.default_agent(), "si no, el agente por defecto")

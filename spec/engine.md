@@ -211,8 +211,31 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       es `lampson.cmd`).
 
 ### Fase 4 — Canales como plugins
-- [ ] Tipo de plugin `channel` en `plugin.json` (ruta webhook entrante + comando `send`)
-- [ ] Ejemplo oficial: Chatwoot
+Contrato en la cabecera de `lib/channels.syn`. Universal a propósito: cada uno arma el canal que necesite, la
+comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir más plataformas.
+- [x] Plugin con `"channel": {"agent": "<id>"}` en `plugin.json` (puede no tener tools). Dos acciones, cualquier
+      lenguaje: `receive` (webhook crudo → `{"messages": [...], "http"?}`) y `send` (respuesta → plataforma).
+- [x] `"config": ["X", …]` en cualquier plugin: el hijo recibe `PLUGIN_X` = `LAMPSON_X` del `.env` (secretos y
+      ajustes, también para plugins Synsema con techo `env=PLUGIN_*`).
+- [x] Webhook: `POST|GET /w/<slug>/ch/<canal>` (el hub lo reenvía sin passkey; la firma la verifica el plugin, que
+      recibe el body exacto). Se contesta enseguida; los mensajes van al buzón (fila, espera, mitad de turno) con
+      thread `<canal>:<thread>`; UNA respuesta por lote vía `send`. Agente: el del mensaje →
+      `LAMPSON_CHANNEL_<CANAL>_AGENT` → `channel.agent` → el por defecto. Log: `.lampson/channels/<canal>.log`.
+- [x] Oficial: **Chatwoot** (`plugins/chatwoot`, Synsema con techo `net`): verifica `X-Chatwoot-Signature`
+      (HMAC de `"{timestamp}.{body}"`, 5 min contra replays), solo mensajes entrantes y públicos (los salientes —
+      incluidas las respuestas del propio agente — se ignoran: sin eso el bot se contestaría a sí mismo), adjuntos
+      como links, responde por `POST /api/v1/accounts/<a>/conversations/<display_id>/messages`.
+- [x] Tests: `api_test.syn` de punta a punta contra un Chatwoot simulado (ráfaga firmada → un envío, firma inválida
+      y sin firma → 401, saliente ignorado, log); unitarios del manifiesto y del contrato.
+
+**Pendientes que salieron en la fase 4:**
+- [ ] Probar `plugins/chatwoot` contra un Chatwoot real (formato verificado con la doc oficial; `message_type`
+      llega como texto o número según la versión, cubierto).
+- [ ] Imágenes entrantes: hoy van como link en el texto; pasarlas como imagen si el modelo tiene visión.
+- [ ] Indicador de "escribiendo…" mientras el agente trabaja (acción opcional `typing` del canal).
+- [ ] Panel de canales en la web (encender, ver el log, la URL del webhook) — con la documentación final.
+- [ ] Próximos canales oficiales: Telegram (el más simple, buen segundo ejemplo), WhatsApp Cloud API directo,
+      Slack, Discord.
 
 ### Fase 5 — SDK
 - [ ] npm: `import { Lampson } from "lampson"` (wrapper sobre `lampson run --stdio` o la API)
@@ -228,7 +251,7 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
 
 ## Estado
 
-**Fase actual:** 4 — canales como plugins. Fases 1, 2 (con el buzón) y 3 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** 3b — MCP por HTTP. Fases 1, 2 (con el buzón), 3 y 4 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 

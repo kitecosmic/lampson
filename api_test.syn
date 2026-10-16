@@ -12,7 +12,10 @@ require file("workspace")
 require file("workspace/*")
 require file(".lampson")
 require file(".lampson/*")
+require file.read("plugins")
+require file.read("plugins/*")
 use "./lib/apikeys.syn" as apikeys
+use "./lib/plugins.syn" as plugins
 use "./lib/runtime.syn" as runtime
 use "./lib/session.syn" as session
 
@@ -46,7 +49,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -62,7 +65,7 @@ write_file(ADIR + "/rt-api2.agent.json", json_encode({"id": "rt-api2", "system":
 
 let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
 let cbs be proc_spawn("synsema", ["serve", "tests/mock_callback.syn"], {"stderr": "merge"})
-let web be proc_spawn("synsema", ["serve", "web.syn", "--port", "47990", "--bind", "127.0.0.1"], {"stderr": "merge", "env": {"LAMPSON_WEBHOOK_SECRET": "s3cret"}})
+let web be proc_spawn("synsema", ["serve", "web.syn", "--port", "47990", "--bind", "127.0.0.1"], {"stderr": "merge", "env": {"LAMPSON_WEBHOOK_SECRET": "s3cret", "LAMPSON_CHATWOOT_URL": "http://127.0.0.1:8767/", "LAMPSON_CHATWOOT_TOKEN": "tok-test", "LAMPSON_CHATWOOT_WEBHOOK_SECRET": "cwsecret", "LAMPSON_CHANNEL_CHATWOOT_AGENT": "rt-buf"}})
 check(wait_up("http://127.0.0.1:8765/v1/models"), "mock LLM arriba")
 check(wait_up("http://127.0.0.1:8767/last"), "receptor de callbacks arriba")
 check(wait_up("http://127.0.0.1:47990/w/test/api/health"), "web.syn arriba en :47990")
@@ -205,6 +208,55 @@ check(lastcb["count"] == before + 1, "un solo callback para la ráfaga (" + text
 check(length(lastcb["body"]["jobs"]) == 2 and lastcb["body"]["job"] == c1["json"]["job"], "con los dos jobs, encabezado por el primero")
 check(j2["status"] == "merged" and j2["merged_into"] == c1["json"]["job"], "el segundo job queda merged en el primero")
 set created to append(created, lastcb["body"]["session"])
+
+print("canales: el plugin chatwoot de punta a punta (webhook firmado → buzón → agente → API de Chatwoot)")
+let CH be "http://127.0.0.1:47990/w/test/ch"
+let cw_was_on be length(where(plugins.all(), (l) => l["name"] == "chatwoot" and l["enabled"])) > 0
+plugins.set_enabled("chatwoot", true)
+task cw_post(payload, secret)
+    let body be json_encode(payload)
+    let ts be text(floor(now()))
+    let hs be {"Content-Type": "application/json"}
+    when secret != ""
+        set hs["X-Chatwoot-Timestamp"] to ts
+        set hs["X-Chatwoot-Signature"] to "sha256=" + decode(hmac(ts + "." + body, secret), "hex")
+    let r be http_post(CH + "/chatwoot", body, hs, 30)
+    let d be {}
+    try
+        set d to json_decode(text(r["body"]))
+    recover err
+        set d to {"raw": text(r["body"])}
+    give {"status": r["status"], "json": d}
+task cw_msg(text_, ts, mtype)
+    give {"event": "message_created", "id": 5000 + ts, "content": text_, "created_at": ts, "message_type": mtype, "private": false, "sender": {"id": 9, "name": "Ana"}, "conversation": {"id": 4242, "display_id": 77}, "account": {"id": 1}, "inbox": {"id": 3}}
+check(http_post(CH + "/nope", "{}", {"Content-Type": "application/json"}, 10)["status"] == 404, "canal que no existe o está apagado → 404")
+let cw_before be json_decode(text(http_get("http://127.0.0.1:8767/chatwoot/last", {}, nothing, 10)["body"]))["count"]
+let w1 be cw_post(cw_msg("hola", 100, "incoming"), "cwsecret")
+let w2 be cw_post(cw_msg("tienen pan integral?", 200, "incoming"), "cwsecret")
+check(w1["status"] == 200 and w1["json"]["accepted"] == 1 and w2["json"]["accepted"] == 1, "los dos webhooks aceptados enseguida (sin esperar al agente)")
+check(cw_post(cw_msg("hola", 300, "incoming"), "otro-secreto")["status"] == 401, "firma inválida → 401")
+check(cw_post(cw_msg("hola", 300, "incoming"), "")["status"] == 401, "sin firma (con secreto configurado) → 401")
+let wo be cw_post(cw_msg("respuesta del bot", 300, "outgoing"), "cwsecret")
+check(wo["status"] == 200 and wo["json"]["accepted"] == 0, "un mensaje SALIENTE se ignora (el agente no se contesta a sí mismo)")
+let cw be nothing
+let tries3 be 0
+while tries3 < 60
+    sleep(0.5)
+    set tries3 to tries3 + 1
+    set cw to json_decode(text(http_get("http://127.0.0.1:8767/chatwoot/last", {}, nothing, 10)["body"]))
+    when cw["count"] > cw_before
+        set tries3 to 999
+check(cw["count"] == cw_before + 1, "UNA respuesta a Chatwoot para la ráfaga de 2 (" + text(cw["count"] - cw_before) + ")")
+check(cw["last"]["account"] == "1" and cw["last"]["conversation"] == "77" and cw["last"]["token"] == "tok-test", "a la conversación correcta, con el token de config")
+check(cw["last"]["body"]["message_type"] == "outgoing" and contains(cw["last"]["body"]["content"], "msgs=3"), "un turno con los dos mensajes: " + text(cw["last"]["body"]["content"]))
+let chlog be ""
+try
+    set chlog to read_file(".lampson/channels/chatwoot.log")
+recover err
+    set chlog to ""
+check(contains(chlog, "RECV 1:77") and contains(chlog, "SENT 1:77"), "el log del canal registra lo que entró y lo que salió")
+plugins.set_enabled("chatwoot", cw_was_on)
+rm_file(".lampson/channels/chatwoot.log")
 
 print("revocar")
 apikeys.remove(ka["id"])

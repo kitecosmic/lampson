@@ -1,0 +1,120 @@
+-- plugins/chatwoot/plugin.syn — canal Chatwoot (contrato en lib/channels.syn)
+--
+-- Chatwoot ya une WhatsApp, Instagram, Facebook, Telegram, email y el chat web en una bandeja: con este canal, un
+-- agente de Lampson contesta todo eso. Lampson lo corre con techo: stdout, time, env=PLUGIN_*, net.
+--
+--   receive  el webhook de Chatwoot (evento message_created). Verifica X-Chatwoot-Signature si hay secreto
+--            (HMAC-SHA256 de "<X-Chatwoot-Timestamp>.<body crudo>", con tolerancia de 5 min contra replays), y solo
+--            pasa los mensajes ENTRANTES y públicos: los salientes (incluidas las respuestas del propio agente, que
+--            Chatwoot también notifica) y las notas privadas se ignoran — si no, el agente se contestaría a sí mismo.
+--   send     POST /api/v1/accounts/<account>/conversations/<conversation>/messages con api_access_token.
+--
+-- Config (en el .env de Lampson): LAMPSON_CHATWOOT_URL=https://app.chatwoot.com (o tu instancia),
+-- LAMPSON_CHATWOOT_TOKEN=<access token de un agente o agent bot>, LAMPSON_CHATWOOT_WEBHOOK_SECRET=<el secreto que
+-- Chatwoot muestra al crear el webhook>, y LAMPSON_CHANNEL_CHATWOOT_AGENT=<el agente que atiende>.
+intent: "lampson channel plugin: Chatwoot inbox ↔ Lampson agent"
+
+require env("PLUGIN_*")
+require net
+require time
+
+let action be env("PLUGIN_TOOL", "")
+let args be json_decode(env("PLUGIN_ARGS", "{}"))
+
+task header(h, name)
+    each k in keys(h)
+        when lower(k) == name
+            give text(h[k])
+    give ""
+
+task field(m, k, fallback)
+    when m != nothing and type_of(m) == "map" and contains(m, k) and m[k] != nothing
+        give m[k]
+    give fallback
+
+task out(m)
+    print(json_encode(m))
+
+task ignore(why)
+    out({"messages": [], "ignored": why})
+
+task receive()
+    let body be text(field(args, "body", ""))
+    let h be field(args, "headers", {})
+    let sec be env("PLUGIN_CHATWOOT_WEBHOOK_SECRET", "")
+    when sec != ""
+        let ts be header(h, "x-chatwoot-timestamp")
+        let sig be header(h, "x-chatwoot-signature")
+        let expected be "sha256=" + decode(hmac(ts + "." + body, sec), "hex")
+        when ts == "" or sig != expected
+            out({"messages": [], "http": {"status": 401, "body": "invalid signature"}})
+            give false
+        let age be 0
+        try
+            set age to now() - number(ts)
+        recover err
+            set age to 99999
+        when age > 300 or age < -300
+            out({"messages": [], "http": {"status": 401, "body": "stale timestamp"}})
+            give false
+    let ev be nothing
+    try
+        set ev to json_decode(body)
+    recover err
+        ignore("body is not JSON")
+        give false
+    when text(field(ev, "event", "")) != "message_created"
+        ignore("event " + text(field(ev, "event", "")))
+        give false
+    -- message_type llega como texto ("incoming") o, según la versión, como número (0 = incoming)
+    let mt be field(ev, "message_type", "")
+    when not (mt == "incoming" or mt == 0)
+        ignore("not an incoming message")
+        give false
+    when field(ev, "private", false) == true
+        ignore("private note")
+        give false
+    let content be text(field(ev, "content", ""))
+    -- adjuntos: el agente recibe el link (la imagen no viaja; el modelo puede no tener visión)
+    each a in field(ev, "attachments", [])
+        let u be text(field(a, "data_url", ""))
+        when u != ""
+            set content to content + "\n[attachment: " + u + "]"
+    when trim(content) == ""
+        ignore("empty message")
+        give false
+    let conv be field(ev, "conversation", {})
+    let conv_id be field(conv, "display_id", field(conv, "id", nothing))
+    let account_id be field(field(ev, "account", {}), "id", nothing)
+    when conv_id == nothing or account_id == nothing
+        ignore("no account or conversation id")
+        give false
+    let who be field(ev, "sender", field(ev, "contact", {}))
+    let created be field(ev, "created_at", nothing)
+    let sent_at be when type_of(created) == "number" then created otherwise nothing
+    out({"messages": [{"thread": text(account_id) + ":" + text(conv_id), "text": content, "sent_at": sent_at, "from": {"id": text(field(who, "id", "")), "name": text(field(who, "name", "")), "kind": "human"}, "meta": {"account_id": account_id, "conversation_id": conv_id, "message_id": field(ev, "id", nothing), "inbox_id": field(field(ev, "inbox", {}), "id", nothing)}}]})
+    give true
+
+task send()
+    let base be env("PLUGIN_CHATWOOT_URL", "")
+    let tok be env("PLUGIN_CHATWOOT_TOKEN", "")
+    when base == "" or tok == ""
+        print("ERROR: set LAMPSON_CHATWOOT_URL and LAMPSON_CHATWOOT_TOKEN in Lampson's .env")
+        give false
+    while ends_with(base, "/")
+        set base to slice(base, 0, length(base) - 1)
+    let meta be field(args, "meta", {})
+    let url be base + "/api/v1/accounts/" + text(field(meta, "account_id", "")) + "/conversations/" + text(field(meta, "conversation_id", "")) + "/messages"
+    let r be http_post(url, json_encode({"content": text(field(args, "text", "")), "message_type": "outgoing", "private": false}), {"api_access_token": tok, "Content-Type": "application/json"}, 20)
+    when r["ok"]
+        print("sent to conversation " + text(field(meta, "conversation_id", "")))
+        give true
+    print("ERROR: Chatwoot answered " + text(r["status"]) + ": " + slice(text(field(r, "body", "")), 0, 200))
+    give false
+
+when action == "receive"
+    receive()
+otherwise when action == "send"
+    send()
+otherwise
+    print("ERROR: unknown action '" + action + "'")

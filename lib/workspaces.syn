@@ -364,6 +364,9 @@ task hub_routes(w)
     -- la API /v1 para apps (lib/api.syn) tampoco: la autentica el proceso del workspace con su API key (Bearer lk_…)
     each m in ["GET", "POST"]
         set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/v1/*path\"\n        proxy to \"" + base + "\"")
+    -- los webhooks de los canales (lib/channels.syn) tampoco: la firma de la plataforma la verifica el plugin
+    each m in ["GET", "POST"]
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/ch/*path\"\n        proxy to \"" + base + "\"")
     give join(lines, "\n")
 
 -- reescribe hub.syn desde la plantilla si cambió (bajo --watch, el hub se reinicia solo)

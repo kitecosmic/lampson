@@ -27,11 +27,13 @@ use "./loop.syn" as loop
 use "./agents.syn" as agents
 use "./approvals.syn" as approvals
 use "./permission.syn" as permission
+use "./plugins.syn" as plugins
 
 export let DEFAULT_BUFFER be {"quiet_s": 3, "max_s": 15}
 export let JOBS_DIR be ".lampson/api/jobs"
 export let APPROVAL_TIMEOUT be 180
 export let WAIT_TIMEOUT be 900
+export let CHANNEL_LOG_DIR be ".lampson/channels"
 
 -- ¿hay estado de serve? (bajo `synsema run` no: ahí cada proceso es un solo mensaje y no hace falta fila)
 export task available()
@@ -291,6 +293,30 @@ task run_batch(k, spec, items)
                     set j["delivered"] to ok
                     set j["finished"] to format_time(now())
                     save_job(j)
+    -- canales (lib/channels.syn): UNA respuesta por lote y canal, por la acción `send` del plugin. El meta del último
+    -- mensaje (ids de la plataforma más recientes). Un error del agente no se le manda al cliente: queda en el log.
+    let chans be []
+    each it in all
+        when it["reply_channel"] != "" and not contains(chans, it["reply_channel"])
+            set chans to append(chans, it["reply_channel"])
+    each ch in chans
+        let mine be where(all, (it) => it["reply_channel"] == ch)
+        let last be mine[length(mine) - 1]
+        let sent be {"channel": ch, "ok": false, "output": ""}
+        when starts_with(result["stopped"], "error") or trim(result["text"]) == ""
+            set sent["output"] to "not sent: " + (when trim(result["text"]) == "" then "empty answer" otherwise result["stopped"])
+        otherwise
+            let pl be plugins.channel(ch)
+            when pl == nothing
+                set sent["output"] to "not sent: channel '" + ch + "' is not enabled anymore"
+            otherwise
+                let out be text(plugins.invoke(pl, "send", {"thread": last["reply_thread"], "text": result["text"], "meta": last["meta"], "agent": result["agent"], "session": result["session"], "batch": ids}))
+                set sent["output"] to out
+                set sent["ok"] to not starts_with(out, "ERROR")
+        when not file_exists(CHANNEL_LOG_DIR + "/" + ch + ".log")
+            write_file(CHANNEL_LOG_DIR + "/" + ch + ".log", "")
+        append_file(CHANNEL_LOG_DIR + "/" + ch + ".log", format_time(now()) + "  " + (when sent["ok"] then "SENT " otherwise "FAIL ") + last["reply_thread"] + "  batch=" + text(length(ids)) + "  " + replace(slice(sent["output"], 0, 200), "\n", " ") + "\n")
+        bus_publish(topic, {"kind": "channel_sent", "data": sent, "tag": "", "agent": result["agent"], "thread": result["thread"]})
     give result
 
 export task work(spec_json)
@@ -349,7 +375,7 @@ agent MailboxWorker
 -- ---------- lo que llama la puerta ----------
 
 -- arma el item y lo encola; lanza el worker si hace falta. → {id, key}
--- opts: {mode, buffer, callback, job}
+-- opts: {mode, buffer, callback, job, reply_channel, reply_thread}
 export task submit(sobre, opts)
     require time
     require random
@@ -360,7 +386,7 @@ export task submit(sobre, opts)
     let sent be nothing
     when contains(sobre["meta"], "sent_at")
         set sent to sobre["meta"]["sent_at"]
-    let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true}
+    let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true, "reply_channel": when contains(opts, "reply_channel") then opts["reply_channel"] otherwise "", "reply_thread": when contains(opts, "reply_thread") then opts["reply_thread"] otherwise ""}
     when post(k, item)
         let buf be opts["buffer"]
         spawn MailboxWorker with spec_json = json_encode({"key": k, "mode": opts["mode"], "buffer": buf})

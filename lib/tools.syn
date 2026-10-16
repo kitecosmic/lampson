@@ -130,7 +130,7 @@ task plugin_tool(action, name, manifest, files)
         give "no plugins found. A plugin is a folder with a plugin.json manifest: " + plugins.GLOBAL_DIR + "/<name>/ (global) or " + plugins.PROJECT_DIR + "/<name>/ (this project; you can create it with write). See the lampson skill for the manifest format."
     let lines be []
     each l in sm
-        set lines to append(lines, l["name"] + " (" + l["scope"] + ", " + l["kind"] + ", " + (when l["enabled"] then "ON" otherwise "off") + "): " + (when l["error"] != nothing then "BROKEN — " + text(l["error"]) otherwise text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]" + (when l["description"] != "" then " — " + l["description"] otherwise "")) + (when l["legacy"] then " [" + plugins.LEGACY_HINT + "]" otherwise ""))
+        set lines to append(lines, l["name"] + " (" + l["scope"] + ", " + l["kind"] + ", " + (when l["enabled"] then "ON" otherwise "off") + "): " + (when l["error"] != nothing then "BROKEN — " + text(l["error"]) otherwise (when l["channel"] then "CHANNEL (webhook /ch/" + l["name"] + "; no tools for you)" otherwise text(length(l["tools"])) + " tools [" + join(l["tools"], ", ") + "]") + (when l["description"] != "" then " — " + l["description"] otherwise "")) + (when l["legacy"] then " [" + plugins.LEGACY_HINT + "]" otherwise ""))
     give join(lines, "\n")
 
 let PLUGIN_SPEC be {

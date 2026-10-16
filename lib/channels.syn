@@ -1,0 +1,115 @@
+-- lib/channels.syn — canales: WhatsApp, Telegram, Slack, Chatwoot… como PLUGINS (spec/engine.md, fase 4)
+--
+-- Lampson no sabe qué es ninguna plataforma. Define un contrato y cada canal es un plugin (cualquier lenguaje, o
+-- Synsema con techo de capacidades) con "channel" en su plugin.json y dos acciones:
+--
+--   receive  Lampson le pasa el webhook CRUDO de la plataforma (PLUGIN_ARGS):
+--              {"method", "path", "query", "headers", "body"}        body = el texto exacto (para verificar firmas)
+--            y el plugin imprime por stdout UN JSON:
+--              {"messages": [{"thread", "text", "sent_at"?, "from"?, "images"?, "meta"?, "agent"?}],
+--               "http": {"status", "body", "content_type"}?}       ← lo que Lampson le responde a la plataforma
+--            Sin mensajes (un evento que no interesa, una verificación de webhook) → {"messages": []} o un "http".
+--   send     Lampson le pasa la respuesta del agente: {"thread", "text", "meta", "agent", "session", "batch"}
+--            (thread y meta = los que devolvió receive para el último mensaje del lote) y el plugin la manda.
+--            Imprime lo que quiera; una salida que empieza con "ERROR" cuenta como fallo (queda en el log).
+--
+-- Lampson pone todo lo demás: la ruta del webhook (POST/GET /w/<slug>/ch/<canal>, que el hub reenvía sin passkey:
+-- la firma de la plataforma la verifica el plugin en receive), el buzón de cada conversación (lib/mailbox.syn:
+-- fila, espera de silencio, mensajes a mitad de turno), las sesiones por cliente, los permisos y UNA respuesta por
+-- lote. A la plataforma se le contesta enseguida (no espera al agente).
+--
+-- El thread de la sesión es "<canal>:<thread>" (un mismo id en dos canales no se mezcla). El agente: el que diga el
+-- mensaje, si no LAMPSON_CHANNEL_<CANAL>_AGENT (.env), si no el del manifiesto ("channel": {"agent"}), si no el
+-- agente por defecto. Secretos del canal: "config" en plugin.json (PLUGIN_<X> = LAMPSON_<X>).
+-- Log por canal: .lampson/channels/<canal>.log (lo que entró y lo que salió).
+
+use "./plugins.syn" as plugins
+use "./mailbox.syn" as mailbox
+use "./runtime.syn" as runtime
+
+task log(name, line)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    let f be mailbox.CHANNEL_LOG_DIR + "/" + name + ".log"
+    when not file_exists(f)
+        write_file(f, "")
+    append_file(f, format_time(now()) + "  " + replace(line, "\n", " ") + "\n")
+
+task jresp(status, m)
+    give {"status": status, "body": json_encode(m), "ctype": "application/json", "accepted": 0}
+
+-- la salida del plugin → {ok, data, error}: el stdout entero como JSON, o su última línea JSON (por si imprimió
+-- algo antes)
+export task parse_output(raw)
+    let t be trim(text(raw))
+    when starts_with(t, "ERROR")
+        give {"ok": false, "data": nothing, "error": slice(t, 0, 300)}
+    try
+        give {"ok": true, "data": json_decode(t), "error": ""}
+    recover err
+        let lines be where(split(replace(t, "\r", ""), "\n"), (l) => starts_with(trim(l), "{"))
+        when length(lines) > 0
+            try
+                give {"ok": true, "data": json_decode(trim(lines[length(lines) - 1])), "error": ""}
+            recover err2
+                give {"ok": false, "data": nothing, "error": "receive did not print JSON: " + slice(t, 0, 200)}
+    give {"ok": false, "data": nothing, "error": "receive did not print JSON: " + slice(t, 0, 200)}
+
+export task agent_for(name, l, m)
+    require env("LAMPSON_*")
+    when contains(m, "agent") and m["agent"] != nothing and text(m["agent"]) != ""
+        give lower(text(m["agent"]))
+    let e be env("LAMPSON_CHANNEL_" + upper(replace(name, "-", "_")) + "_AGENT", "")
+    when e != ""
+        give lower(e)
+    when l["channel"]["agent"] != ""
+        give l["channel"]["agent"]
+    give runtime.default_agent()
+
+-- un webhook entrante → {status, body, ctype, accepted}
+export task handle(name, req)
+    require exec
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let l be plugins.channel(name)
+    when l == nothing
+        give jresp(404, {"error": "no enabled channel named '" + name + "' (turn it on: /plugins on " + name + ")"})
+    let p be parse_output(plugins.invoke(l, "receive", req))
+    when not p["ok"]
+        log(name, "RECV-ERROR " + p["error"])
+        give jresp(500, {"error": "the channel plugin failed: " + p["error"]})
+    let d be p["data"]
+    let msgs be when type_of(d) == "map" and contains(d, "messages") and type_of(d["messages"]) == "list" then d["messages"] otherwise []
+    let names be runtime.names()
+    let accepted be 0
+    each m in msgs
+        let th be when contains(m, "thread") and m["thread"] != nothing then text(m["thread"]) otherwise ""
+        let tx be when contains(m, "text") and m["text"] != nothing then text(m["text"]) otherwise ""
+        let ag be agent_for(name, l, m)
+        when th == "" or trim(tx) == ""
+            log(name, "SKIP a message without thread or text")
+        otherwise when not contains(names, ag)
+            log(name, "SKIP no agent named '" + ag + "' (set LAMPSON_CHANNEL_" + upper(replace(name, "-", "_")) + "_AGENT or channel.agent)")
+        otherwise
+            let meta be when contains(m, "meta") and type_of(m["meta"]) == "map" then m["meta"] otherwise {}
+            when contains(m, "sent_at") and m["sent_at"] != nothing
+                set meta["sent_at"] to m["sent_at"]
+            let sobre be {"to": ag, "thread": name + ":" + th, "session": "", "from": when contains(m, "from") and type_of(m["from"]) == "map" then m["from"] otherwise {}, "text": tx, "images": when contains(m, "images") and type_of(m["images"]) == "list" then m["images"] otherwise [], "channel": name, "meta": meta}
+            let spec be runtime.get(ag)
+            mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, mailbox.DEFAULT_BUFFER), "reply_channel": name, "reply_thread": th})
+            log(name, "RECV " + th + " → " + ag + "  " + slice(tx, 0, 120))
+            set accepted to accepted + 1
+    -- lo que el plugin quiere que se le responda a la plataforma (verificación de webhook, un 200 específico…)
+    when type_of(d) == "map" and contains(d, "http") and type_of(d["http"]) == "map"
+        let h be d["http"]
+        let body be when contains(h, "body") and h["body"] != nothing then (when type_of(h["body"]) == "text" then h["body"] otherwise json_encode(h["body"])) otherwise ""
+        give {"status": when contains(h, "status") then floor(number(h["status"])) otherwise 200, "body": body, "ctype": when contains(h, "content_type") then text(h["content_type"]) otherwise "text/plain", "accepted": accepted}
+    give {"status": 200, "body": json_encode({"ok": true, "accepted": accepted}), "ctype": "application/json", "accepted": accepted}

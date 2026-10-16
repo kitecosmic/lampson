@@ -72,6 +72,7 @@ use "./lib/origin.syn" as origin
 use "./lib/runtime.syn" as runtime
 use "./lib/api.syn" as api
 use "./lib/mailbox.syn" as mailbox
+use "./lib/channels.syn" as channels
 
 let APPROVAL_TIMEOUT be 180
 
@@ -724,6 +725,18 @@ serve on 8080
                         send {"kind": "done", "data": r, "tag": "", "agent": r["agent"], "thread": r["thread"]} as "event"
                         set finished to true
             bus_unsubscribe(sub)
+
+    -- ---------- canales (lib/channels.syn · spec/engine.md fase 4) ----------
+    -- El webhook de la plataforma. Sin auth de Lampson: la firma de la plataforma la verifica el plugin en `receive`
+    -- (recibe el body exacto). GET para las verificaciones de webhook (Meta, Slack…), que el plugin contesta con "http".
+    route "POST /w/:slug/ch/:name"
+        state_set("lampson:last_used", now())
+        let r be channels.handle(params.name, {"method": "POST", "path": request.path, "query": query, "headers": headers of request, "body": read_body()})
+        give respond(r["body"], r["ctype"], r["status"])
+
+    route "GET /w/:slug/ch/:name"
+        let r be channels.handle(params.name, {"method": "GET", "path": request.path, "query": query, "headers": headers of request, "body": ""})
+        give respond(r["body"], r["ctype"], r["status"])
 
     route "GET /w/:slug/v1/jobs/:id"
         let a be api.authorize(headers of request)
