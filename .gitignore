@@ -21,3 +21,7 @@ hub.syn
 # bytecode de Python (sdk/python, tests)
 __pycache__/
 *.pyc
+# build del SDK de Python
+sdk/python/dist/
+sdk/python/build/
+sdk/python/*.egg-info/
