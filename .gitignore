@@ -17,3 +17,7 @@ tests/*.txt
 *.tgz
 # hub generado desde hub.tpl.syn por lib/workspaces.syn
 hub.syn
+
+# bytecode de Python (sdk/python, tests)
+__pycache__/
+*.pyc
