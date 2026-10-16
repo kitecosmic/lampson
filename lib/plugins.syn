@@ -11,6 +11,9 @@
 --                  "tools": [{"name", "description", "parameters": {JSON Schema}, "readonly": false}],
 --                  "config": ["CHATWOOT_TOKEN", …]   (opcional: el hijo recibe PLUGIN_<X> = LAMPSON_<X> del .env/entorno;
 --                                                     así un plugin syn con techo env=PLUGIN_* también tiene sus secretos)
+--                  "instructions": "INSTRUCTIONS.md" (opcional: cómo usar sus tools — texto, o un .md de su carpeta;
+--                                                     sin el campo, INSTRUCTIONS.md si existe. Va al prompt de cada
+--                                                     agente que tenga alguna de sus tools: el plugin trae su proceso)
 --                  "channel": {"agent": "tienda"}}   (opcional: un CANAL — lib/channels.syn. Sus acciones `receive` y
 --                                                     `send` no son tools del modelo, así que un canal puede no tener tools)
 --
@@ -49,6 +52,7 @@ let LEGACY_STATE_FILE be ".lampson/lamps.json"
 export let PREFIX be "plugin_"
 export let LEGACY_HINT be "old .lampson/lamps/ folder — rename it to .lampson/plugins/ (and lamp.json to plugin.json)"
 let DEFAULT_TIMEOUT be 60
+let MAX_INSTRUCTIONS be 12000
 let BASE_CAPS be "stdout,time,env=PLUGIN_*,env=LAMP_*"
 
 -- nombre de plugin: SIN "_" (el separador de plugin_<plugin>_<tool>); las tools sí pueden llevarlo
@@ -102,7 +106,17 @@ task read_manifest(dir, name, scope, legacy)
         when not contains(t, "name") or not valid_tool_name(t["name"])
             give {"ok": false, "name": name, "scope": scope, "legacy": is_legacy, "error": "a tool has no valid name"}
         set tools to append(tools, {"name": text(t["name"]), "description": when contains(t, "description") then text(t["description"]) otherwise "", "parameters": when contains(t, "parameters") then t["parameters"] otherwise {"type": "object", "properties": {}}, "readonly": contains(t, "readonly") and t["readonly"] == true})
-    give {"ok": true, "name": name, "scope": scope, "legacy": is_legacy, "plugin": {"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "legacy": is_legacy, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools, "channel": channel, "config": config}}
+    -- instrucciones: texto en el manifiesto, o un .md de la carpeta (por defecto INSTRUCTIONS.md)
+    let instr be ""
+    let ifile be when contains(doc, "instructions") and doc["instructions"] != nothing then text(doc["instructions"]) otherwise "INSTRUCTIONS.md"
+    when ends_with(lower(ifile), ".md") and not contains(ifile, "/") and not contains(ifile, "\\") and not contains(ifile, "\n")
+        when file_exists(dir + "/" + name + "/" + ifile)
+            set instr to trim(read_file(dir + "/" + name + "/" + ifile))
+    otherwise
+        set instr to trim(ifile)
+    when length(instr) > MAX_INSTRUCTIONS
+        set instr to slice(instr, 0, MAX_INSTRUCTIONS)
+    give {"ok": true, "name": name, "scope": scope, "legacy": is_legacy, "plugin": {"instructions": instr,"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "legacy": is_legacy, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools, "channel": channel, "config": config}}
 
 task scan(dir, scope, legacy)
     let out be []
@@ -154,7 +168,7 @@ export task all()
             set l["error"] to nothing
             set out to append(out, l)
         otherwise
-            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "legacy": r["legacy"], "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "channel": nothing, "config": [], "enabled": false, "error": r["error"]})
+            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "legacy": r["legacy"], "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "channel": nothing, "config": [], "instructions": "", "enabled": false, "error": r["error"]})
     give out
 
 export task enabled()
@@ -343,6 +357,24 @@ export task invoke(l, tool, args)
         otherwise
             set resolved to append(resolved, tok)
     give c.truncate(run_child(resolved[0], slice(resolved, 1, length(resolved)), c.ROOT, envs, l["timeout"]), c.MAX_OUTPUT)
+
+-- las instrucciones de los plugins encendidos que tienen alguna tool en `tool_names` (el catálogo de un agente),
+-- listas para sumar a su prompt. Un agente sin tools del plugin no las recibe.
+export task instructions(tool_names)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let out be ""
+    each l in enabled()
+        when l["instructions"] != ""
+            let mine be where(l["tools"], (t) => contains(tool_names, tool_name(l["name"], t["name"])))
+            when length(mine) > 0
+                set out to out + "\n\n# Plugin " + l["name"] + "\n" + l["instructions"]
+    give out
 
 -- los canales encendidos (plugins con "channel"), y uno por nombre
 export task channels()

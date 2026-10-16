@@ -1589,3 +1589,48 @@ test "workspaces: un workspace con un canal encendido cuenta como en uso (no se 
         run("cmd", ["/c", "rmdir", "/s", "/q", replace(d, "/", "\\")], 10)
     otherwise
         run("rm", ["-rf", d], 10)
+
+test "plugins: instrucciones del plugin en el prompt de los agentes que tienen sus tools (y solo de esos)"
+    let ldir be "workspace/.lampson/plugins/howto"
+    write_file(ldir + "/plugin.json", json_encode({"name": "howto", "kind": "syn", "entry": "plugin.syn", "tools": [{"name": "run_job", "description": "corre el job"}]}))
+    write_file(ldir + "/plugin.syn", "print(\"ok\")\n")
+    write_file(ldir + "/INSTRUCTIONS.md", "Antes de run_job, lee el skill deploy y confirma la rama.\n")
+    write_file(runtime.PROJECT_DIR + "/rt-i.agent.json", json_encode({"id": "rt-i", "system": "Eres el operador.", "tools": ["plugin_howto_*"]}))
+    write_file(runtime.PROJECT_DIR + "/rt-j.agent.json", json_encode({"id": "rt-j", "system": "Eres otro.", "tools": ["read"]}))
+    -- apagado: nadie las recibe
+    assert(not contains(runtime.boot("rt-i", {}, nothing)["system"]["content"], "skill deploy"))
+    assert(contains(plugins.set_enabled("howto", true), "ON"))
+    let si be runtime.boot("rt-i", {}, nothing)["system"]["content"]
+    assert(starts_with(si, "Eres el operador.") and contains(si, "# Plugin howto\nAntes de run_job, lee el skill deploy"), si)
+    assert(not contains(runtime.boot("rt-j", {}, nothing)["system"]["content"], "skill deploy"), "sin tools del plugin, sin sus instrucciones")
+    assert(contains(runtime.boot("build", {}, nothing)["system"]["content"], "# Plugin howto"), "el integrado tiene todas las tools encendidas")
+    -- también texto en el manifiesto, en lugar del .md
+    write_file(ldir + "/plugin.json", json_encode({"name": "howto", "kind": "syn", "entry": "plugin.syn", "instructions": "Usa run_job solo de noche.", "tools": [{"name": "run_job", "description": "corre el job"}]}))
+    assert(contains(runtime.boot("rt-i", {}, nothing)["system"]["content"], "# Plugin howto\nUsa run_job solo de noche."))
+    assert(contains(plugins.set_enabled("howto", false), "OFF"))
+    rm_file(runtime.PROJECT_DIR + "/rt-i.agent.json")
+    rm_file(runtime.PROJECT_DIR + "/rt-j.agent.json")
+
+test "plugin orders: cotiza con promos, valida, guarda el pedido, baja el stock y recuerda al cliente"
+    write_file("workspace/.lampson/orders/catalog.json", json_encode({"store": "Test", "delivery": {"fee": 1500, "free_from": 15000, "eta": "1 h"}, "payment": ["efectivo", "transferencia"], "products": [{"sku": "PAN", "name": "Pan", "price": 3200, "stock": 3, "second_half": true}, {"sku": "MED", "name": "Medialuna", "price": 900, "stock": 30, "pack": {"qty": 12, "price": 9600}}, {"sku": "OUT", "name": "Agotado", "price": 100, "stock": 0}]}))
+    assert(contains(plugins.set_enabled("orders", true), "ON"))
+    let q be json_decode(plugins.call("plugin_orders_quote", {"items": [{"sku": "pan", "qty": 2}, {"sku": "MED", "qty": 13}], "delivery": "delivery"}))
+    assert_eq(q["subtotal"], 4800 + 10500, "2º pan a mitad + docena con pack")
+    assert_eq(q["delivery_fee"], 0, "envío gratis desde 15000")
+    assert_eq(json_decode(plugins.call("plugin_orders_quote", {"items": [{"sku": "PAN", "qty": 1}], "delivery": "delivery"}))["total"], 4700)
+    let short be json_decode(plugins.call("plugin_orders_quote", {"items": [{"sku": "OUT", "qty": 1}, {"sku": "NOPE", "qty": 1}]}))
+    assert(not short["ok"] and length(short["short"]) == 1 and short["unknown"] == ["NOPE"])
+    assert(contains(short["valid_skus"], "PAN = Pan"), "un sku inventado trae los válidos")
+    let miss be json_decode(plugins.call("plugin_orders_place_order", {"customer": {"name": "Ana"}, "items": [{"sku": "PAN", "qty": 1}], "delivery": "delivery", "payment": "efectivo"}))
+    assert(not miss["ok"] and contains(miss["error"], "address"))
+    assert(contains(json_decode(plugins.call("plugin_orders_place_order", {"customer": {"name": "Ana"}, "items": [{"sku": "PAN", "qty": 1}], "delivery": "pickup", "payment": "cripto"}))["error"], "not accepted"))
+    assert(contains(json_decode(plugins.call("plugin_orders_place_order", {"customer": {"name": "Ana"}, "items": [{"sku": "PAN", "qty": 9}], "delivery": "pickup", "payment": "efectivo"}))["error"], "not enough stock"))
+    let o be json_decode(plugins.call("plugin_orders_place_order", {"customer": {"name": "Ana", "phone": "11 5555-1234"}, "items": [{"sku": "PAN", "qty": 2}], "delivery": "delivery", "address": "Mitre 230", "payment": "Efectivo"}))
+    assert(o["ok"] and o["order_id"] == "P-0001" and o["total"] == 6300 and o["payment"] == "efectivo" and o["eta"] == "1 h", json_encode(o))
+    let cat be json_decode(read_file("workspace/.lampson/orders/catalog.json"))
+    assert_eq(where(cat["products"], (p) => p["sku"] == "PAN")[0]["stock"], 1, "stock bajó")
+    let c be json_decode(plugins.call("plugin_orders_find_customer", {"phone": "1155551234"}))
+    assert(c["found"] and c["address"] == "Mitre 230" and c["orders"][0]["id"] == "P-0001" and c["orders"][0]["items"][0]["sku"] == "PAN", "para repetir un pedido: los sku")
+    assert_eq(json_decode(plugins.call("plugin_orders_order_status", {"order_id": "p-0001"}))["total"], 6300)
+    assert(contains(plugins.instructions(["plugin_orders_quote"]), "# Plugin orders"))
+    assert(contains(plugins.set_enabled("orders", false), "OFF"))

@@ -87,7 +87,12 @@ Turn it on with `/plugins on postgres` or the **plugins** pill in the web UI. Ke
 or inside a project (`.lampson/plugins/` — commit it and your team has it). The agent can *write* a plugin for you;
 turning it on is always yours.
 
-→ [How plugins work](https://lampson.org/docs/plugins) · the example ships in `plugins/example-hello/`.
+A plugin can also bring **instructions** (`INSTRUCTIONS.md` in its folder): how to use its tools — a backend
+process, "read the `release` skill first", a long precise prompt. Lampson adds them to the prompt of every agent
+that has the plugin's tools.
+
+→ [How plugins work](https://lampson.org/docs/plugins) · the example ships in `plugins/example-hello/` · a complete
+one, `plugins/orders/`, takes orders by chat end to end → [recipe](https://lampson.org/docs/orders).
 
 Plugins are yours and local: any language, no sandbox unless you write them in Synsema. For tools with an
 **enforced capability ceiling**, versioned and shared with any agent (Claude Code, Cursor, Lampson…), use

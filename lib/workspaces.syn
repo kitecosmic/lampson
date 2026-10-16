@@ -361,9 +361,11 @@ task hub_routes(w)
     each m in ["GET", "POST"]
         set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/api/*path\" requires auth\n        proxy to \"" + base + "\"")
     set lines to append(lines, "    route \"GET /w/" + w["slug"] + "/approve/*path\"\n        proxy to \"" + base + "\"")
-    -- la API /v1 para apps (lib/api.syn) tampoco: la autentica el proceso del workspace con su API key (Bearer lk_…)
+    -- la API /v1 para apps (lib/api.syn) tampoco: la autentica el proceso del workspace con su API key (Bearer lk_…).
+    -- POST /v1/messages espera al agente (buzón + turno con tools): sin `timeout` el proxy corta a los 30 s con 504
+    -- (visto 2026-10-16 con una ráfaga real); 600 s, como el bash más largo
     each m in ["GET", "POST"]
-        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/v1/*path\"\n        proxy to \"" + base + "\"")
+        set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/v1/*path\"\n        timeout 600\n        proxy to \"" + base + "\"")
     -- los webhooks de los canales (lib/channels.syn) tampoco: la firma de la plataforma la verifica el plugin
     each m in ["GET", "POST"]
         set lines to append(lines, "    route \"" + m + " /w/" + w["slug"] + "/ch/*path\"\n        proxy to \"" + base + "\"")

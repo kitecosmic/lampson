@@ -369,7 +369,12 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
 **Documentación pública** (2026-10-16): lampson-site, rama `docs/engine` — grupo «Lampson como motor» (engine,
 agents, headless, api, channels, mcp-server, sdk) en en/es/pt, más MCP, plugins, comandos, configuración, interfaz
 web, FAQ, portada y llms.txt actualizados; 0 enlaces rotos en los tres idiomas. `main` de Lampson ya tiene el motor
-(merge 2026-10-16) y npm 0.3.0 / PyPI 0.2.10 están publicados.
+(merge 2026-10-16) y npm 0.3.0 / PyPI 0.3.0 están publicados.
+
+**Pedidos de punta a punta** (2026-10-16, rama `feat/orders`): plugin `orders` oficial + instrucciones de plugin +
+dos arreglos del buzón que salieron de la prueba real. Documentado en lampson-site (`docs/*/orders.md`, sección
+«Instrucciones» de plugins). Telegram en modo webhook real por el túnel `https://7qsh3d-tunnel.synsema.app`
+(`syn tunnel … --service`); el hub arranca al iniciar sesión (`lampson --install`, carpeta Inicio).
 
 **Fase actual:** motor completo (fases 1-5) y los pendientes cerrados, salvo los que necesitan algo de afuera
 (Chatwoot real, webhook real de Telegram con dominio/túnel, publicar en PyPI/npm) y los próximos canales. Siguiente:
@@ -387,6 +392,31 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — **Pedidos por chat de punta a punta, probado con una conversación real** (modelo `glm-5.3-flash`,
+  cliente escribiendo en ráfagas con pausas de 2 a 6 s, por `/v1/messages` a través del hub — el mismo buzón que
+  Telegram). Cuatro conversaciones: Martín (pan blanco sin stock → alternativa, cotización con promo y pack, se
+  acerca al envío gratis y suma alfajores, dirección en cuatro mensajes, confirma → P-0001; después agrega una torta
+  para mañana 8 h → P-0002 con `when` y nota), un pedido de backend sin humano (P-0003), Ana que vuelve y pide «lo
+  mismo» con su teléfono (`find_customer` → P-0004). Totales todos correctos, stock descontado.
+  - **Instrucciones de plugin** (`plugin.json` `"instructions"`: texto o un `.md`; sin el campo, `INSTRUCTIONS.md`):
+    se suman al system de cada agente que tiene alguna de sus tools (`runtime.system_for` →
+    `plugins.instructions(catálogo del agente)`), integrados incluidos. Genérico a propósito (Joel): un proceso de
+    backend, «lee el skill X», un prompt largo, recomendar otras tools/MCP/plugins — no solo chat. El agente
+    `tienda` quedó con solo su personalidad; el proceso de pedidos lo trae el plugin.
+  - **Plugin `orders`** (syn, techo `file=workspace/.lampson/orders/*`): catalog, quote, place_order, find_customer,
+    order_status. Las cuentas las hace el plugin (pack, segunda a mitad, envío gratis desde), `place_order`
+    recalcula, valida pago/dirección/stock, guarda `P-NNNN.json`, baja stock, guarda clientes por teléfono o nombre.
+    Visto en la traza: el modelo inventó SKUs al repetir un pedido → `quote` devuelve `valid_skus` y `find_customer`
+    trae los sku de cada línea.
+  - **Buzón: respuesta vieja** — con pausas de 4 s salió «pasame tu nombre» cuando el nombre ya había llegado: el
+    mensaje entró mientras el modelo escribía la respuesta final (sin tools), y el loop solo miraba el buzón antes
+    de cada llamada. Ahora `opts.inbox_final` (lo pone el buzón): si al terminar hay mensajes nuevos, se descarta el
+    borrador, entran los mensajes y se responde de nuevo. En la sesión queda solo la respuesta final.
+  - **Hub: 504 a los 30 s** en `POST /v1/messages` síncrono (el proxy corta por defecto): las rutas `/v1` del hub
+    llevan `timeout 600`.
+  - Pendiente posible: modificar/cancelar un pedido confirmado (hoy el agente arma uno nuevo); el alias de pago va
+    en `policies` del catálogo.
 
 - **2026-10-16** — El buzón va en el **runtime**, no en cada canal: lo aprovechan la API, cualquier canal-plugin y
   después los agentes que se mandan mensajes (fase 6), y nadie que escriba un canal tiene que reimplementarlo. La

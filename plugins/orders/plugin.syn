@@ -1,0 +1,224 @@
+-- plugins/orders/plugin.syn — tomar pedidos: catálogo, cotización exacta, pedido guardado, clientes, stock
+--
+-- Lampson lo corre por cada llamada con el techo del manifiesto: solo puede tocar workspace/.lampson/orders/.
+--   catalog.json    el catálogo (lo escribe el dueño; ver docs/recipes): store, hours, delivery, payment, products, policies
+--                   producto: {sku, name, price, unit, stock, notes, pack: {qty, price}, second_half: true}
+--   P-0001.json …   un archivo por pedido
+--   customers.json  clientes por teléfono (o por nombre si no dio teléfono): nombre, dirección, pedidos
+-- Los precios se calculan SIEMPRE acá desde el catálogo: el modelo nunca suma ni pone precios.
+intent: "lampson plugin: take orders against a catalog — quote, place, customers, stock"
+
+require env("PLUGIN_*")
+require time
+require file("workspace/.lampson/orders")
+require file("workspace/.lampson/orders/*")
+
+let DIR be "workspace/.lampson/orders"
+let CATALOG be DIR + "/catalog.json"
+let CUSTOMERS be DIR + "/customers.json"
+
+task out(v)
+    print(json_encode(v))
+
+task fail(msg)
+    out({"ok": false, "error": msg})
+
+task load_catalog()
+    when not file_exists(CATALOG)
+        raise("no catalog yet: the store owner writes .lampson/orders/catalog.json")
+    give json_decode(read_file(CATALOG))
+
+task num(m, k, fallback)
+    when contains(m, k) and m[k] != nothing
+        give number(m[k])
+    give fallback
+
+task round_money(x)
+    give floor(x + 0.5)
+
+-- montos enteros como enteros (3200, no 3200.0); con centavos, tal cual
+task money(x)
+    let v be number(x)
+    give when v == floor(v) then floor(v) otherwise v
+
+-- una línea del carrito: precio de lista, pack (p. ej. docena) y "segunda a mitad de precio"
+task price_line(p, qty)
+    let unit be money(p["price"])
+    let plain be unit * qty
+    let amount be plain
+    let promo be ""
+    when contains(p, "pack") and p["pack"] != nothing
+        let n be floor(num(p["pack"], "qty", 0))
+        when n > 1 and qty >= n
+            let packs be floor(qty / n)
+            set amount to packs * money(p["pack"]["price"]) + (qty - packs * n) * unit
+            set promo to text(packs) + " x pack of " + text(n)
+    when contains(p, "second_half") and p["second_half"] == true and qty >= 2
+        let pairs be floor(qty / 2)
+        set amount to plain - round_money(pairs * unit / 2)
+        set promo to text(pairs) + " x second at half price"
+    give {"sku": p["sku"], "name": p["name"], "qty": qty, "unit_price": unit, "list": plain, "discount": plain - amount, "amount": amount, "promo": promo}
+
+-- cotiza un carrito: {ok, lines, subtotal, discount, delivery_fee, total, short, unknown}
+task quote_of(cat, items, delivery)
+    let by_sku be {}
+    each p in cat["products"]
+        set by_sku[upper(text(p["sku"]))] to p
+    let merged be {}
+    let order be []
+    each it in items
+        let sku be upper(trim(text(it["sku"])))
+        let qty be floor(num(it, "qty", 0))
+        when qty > 0
+            when not contains(merged, sku)
+                set merged[sku] to 0
+                set order to append(order, sku)
+            set merged[sku] to merged[sku] + qty
+    let lines be []
+    let short be []
+    let unknown be []
+    let subtotal be 0
+    let discount be 0
+    each sku in order
+        when not contains(by_sku, sku)
+            set unknown to append(unknown, sku)
+        otherwise
+            let p be by_sku[sku]
+            let ln be price_line(p, merged[sku])
+            set lines to append(lines, ln)
+            set subtotal to subtotal + ln["amount"]
+            set discount to discount + ln["discount"]
+            let stock be floor(num(p, "stock", 0))
+            when merged[sku] > stock
+                set short to append(short, {"sku": sku, "name": p["name"], "asked": merged[sku], "available": stock, "notes": when contains(p, "notes") then p["notes"] otherwise ""})
+    let fee be 0
+    let d be when contains(cat, "delivery") and cat["delivery"] != nothing then cat["delivery"] otherwise {}
+    when delivery == "delivery"
+        set fee to money(num(d, "fee", 0))
+        when contains(d, "free_from") and d["free_from"] != nothing and subtotal >= number(d["free_from"])
+            set fee to 0
+    -- un sku inventado (visto: "pan-sin-gluten-arroz-mijo") → la lista de los válidos, para que el modelo corrija solo
+    let hint be when length(unknown) > 0 then apply(cat["products"], (p) => text(p["sku"]) + " = " + text(p["name"])) otherwise []
+    give {"valid_skus": hint, "ok": length(short) == 0 and length(unknown) == 0 and length(lines) > 0, "lines": lines, "subtotal": subtotal, "discount": discount, "delivery": delivery, "delivery_fee": fee, "total": subtotal + fee, "short": short, "unknown": unknown, "currency": when contains(cat, "currency") then cat["currency"] otherwise ""}
+
+task load_customers()
+    when not file_exists(CUSTOMERS)
+        give {}
+    give json_decode(read_file(CUSTOMERS))
+
+task customer_key(c)
+    let phone be when contains(c, "phone") and c["phone"] != nothing then replace(replace(replace(trim(text(c["phone"])), " ", ""), "-", ""), "(", "") otherwise ""
+    when phone != ""
+        give "tel:" + replace(phone, ")", "")
+    give "name:" + lower(trim(text(c["name"])))
+
+task order_ids()
+    give apply(where(list_dir(DIR), (e) => starts_with(e["name"], "P-") and ends_with(e["name"], ".json")), (e) => slice(e["name"], 0, length(e["name"]) - 5))
+
+task next_id()
+    let n be length(order_ids()) + 1
+    let id be ""
+    while true
+        let digits be text(n)
+        each i in range(length(digits), 4)
+            set digits to "0" + digits
+        set id to "P-" + digits
+        when not file_exists(DIR + "/" + id + ".json")
+            give id
+        set n to n + 1
+
+task arg(args, k)
+    when contains(args, k) and args[k] != nothing
+        give trim(text(args[k]))
+    give ""
+
+let tool be env("PLUGIN_TOOL", "")
+let args be json_decode(env("PLUGIN_ARGS", "{}"))
+
+try
+    when tool == "catalog"
+        out(load_catalog())
+    otherwise when tool == "quote"
+        let items be when contains(args, "items") and args["items"] != nothing then args["items"] otherwise []
+        out(quote_of(load_catalog(), items, when arg(args, "delivery") == "" then "pickup" otherwise arg(args, "delivery")))
+    otherwise when tool == "place_order"
+        let cat be load_catalog()
+        let items be when contains(args, "items") and args["items"] != nothing then args["items"] otherwise []
+        let delivery be arg(args, "delivery")
+        let cust be when contains(args, "customer") and args["customer"] != nothing then args["customer"] otherwise {}
+        let name be arg(cust, "name")
+        let payment be arg(args, "payment")
+        let address be arg(args, "address")
+        let methods be when contains(cat, "payment") and cat["payment"] != nothing then cat["payment"] otherwise []
+        let missing be []
+        when length(items) == 0
+            set missing to append(missing, "items")
+        when name == ""
+            set missing to append(missing, "customer.name")
+        when delivery != "delivery" and delivery != "pickup"
+            set missing to append(missing, "delivery (delivery or pickup)")
+        when delivery == "delivery" and address == ""
+            set missing to append(missing, "address")
+        when payment == ""
+            set missing to append(missing, "payment")
+        when length(missing) > 0
+            fail("missing: " + join(missing, ", ") + " — ask the customer, then place the order")
+        otherwise when length(methods) > 0 and length(where(methods, (m) => lower(text(m)) == lower(payment))) == 0
+            fail("payment '" + payment + "' is not accepted; accepted: " + join(apply(methods, (m) => text(m)), ", "))
+        otherwise
+            when length(methods) > 0
+                set payment to text(where(methods, (m) => lower(text(m)) == lower(payment))[0])
+            let q be quote_of(cat, items, delivery)
+            when not q["ok"]
+                out({"ok": false, "error": "cannot place it: " + (when length(q["unknown"]) > 0 then "unknown sku " + join(q["unknown"], ", ") + " " otherwise "") + (when length(q["short"]) > 0 then "not enough stock for " + join(apply(q["short"], (s) => s["name"] + " (asked " + text(s["asked"]) + ", available " + text(s["available"]) + ")"), ", ") otherwise "") + (when length(q["lines"]) == 0 then "empty cart" otherwise ""), "quote": q})
+            otherwise
+                let id be next_id()
+                let ckey be customer_key(cust)
+                let d be when contains(cat, "delivery") and cat["delivery"] != nothing then cat["delivery"] otherwise {}
+                let order be {"id": id, "created": format_time(now(), "%Y-%m-%d %H:%M"), "status": "new", "customer": {"name": name, "phone": arg(cust, "phone"), "key": ckey}, "lines": q["lines"], "subtotal": q["subtotal"], "discount": q["discount"], "delivery": delivery, "address": address, "delivery_fee": q["delivery_fee"], "total": q["total"], "payment": payment, "when": arg(args, "when"), "notes": arg(args, "notes")}
+                write_file(DIR + "/" + id + ".json", json_encode(order))
+                -- stock: baja lo vendido en el catálogo
+                let sold be {}
+                each ln in q["lines"]
+                    set sold[upper(text(ln["sku"]))] to ln["qty"]
+                let prods be []
+                each p in cat["products"]
+                    let k be upper(text(p["sku"]))
+                    when contains(sold, k)
+                        set p["stock"] to floor(num(p, "stock", 0)) - sold[k]
+                    set prods to append(prods, p)
+                set cat["products"] to prods
+                write_file(CATALOG, json_encode(cat))
+                -- cliente: nombre, teléfono, última dirección, sus pedidos
+                let cs be load_customers()
+                let prev be when contains(cs, ckey) then cs[ckey] otherwise {"orders": []}
+                set cs[ckey] to {"name": name, "phone": arg(cust, "phone"), "address": when address != "" then address otherwise (when contains(prev, "address") then prev["address"] otherwise ""), "orders": append(prev["orders"], id), "last": order["created"]}
+                write_file(CUSTOMERS, json_encode(cs))
+                out({"ok": true, "order_id": id, "total": q["total"], "subtotal": q["subtotal"], "discount": q["discount"], "delivery_fee": q["delivery_fee"], "delivery": delivery, "address": address, "payment": payment, "eta": when delivery == "delivery" and contains(d, "eta") then d["eta"] otherwise "", "lines": q["lines"]})
+    otherwise when tool == "find_customer"
+        let cs be load_customers()
+        let key be ""
+        when arg(args, "phone") != ""
+            set key to customer_key({"phone": arg(args, "phone"), "name": ""})
+        otherwise when arg(args, "name") != ""
+            set key to customer_key({"name": arg(args, "name")})
+        when key == "" or not contains(cs, key)
+            out({"found": false})
+        otherwise
+            let c be cs[key]
+            let recent be []
+            each oid in slice(c["orders"], max(0, length(c["orders"]) - 3), length(c["orders"]))
+                when file_exists(DIR + "/" + oid + ".json")
+                    let o be json_decode(read_file(DIR + "/" + oid + ".json"))
+                    set recent to append(recent, {"id": oid, "created": o["created"], "total": o["total"], "status": o["status"], "items": apply(o["lines"], (l) => {"sku": l["sku"], "qty": l["qty"], "name": l["name"]}), "delivery": o["delivery"], "payment": o["payment"]})
+            out({"found": true, "name": c["name"], "phone": c["phone"], "address": c["address"], "orders": recent})
+    otherwise when tool == "order_status"
+        let oid be upper(arg(args, "order_id"))
+        when not matches(oid, "P-[0-9]{1,8}") or not file_exists(DIR + "/" + oid + ".json")
+            fail("no order " + oid)
+        otherwise
+            out(json_decode(read_file(DIR + "/" + oid + ".json")))
+    otherwise
+        fail("unknown tool '" + tool + "'")
+recover err
+    fail(text(err))
