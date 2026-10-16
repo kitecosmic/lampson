@@ -64,7 +64,7 @@ write_file(ADIR + "/rt-scoped.agent.json", json_encode({"id": "rt-scoped", "syst
 let created be []
 let threads be []
 -- threads fijos de este test: se limpian también AL EMPEZAR (una corrida abortada no contamina la siguiente)
-each t in [["rt-shop", "whatsapp:+5491100000001"], ["rt-shop", "whatsapp:+5491100000002"], ["rt-shop", "cli:test-1"]]
+each t in [["rt-shop", "whatsapp:+5491100000001"], ["rt-shop", "whatsapp:+5491100000002"], ["rt-shop", "cli:test-1"], ["rt-shop", "sdk-1"]]
     let ts0 be runtime.thread_session(t[0], t[1])
     when ts0 != ""
         session.delete(ts0)
@@ -178,6 +178,59 @@ let c3 be run_cli({"LAMPSON_AGENT": "nadie", "LAMPSON_MESSAGE": "x"})
 check(c3["code"] == 2 and contains(c3["out"], "no agent named"), "agente inexistente → código 2")
 let c4 be run_cli({"LAMPSON_AGENT": "rt-shop", "LAMPSON_MESSAGE": ""})
 check(c4["code"] == 2 and contains(c4["out"], "empty message"), "mensaje vacío → código 2")
+
+print("lampson run --stdio (modo local del SDK): un proceso abierto, pedidos JSON por línea")
+let sp be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_RUN_STDIO": "1"}, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})
+let sbuf be []
+-- lee líneas JSON de stdout hasta que `until` (una task sobre el evento) dé true; devuelve todas
+task read_until(until_fn, secs)
+    let got be []
+    let deadline be now() + secs
+    while now() < deadline
+        let ev be proc_recv(sp, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                give got
+            when ev["type"] == "stdout"
+                try
+                    let m be json_decode(trim(ev["data"]))
+                    set got to append(got, m)
+                    when call(until_fn, {"m": m})
+                        give got
+                recover err
+                    print("    (stdout que no es JSON: " + slice(text(ev["data"]), 0, 80) + ")")
+    give got
+task is_ready(m)
+    give m["kind"] == "ready"
+let rd be read_until(is_ready, 60)
+check(length(rd) == 1 and rd[0]["kind"] == "ready" and contains(rd[0]["data"]["agents"], "rt-shop"), "arranca y avisa ready con los agentes")
+-- dos pedidos de una: se atienden en orden, cada evento con su id
+proc_send(sp, json_encode({"id": "a1", "op": "ask", "to": "rt-shop", "thread": "sdk-1", "text": "ls"}) + "\n" + json_encode({"id": "a2", "op": "ask", "to": "rt-shop", "thread": "sdk-1", "text": "hola"}) + "\n")
+task is_done_a2(m)
+    give m["kind"] == "done" and m["id"] == "a2"
+let evs2 be read_until(is_done_a2, 60)
+let d1 be where(evs2, (m) => m["kind"] == "done" and m["id"] == "a1")
+let d2 be where(evs2, (m) => m["kind"] == "done" and m["id"] == "a2")
+check(length(d1) == 1 and starts_with(d1[0]["data"]["text"], "final ls"), "a1 → respuesta del agente")
+check(length(where(evs2, (m) => m["id"] == "a1" and m["kind"] == "tool_call")) == 1, "los eventos de a1 llevan su id")
+check(length(d2) == 1 and d2[0]["data"]["session"] == d1[0]["data"]["session"] and contains(d2[0]["data"]["text"], "msgs=6"), "a2 sigue la misma conversación (mismo thread)")
+let order be apply((m) => m["id"], where(evs2, (m) => m["kind"] == "done"))
+check(order == ["a1", "a2"], "en orden: " + json_encode(order))
+proc_send(sp, json_encode({"id": "g1", "op": "agents"}) + "\n" + json_encode({"id": "p1", "op": "ping"}) + "\n" + "esto no es json\n" + json_encode({"id": "x1", "op": "ask", "to": "nadie", "text": "hola"}) + "\n" + json_encode({"id": "x2", "op": "ask", "to": "rt-shop", "text": " "}) + "\n")
+task is_done_x2(m)
+    give m["id"] == "x2"
+let evs3 be read_until(is_done_x2, 30)
+let ag3 be where(evs3, (m) => m["id"] == "g1")
+check(length(ag3) == 1 and contains(apply((a) => a["id"], ag3[0]["data"]), "rt-shop"), "op agents lista los agentes")
+check(length(where(evs3, (m) => m["id"] == "p1" and m["kind"] == "pong")) == 1, "op ping → pong")
+check(length(where(evs3, (m) => m["kind"] == "error" and contains(text(m["data"]), "JSON object"))) == 1, "una línea que no es JSON → error, y el proceso sigue")
+check(length(where(evs3, (m) => m["id"] == "x1" and m["kind"] == "done" and contains(m["data"]["stopped"], "no agent named"))) == 1, "agente inexistente → done con error")
+check(length(where(evs3, (m) => m["id"] == "x2" and m["kind"] == "done" and contains(m["data"]["stopped"], "text is required"))) == 1, "texto vacío → done con error")
+set created to append(created, d1[0]["data"]["session"])
+set threads to append(threads, ["rt-shop", "sdk-1"])
+proc_close_stdin(sp)
+let sexit be read_until(is_ready, 10)
+proc_close(sp)
 
 print("lampson mcp serve (stdio, JSON-RPC) como lo lanza un cliente MCP")
 let mp be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_MCP_SERVE": "1", "LAMPSON_MCP_AGENTS": "rt-shop,rt-mute"}, "stderr": "separate", "line_mode": true, "on_full": "drop_oldest"})

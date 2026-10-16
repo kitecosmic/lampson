@@ -2,6 +2,8 @@
 --
 --   LAMPSON_CMD=ensure  LAMPSON_WORKSPACE=<ruta>  synsema run cli.syn
 --       registra/prepara el workspace, asegura el hub y su proceso → imprime UNA línea JSON {slug, port, dir, url, alive}
+--   LAMPSON_CMD=prepare LAMPSON_WORKSPACE=<ruta>   lo mismo que ensure SIN hub ni proceso web: solo la carpeta del
+--       workspace (lo que usan `lampson run`, `run --stdio`, `key`, `channel` y `mcp serve`, que no necesitan servidor)
 --   LAMPSON_CMD=hub-status  → {alive}
 --   LAMPSON_CMD=hub-start | hub-stop | hub-reboot (stop + start: hub y workspaces; lo lanza ⚙ → Apagar o reiniciar)
 --   LAMPSON_CMD=list
@@ -32,15 +34,15 @@ use "./lib/settings.syn" as settings
 
 let cmd be env("LAMPSON_CMD", "ensure")
 
-when cmd == "ensure"
+when cmd == "ensure" or cmd == "prepare"
     let path be env("LAMPSON_WORKSPACE", "")
     when path == ""
         raise("LAMPSON_WORKSPACE required")
     let w be ws.ensure(path)
-    when not ws.hub_alive()
+    when cmd == "ensure" and not ws.hub_alive()
         ws.start_hub()
     let hc be ws.health(w)
-    when hc == nothing
+    when cmd == "ensure" and hc == nothing
         ws.start_ws(w)
         ws.wait_ready(w, 10)
         set hc to ws.health(w)

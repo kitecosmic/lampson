@@ -314,8 +314,25 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
       la descripción. Un generador de clientes ve solo `text`; los SDK escritos a mano (5b) los tipan todos.
 
 ### Fase 5 — SDK
-- [ ] npm: `import { Lampson } from "lampson"` (wrapper sobre `lampson run --stdio` o la API)
-- [ ] Python, si hay demanda
+Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `verifySignature`):
+**servidor** (HTTP `/v1` con URL + key) y **local** (el SDK arranca Lampson como proceso hijo y le habla por
+`lampson run --stdio`: sin hub, sin puerto, sin key — Lampson adentro de tu programa, como SQLite).
+- [x] `lampson run --stdio` (en `run.syn`): un proceso abierto, un pedido JSON por línea (`ask`/`agents`/`ping`, con
+      `id`), los mismos eventos que `--json` con ese id, `done` al cerrar cada ask, `ready` al arrancar. En orden,
+      de a uno. Probado en `run_test.syn` (pedidos encadenados, ids, continuación, errores sin morir).
+- [x] `prepare` en `cli.syn`: `run`, `--stdio`, `key`, `channel` y `mcp serve` preparan solo la carpeta del
+      workspace — ya no arrancan el hub ni el proceso web (antes `lampson run` pasaba por `ensure`).
+- [x] **JavaScript/TypeScript** en el paquete npm actual (`sdk/index.js` + `index.mjs` + `index.d.ts`, sin
+      dependencias, Node 18+): `require("lampson")` e `import { Lampson } from "lampson"`. El modo local lanza el
+      launcher del propio paquete (no depende del PATH). `tests/sdk_test.mjs`: los dos modos, 21 checks.
+- [x] **Python** (`sdk/python`, stdlib, 3.9+, síncrono, context manager): `from lampson import Lampson`. El modo
+      local usa el comando `lampson` instalado. `tests/sdk_test.py`: los dos modos.
+- [x] A mano, modo local real (por el launcher, con el modelo de Joel, en `e-commerce`): JS y Python arrancan
+      Lampson en ~4-5 s y el agente `tienda` responde; el hub no se toca.
+- [ ] Publicar: npm (sale con la próxima versión del paquete) y PyPI (`sdk/python` todavía no publicado).
+- [ ] Modo local: los pedidos se atienden de a uno; varias conversaciones en paralelo necesitarían varios procesos o
+      un `--stdio` concurrente.
+- [ ] Otros lenguajes: generar clientes desde `/v1/openapi.json` (5a); PHP a mano si hay demanda.
 
 ### Fase 6 — Orquestación (rama propia, después del motor)
 - [ ] Tool `send(to, text)` entre agentes → `deliver` (generaliza `delegate`)
@@ -327,7 +344,8 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
 
 ## Estado
 
-**Fase actual:** 5 — SDK (5a OpenAPI hecha). Fases 1, 2 (con el buzón), 3, 3b y 4 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** motor completo (fases 1-5 hechas y probadas). Siguiente: pendientes que se decidan, documentación
+final y merge a `main`; después fase 6 (orquestación) en su propia rama. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 

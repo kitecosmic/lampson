@@ -9,6 +9,7 @@
 #   lampson --pair [https://tu-dominio]                                # QR en la terminal para emparejar el celular
 #   lampson --agent plan · --yolo|--strict|--ask · --update · --help
 #   lampson run [--agent ID] [--thread T | --session ID] [--json] [--yolo|--strict|--ask] "mensaje"   # sin interfaz
+#   lampson run --stdio      # modo local: un proceso abierto, un pedido JSON por línea (lo usa el SDK)
 #   lampson key add [--agent ID[,ID]] [--name NOMBRE] · key list · key remove <id>     # API keys de la API /v1
 #   lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]     # Lampson como servidor MCP (stdio) para otros agentes
 #   lampson channel list · channel on|off <canal> · channel setup <canal>   # canales (Telegram, Chatwoot…)
@@ -22,7 +23,7 @@ $caller = (Get-Location).Path
 
 # --- args: acepta --flag y -Flag, sin distinguir mayúsculas ---
 $Workspace = ""; $Web = $false; $Agent = ""; $Perm = ""; $Hub = ""; $Install = ""; $Domain = $null; $Email = ""; $Pair = $null
-$Run = $false; $Message = @(); $Thread = ""; $Session = ""; $Json = $false; $Key = ""; $KeyName = ""; $KeyId = ""; $McpServe = $false; $ChannelCmd = ""; $ChannelName = ""
+$Run = $false; $Message = @(); $Thread = ""; $Session = ""; $Json = $false; $Key = ""; $KeyName = ""; $KeyId = ""; $McpServe = $false; $ChannelCmd = ""; $ChannelName = ""; $Stdio = $false
 $i = 0
 # `lampson run …`: subcomando sin interfaz (run.syn, spec/engine.md); las palabras sueltas son el mensaje
 if ($args.Count -gt 0 -and ([string]$args[0]).ToLower() -eq "run") { $Run = $true; $i = 1 }
@@ -51,6 +52,7 @@ while ($i -lt $args.Count) {
         '^--?thread$'           { $i++; $Thread = [string]$args[$i] }
         '^--?session$'          { $i++; $Session = [string]$args[$i] }
         '^--?json$'             { $Json = $true }
+        '^--?stdio$'            { $Stdio = $true }
         '^--?name$'             { $i++; $KeyName = [string]$args[$i] }
         '^--?(update|u)$'       { Write-Host "actualizando Lampson en $here"; git -C $here pull --ff-only origin main; Write-Host ("lampson " + (git -C $here rev-parse --short HEAD)); exit $LASTEXITCODE }
         '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 9 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
@@ -157,7 +159,8 @@ try {
     if ($target -eq $here) { Write-Error "no montes el propio directorio de lampson como workspace"; exit 1 }
 
     # registrar/preparar el workspace y asegurar hub + proceso
-    $r = Invoke-Cli "ensure" $target
+    # `run`, `key`, `channel` y `mcp serve` no necesitan servidor: solo la carpeta del workspace (sin hub)
+    $r = Invoke-Cli $(if ($Run) { "prepare" } else { "ensure" }) $target
     $wsDir = Join-Path $here ($r.dir -replace '/', '\')
     if ($Web) {
         Write-Host ("Lampson web · " + $r.url + "   (workspace " + $r.slug + $(if ($r.alive) { " ● vivo" } else { " ○ arrancando" }) + ")")
@@ -184,6 +187,7 @@ try {
             $env:LAMPSON_KEY_CMD = $Key; $env:LAMPSON_KEY_NAME = $KeyName; $env:LAMPSON_KEY_ID = $KeyId; $env:LAMPSON_KEY_AGENTS = $Agent
             $env:LAMPSON_MCP_SERVE = $(if ($McpServe) { "1" } else { "" }); $env:LAMPSON_MCP_AGENTS = $(if ($McpServe) { $Agent } else { "" })
             $env:LAMPSON_CHANNEL_CMD = $ChannelCmd; $env:LAMPSON_CHANNEL_NAME = $ChannelName
+            $env:LAMPSON_RUN_STDIO = $(if ($Stdio) { "1" } else { "" })
         }
         if (Test-Path -LiteralPath $envFile) { synsema run --env-file $envFile $entry } else { synsema run $entry }
         $exitCode = $LASTEXITCODE
@@ -191,7 +195,7 @@ try {
         Pop-Location
         # `lampson` corre este script dentro de TU sesión de PowerShell: lo de `run`/`key` no debe quedar en el entorno
         # (un LAMPSON_SESSION que queda haría que el próximo `lampson` retome esa sesión sin pedirlo)
-        if ($Run) { foreach ($v in "LAMPSON_MESSAGE","LAMPSON_RUN_PERMISSION","LAMPSON_THREAD","LAMPSON_SESSION","LAMPSON_RUN_JSON","LAMPSON_KEY_CMD","LAMPSON_KEY_NAME","LAMPSON_KEY_ID","LAMPSON_KEY_AGENTS","LAMPSON_MCP_SERVE","LAMPSON_MCP_AGENTS","LAMPSON_CHANNEL_CMD","LAMPSON_CHANNEL_NAME") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue } }
+        if ($Run) { foreach ($v in "LAMPSON_MESSAGE","LAMPSON_RUN_PERMISSION","LAMPSON_THREAD","LAMPSON_SESSION","LAMPSON_RUN_JSON","LAMPSON_KEY_CMD","LAMPSON_KEY_NAME","LAMPSON_KEY_ID","LAMPSON_KEY_AGENTS","LAMPSON_MCP_SERVE","LAMPSON_MCP_AGENTS","LAMPSON_CHANNEL_CMD","LAMPSON_CHANNEL_NAME","LAMPSON_RUN_STDIO") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue } }
     }
 } finally {
     Pop-Location
