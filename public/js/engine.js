@@ -8,8 +8,13 @@ const KEY_NEW = { id: '__new' };
 // siga abierto (al cerrar se olvida; no hay otra forma de volver a verla)
 let justCreated = null;
 
+// un 404 acá = la página es nueva pero el proceso del workspace arrancó con código anterior (no conoce estas rutas)
+const STALE_MSG = 'este workspace corre una versión anterior de Lampson — reinicialo: lampson --hub restart';
 async function fetchKeys() {
-  try { keysData = await (await fetch(BASE + '/api/keys')).json(); } catch (e) {}
+  try {
+    const r = await fetch(BASE + '/api/keys');
+    if (r.status === 404) keysData = { keys: [], stale: true }; else if (r.ok) keysData = await r.json();
+  } catch (e) {}
   keysData.keys = keysData.keys || [];
   return keysData;
 }
@@ -18,6 +23,7 @@ async function loadKeys() {
   const box = $('#keysBox'); if (!box) return;
   box.innerHTML = '';
   $('#keysCount').textContent = d.keys.length || '';
+  if (d.stale) { const e = document.createElement('div'); e.className = 'p none'; e.style.cursor = 'default'; e.textContent = STALE_MSG; box.appendChild(e); return; }
   for (const k of d.keys) {
     const row = document.createElement('div'); row.className = 'p' + (k.last_used ? ' run' : '');
     row.title = `agentes: ${k.agents.join(', ')}\nlímite: ${k.rate ? k.rate + '/min' : 'sin límite'}${k.callbacks.length ? '\ncallbacks: ' + k.callbacks.join(', ') : ''}\núltimo uso: ${k.last_used || 'nunca'}`;
@@ -87,7 +93,10 @@ function openKeys(selectId) {
 }
 
 async function fetchChannels() {
-  try { channelsData = await (await fetch(BASE + '/api/channels')).json(); } catch (e) {}
+  try {
+    const r = await fetch(BASE + '/api/channels');
+    if (r.status === 404) channelsData = { channels: [], stale: true }; else if (r.ok) channelsData = await r.json();
+  } catch (e) {}
   channelsData.channels = channelsData.channels || [];
   return channelsData;
 }
@@ -97,7 +106,7 @@ async function loadChannels() {
   box.innerHTML = '';
   const on = d.channels.filter(c => c.enabled).length;
   $('#channelsCount').textContent = d.channels.length ? (on ? `${on} ● · ${d.channels.length}` : `${d.channels.length}`) : '';
-  if (!d.channels.length) { const e = document.createElement('div'); e.className = 'p none'; e.style.cursor = 'default'; e.textContent = 'sin canales instalados'; box.appendChild(e); }
+  if (!d.channels.length) { const e = document.createElement('div'); e.className = 'p none'; e.style.cursor = 'default'; e.textContent = d.stale ? STALE_MSG : 'sin canales instalados'; box.appendChild(e); }
   for (const c of d.channels) {
     const row = document.createElement('div'); row.className = 'p' + (c.enabled ? ' run' : '');
     row.title = c.description || '';
