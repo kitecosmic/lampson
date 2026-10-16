@@ -170,12 +170,16 @@ orquestación va en su propia rama.
       Solo read/write/edit/ls/find/grep; con tools limitadas no se permiten bash/process/delegate/lsp/computer_use
       (leerían cualquier archivo por otro camino). Probado con el modelo real: un agente "ingenuo" pidió `.env.prueba`
       → denegado por alcance.
-- [ ] En la terminal, un agente del proyecto con `model` propio usa igual el modelo configurado (`chat.syn` tiene
+- [x] En la terminal, un agente del proyecto con `model` propio usa igual el modelo configurado (`chat.syn` tiene
       su `cfg` global para `/model`). Web y `lampson run` sí lo respetan.
-- [ ] Agentes globales (`<LAMPSON_HOME>/agents/`): sumar `agents` a `LINKS` de `lib/workspaces.syn` y a `bin/lampson.js`.
-- [ ] Test automático de `POST /api/chat` (hoy solo hay prueba manual; `web_test.syn` es una copia local vieja).
-- [ ] `lampson run --stdio`: un proceso que queda abierto, un sobre JSON por línea de stdin → eventos JSONL
+      → hecho: `chat.syn` usa el modelo del agente al arrancar y con `/agent` (`/model` lo cambia para la sesión); probado por PTY.
+- [x] Agentes globales (`<LAMPSON_HOME>/agents/`): sumar `agents` a `LINKS` de `lib/workspaces.syn` y a `bin/lampson.js`.
+      → hecho: `agents/` de la instalación, enlazada en cada workspace; el del proyecto pisa al global. Test unitario + por la API (worker del buzón).
+- [x] Test automático de `POST /api/chat` (hoy solo hay prueba manual; `web_test.syn` es una copia local vieja).
+      → cubierto por `api_test.syn` (web.syn real): la UI usa las mismas piezas que /v1.
+- [x] `lampson run --stdio`: un proceso que queda abierto, un sobre JSON por línea de stdin → eventos JSONL
       (base del SDK de la fase 5).
+      → hecho (fase 5), con conversaciones en paralelo (protocolo 2).
 
 ### Fase 2 — API HTTP + canal `http`
 Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógica en `lib/api.syn`, keys en
@@ -208,11 +212,15 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       URL, y los demás jobs quedan `merged`. Probado en `api_test.syn` (ráfaga desordenada, mitad de turno,
       clientes en paralelo, callback) y con el modelo real: "hola" / "¿precio del pan sin gluten?" / "¿hay stock?"
       a 0,1 / 1,3 / 3,0 s → un lote, una respuesta con precio y stock.
-- [ ] Rate limit por key (`rate_limit` de Synsema en las rutas `/v1`, o propio por key).
-- [ ] Probar el modo `ask` por la API con una aprobación real (el código reusa la cola; no tiene test propio).
-- [ ] Las keys solo se ven por la CLI: falta panel en la web (va con la documentación, al final).
-- [ ] Callback a una URL arbitraria: quien tiene una key puede hacer que Lampson haga POST a cualquier lado
+- [x] Rate limit por key (`rate_limit` de Synsema en las rutas `/v1`, o propio por key).
+      → hecho: `rate` por key (120/min por defecto, 0 = sin límite) → 429 + Retry-After; `lampson key add --rate N`.
+- [x] Probar el modo `ask` por la API con una aprobación real (el código reusa la cola; no tiene test propio).
+      → hecho: `api_test.syn` deniega y aprueba por la cola (`riesgo-suave` del mock); la cola registra denied/approved.
+- [x] Las keys solo se ven por la CLI: falta panel en la web (va con la documentación, al final).
+      → hecho: panel «API» en la web (crear, ver la key una vez con las URLs, revocar).
+- [x] Callback a una URL arbitraria: quien tiene una key puede hacer que Lampson haga POST a cualquier lado
       (incluida la red local). Aceptable porque la key es de confianza; evaluar una allow-list por key.
+      → hecho: `callbacks` por key (prefijos permitidos) → 403 fuera de la lista; `lampson key add --callback URL`.
 
 ### Fase 3 — `lampson mcp serve`
 - [x] Lampson como servidor MCP por stdio (`lib/mcp_server.syn`, dentro de `run.syn` con `LAMPSON_MCP_SERVE=1`):
@@ -224,9 +232,11 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       stdout solo JSON-RPC, stderr vacío.
 
 **Pendientes que salieron en la fase 3:**
-- [ ] `threads(agent)` / historial de una conversación (se dejó fuera: el cliente ya guarda su thread).
+- [x] `threads(agent)` / historial de una conversación (se dejó fuera: el cliente ya guarda su thread).
+      → hecho: tool `history(thread, agent?, limit?)` (stdio y HTTP).
 - [ ] Los requests se atienden de a uno (un `ask` largo demora al siguiente); el cliente MCP típico espera igual.
-- [ ] Notificaciones de progreso (`notifications/progress`) mientras el agente trabaja.
+- [x] Notificaciones de progreso (`notifications/progress`) mientras el agente trabaja.
+      → hecho: `POST /v1/mcp/stream` (SSE) con `progressToken`.
 - [ ] Ejemplo de configuración para Claude Desktop / Cursor (va con la documentación final; en Windows el comando
       es `lampson.cmd`).
 
@@ -253,10 +263,12 @@ Rutas en `web.syn` (bajo `/w/<slug>/v1`, el hub las reenvía sin passkey), lógi
       siempre, aunque el agente sea yolo. Combina con `paths`. Lo aplica `loop.execute` (`approve_for`). Probado:
       unitarios, `ask` sin humano → denegado, y agente ↔ agente con el agente A en `strict` + `approve: auto` (y el
       mismo agente sin `approve` → denegado).
-- [ ] Respuestas en streaming (SSE) desde nuestro servidor MCP y progreso mientras el agente trabaja.
-- [ ] `tty_test` intermitente (~1 de cada 20-25 corridas): la vez que se pudo ver, quedó colgado después del paso
+- [x] Respuestas en streaming (SSE) desde nuestro servidor MCP y progreso mientras el agente trabaja.
+      → hecho: `/v1/mcp/stream` (ruta aparte: en Synsema un `stream` dentro de un `when` no transmite).
+- [x] `tty_test` intermitente (~1 de cada 20-25 corridas): la vez que se pudo ver, quedó colgado después del paso
       Esc, antes de `/exit` (que mide 0,1 s; ese camino no cambió). Parece del manejo de la PTY bajo carga, no del
       motor. Si se vuelve frecuente: timeout propio por paso y volcar la pantalla al fallar.
+      → mitigado: cada paso final espera hasta ver lo que busca (tope 10 s) y muestra la pantalla si falla; 8/8 corridas.
 
 ### Fase 4 — Canales como plugins
 Contrato en la cabecera de `lib/channels.syn`. Universal a propósito: cada uno arma el canal que necesite, la
@@ -279,9 +291,12 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
 **Pendientes que salieron en la fase 4:**
 - [ ] Probar `plugins/chatwoot` contra un Chatwoot real (formato verificado con la doc oficial; `message_type`
       llega como texto o número según la versión, cubierto).
-- [ ] Imágenes entrantes: hoy van como link en el texto; pasarlas como imagen si el modelo tiene visión.
-- [ ] Indicador de "escribiendo…" mientras el agente trabaja (acción opcional `typing` del canal).
-- [ ] Panel de canales en la web (encender, ver el log, la URL del webhook) — con la documentación final.
+- [x] Imágenes entrantes: hoy van como link en el texto; pasarlas como imagen si el modelo tiene visión.
+      → hecho: Telegram (getFile, la más grande ≤ 1 MB) y Chatwoot (adjuntos imagen ≤ 1,5 MB) las pasan como imagen.
+- [x] Indicador de "escribiendo…" mientras el agente trabaja (acción opcional `typing` del canal).
+      → hecho: acción opcional `typing` (`"channel": {"typing": true}`), el worker la renueva cada ~4,5 s.
+- [x] Panel de canales en la web (encender, ver el log, la URL del webhook) — con la documentación final.
+      → hecho: panel «Canales» (encender, modo, agente, URL, configurar, últimos eventos).
 - [x] **Telegram** (`plugins/telegram`, Synsema con techo `net`), para quien no usa Chatwoot: gratis, sin
       intermediarios. Verifica `X-Telegram-Bot-Api-Secret-Token`; solo mensajes nuevos de personas (ignora
       ediciones, posts de canal y otros bots); foto/audio/archivo/ubicación como nota en el texto (con el caption);
@@ -293,7 +308,11 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
       URL para pegarla en la plataforma.
 - [x] Tests (`api_test.syn`) contra una Bot API simulada: list, setup (URL pública + secreto + token), ráfaga → una
       respuesta, escribiendo…, secreto inválido → 401, edición y bot ignorados, foto con caption, partes de ≤ 4000.
-- [ ] Probar `plugins/telegram` con un bot real (hace falta un token de @BotFather y la URL pública por https).
+- [x] Probar `plugins/telegram` con un bot real (hace falta un token de @BotFather y la URL pública por https).
+      → hecho con @lampson_bot: primero por relay y después en **modo sin URL pública** (poll) nativo. Falta el modo webhook real (necesita dominio o túnel).
+- [x] **Canales sin URL pública** (modo poll): acción opcional `poll` (`"channel": {"poll": true}`); `lampson channel
+      setup` lo elige solo si no hay URL pública; un agente por canal en el proceso del workspace, cursor en disco.
+      Telegram con getUpdates. Probado en `api_test.syn` y con @lampson_bot real.
 - [ ] Próximos canales oficiales: WhatsApp Cloud API directo, Slack, Discord.
 
 ### Fase 5a — OpenAPI de la API pública (lo que destraba todos los lenguajes)
@@ -329,9 +348,11 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
       local usa el comando `lampson` instalado. `tests/sdk_test.py`: los dos modos.
 - [x] A mano, modo local real (por el launcher, con el modelo de Joel, en `e-commerce`): JS y Python arrancan
       Lampson en ~4-5 s y el agente `tienda` responde; el hub no se toca.
-- [ ] Publicar: npm (sale con la próxima versión del paquete) y PyPI (`sdk/python` todavía no publicado).
-- [ ] Modo local: los pedidos se atienden de a uno; varias conversaciones en paralelo necesitarían varios procesos o
+- [ ] Publicar: npm (sale con la próxima versión del paquete) y PyPI (`sdk/python`: paquete armado, `twine check`
+      PASSED, el nombre `lampson` está libre; lo sube Joel con su token).
+- [x] Modo local: los pedidos se atienden de a uno; varias conversaciones en paralelo necesitarían varios procesos o
       un `--stdio` concurrente.
+      → hecho: protocolo 2, un agente por ask; misma conversación en fila, distintas en paralelo (6 s en vez de 12).
 - [ ] Otros lenguajes: generar clientes desde `/v1/openapi.json` (5a); PHP a mano si hay demanda.
 
 ### Fase 6 — Orquestación (rama propia, después del motor)
@@ -344,8 +365,9 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
 
 ## Estado
 
-**Fase actual:** motor completo (fases 1-5 hechas y probadas). Siguiente: pendientes que se decidan, documentación
-final y merge a `main`; después fase 6 (orquestación) en su propia rama. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** motor completo (fases 1-5) y los pendientes cerrados, salvo los que necesitan algo de afuera
+(Chatwoot real, webhook real de Telegram con dominio/túnel, publicar en PyPI/npm) y los próximos canales. Siguiente:
+Joel verifica → documentación final → merge a `main`; después fase 6 (orquestación) en su propia rama. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 
