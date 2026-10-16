@@ -13,6 +13,15 @@ task pump(secs)
 task keys(s, secs)
     proc_send(p, s)
     pump(secs)
+-- espera hasta que la pantalla muestre `want` (con tope): bajo carga la PTY puede tardar más que un tiempo fijo
+task keys_until(s, want, secs)
+    proc_send(p, s)
+    let deadline be now() + secs
+    while now() < deadline and not contains(strip_ansi(log), want)
+        let ev be proc_recv(p, 0.3)
+        when ev != nothing and ev["type"] != "exit"
+            set log to log + ev["data"]
+    give contains(strip_ansi(log), want)
 pump(6)
 keys("/", 1.5)
 let seen1 be strip_ansi(log)
@@ -56,8 +65,7 @@ let seen8 be strip_ansi(log)
 assert(contains(seen8, "no se borró"), seen8)
 print("  ✓ Esc cancela el menú")
 set log to ""
-keys("/exit\r", 4)
-assert(contains(strip_ansi(log), "bye"), strip_ansi(log))
+assert(keys_until("/exit\r", "bye", 10), "no salió con /exit en 10 s — pantalla:\n" + strip_ansi(log))
 print("  ✓ /exit sale limpio")
 print("tty_test: todo OK")
 proc_close(p)
