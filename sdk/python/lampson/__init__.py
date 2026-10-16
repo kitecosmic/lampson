@@ -33,7 +33,7 @@ import urllib.error
 import urllib.request
 
 __all__ = ["Lampson", "LampsonError"]
-__version__ = "0.2.10"
+__version__ = "0.3.0"
 
 
 class LampsonError(Exception):
