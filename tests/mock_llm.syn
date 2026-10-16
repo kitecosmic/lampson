@@ -94,6 +94,11 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("mcp_proveedor_ask", {"message": "ls", "thread": "a2a-1"})])
             give reply_text("final a2a · el proveedor dijo: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        -- "riesgo-suave": un bash que PIDE aprobación (`| sh` está en DANGEROUS) pero solo imprime: para aprobarlo en tests
+        when starts_with(q, "riesgo-suave")
+            when tools_seen == 0
+                give reply_tools([tool_call("bash", {"command": "echo echo aprobado | sh"})])
+            give reply_text("final riesgo-suave · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
         -- "espera": el modelo tarda 3 s y pide ls (deja tiempo a que llegue otro mensaje A MITAD del turno: lib/mailbox.syn)
         when starts_with(q, "espera")
             sleep(3)

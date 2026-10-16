@@ -51,7 +51,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"], ["rt-ask", "api:aprob-1"], ["rt-ask", "api:aprob-2"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -62,6 +62,7 @@ purge_threads()
 let ADIR be runtime.PROJECT_DIR
 write_file(ADIR + "/rt-api.agent.json", json_encode({"id": "rt-api", "description": "agente de la API", "system": "Bot de prueba.", "tools": ["ls"], "permission": "strict", "buffer": false}))
 write_file(ADIR + "/rt-buf.agent.json", json_encode({"id": "rt-buf", "system": "Bot con espera.", "tools": [], "buffer": {"quiet_s": 1, "max_s": 6}}))
+write_file(ADIR + "/rt-ask.agent.json", json_encode({"id": "rt-ask", "system": "Pide permiso.", "tools": ["bash"], "permission": "ask", "buffer": false}))
 write_file(ADIR + "/rt-mid.agent.json", json_encode({"id": "rt-mid", "system": "Bot lento.", "tools": ["ls"], "buffer": {"quiet_s": 0.3, "max_s": 2}}))
 write_file(ADIR + "/rt-api2.agent.json", json_encode({"id": "rt-api2", "system": "Otro bot."}))
 
@@ -507,6 +508,35 @@ when ga["json"] != nothing
     set created to append(created, ga["json"]["session"])
 rm_file("agents/rt-gapi.agent.json")
 rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key("rt-gapi", "api:global-1") + ".json")
+
+print("aprobación real por la API: un agente en modo ask espera a que una persona apruebe o deniegue")
+-- dos tareas a la vez: el pedido (que queda esperando la aprobación) y "la persona" que la responde por la cola
+task answer_approval(decision)
+    let deadline be now() + 30
+    while now() < deadline
+        let ap be json_decode(text(http_get("http://127.0.0.1:47990/w/test/api/approvals", {}, nothing, 10)["body"]))
+        let pend be where(ap["approvals"], (x) => x["status"] == "pending" and x["source"] == "api")
+        when length(pend) > 0
+            http_post("http://127.0.0.1:47990/w/test/api/approve", json_encode({"id": pend[0]["id"], "decision": decision}), {"Content-Type": "application/json"}, 10)
+            give {"id": pend[0]["id"], "message": pend[0]["message"]}
+        sleep(0.3)
+    give nothing
+task approval_job(job)
+    when job["kind"] == "ask"
+        sleep(0)
+        let r be http_post(BASE + "/messages", json_encode(job["body"]), {"Authorization": "Bearer " + job["key"], "Content-Type": "application/json"}, 120)
+        give json_decode(text(r["body"]))
+    give answer_approval(job["decision"])
+let den be parallel_map(approval_job, [{"kind": "ask", "key": kb["key"], "body": {"to": "rt-ask", "thread": "api:aprob-1", "text": "riesgo-suave"}}, {"kind": "human", "decision": false}])
+check(den[1] != nothing and contains(den[1]["message"], "echo aprobado | sh"), "la aprobación pendiente aparece en la cola (UI, link, webhook): " + (when den[1] == nothing then "(nada)" otherwise den[1]["message"]))
+check(contains(den[0]["text"], "DENIED by the user"), "denegada → el agente no lo ejecuta y lo informa: " + slice(den[0]["text"], 0, 70))
+let apr be parallel_map(approval_job, [{"kind": "ask", "key": kb["key"], "body": {"to": "rt-ask", "thread": "api:aprob-2", "text": "riesgo-suave"}}, {"kind": "human", "decision": true}])
+check(apr[1] != nothing and contains(apr[0]["text"], "aprobado") and not contains(apr[0]["text"], "DENIED"), "aprobada → se ejecuta y el agente ve la salida: " + slice(apr[0]["text"], 0, 70))
+let hist be json_decode(text(http_get("http://127.0.0.1:47990/w/test/api/approvals", {}, nothing, 10)["body"]))["approvals"]
+check(length(where(hist, (x) => x["id"] == den[1]["id"] and x["status"] == "denied")) == 1 and length(where(hist, (x) => x["id"] == apr[1]["id"] and x["status"] == "approved")) == 1, "y la cola registra denied / approved")
+set created to append(created, den[0]["session"])
+set created to append(created, apr[0]["session"])
+rm_file(ADIR + "/rt-ask.agent.json")
 
 print("límites por key: rate limit (429 + Retry-After) y callbacks solo a URLs permitidas")
 let kr be apikeys.create_with("test-rate", ["rt-api"], {"rate": 3})
