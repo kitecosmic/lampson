@@ -43,4 +43,8 @@ LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIR
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run run_test.syn || code=1
 # API /v1 (keys, JSON, SSE, callback firmado) contra web.syn de verdad en :47990
 LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x synsema run api_test.syn || code=1
+# el SDK de JavaScript (sdk/), modo local (run.syn --stdio) y modo servidor (web.syn en :47996)
+LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x node tests/sdk_test.mjs || code=1
+# el SDK de Python (sdk/python), los mismos dos modos (web.syn en :47997)
+LAMPSON_NO_CONFIG=1 LAMPSON_WORKSPACE="$tmp" LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x python3 tests/sdk_test.py || code=1
 exit "${code:-0}"

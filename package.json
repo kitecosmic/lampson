@@ -1,7 +1,7 @@
 {
   "name": "lampson",
   "version": "0.2.10",
-  "description": "A coding agent written in Synsema: terminal + web, tools confined to the mounted project, plugins (your own tools, any language), LSP, MCP, sub-agents.",
+  "description": "A coding agent written in Synsema: terminal + web, tools confined to the mounted project, plugins (your own tools, any language), LSP, MCP, sub-agents. Also an SDK: import { Lampson } from \"lampson\" (server or local mode).",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,6 +23,9 @@
   },
   "files": [
     "bin/",
+    "sdk/index.js",
+    "sdk/index.mjs",
+    "sdk/index.d.ts",
     "lib/",
     "public/",
     "skills/",
@@ -48,5 +51,15 @@
   },
   "scripts": {
     "test": "pwsh -NoProfile -File tests/run.ps1"
+  },
+  "main": "sdk/index.js",
+  "types": "sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./sdk/index.d.ts",
+      "import": "./sdk/index.mjs",
+      "require": "./sdk/index.js"
+    },
+    "./package.json": "./package.json"
   }
 }

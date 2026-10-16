@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lampson"
+version = "0.2.10"
+description = "Lampson SDK: talk to Lampson agents from Python — server mode (HTTP API) or local mode (Lampson as a child process)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+keywords = ["agent", "llm", "lampson", "sdk", "mcp"]
+
+[project.urls]
+Homepage = "https://github.com/kitecosmic/lampson"
+
+[tool.setuptools]
+packages = ["lampson"]

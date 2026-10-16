@@ -65,6 +65,12 @@ try {
     # API /v1 (keys, JSON, SSE, callback firmado) contra web.syn de verdad en :47990
     synsema run api_test.syn
     if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # el SDK de JavaScript (sdk/), modo local (run.syn --stdio) y modo servidor (web.syn en :47996)
+    node tests/sdk_test.mjs
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
+    # el SDK de Python (sdk/python), los mismos dos modos (web.syn en :47997)
+    python tests/sdk_test.py
+    if ($LASTEXITCODE -ne 0) { $code = 1 }
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     $env:LAMPSON_NO_CONFIG = $prevNoCfg
 } finally {
