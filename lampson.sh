@@ -57,6 +57,33 @@ cli() { # última línea = JSON
     echo "$out" | tail -n 1
 }
 json() { node -e "const j=JSON.parse(process.argv[1]);const v=j[process.argv[2]];console.log(typeof v==='object'?JSON.stringify(v):v)" "$1" "$2" 2>/dev/null || python3 -c "import json,sys;print(json.loads(sys.argv[1])[sys.argv[2]])" "$1" "$2"; }
+unit="$HOME/.config/systemd/user/lampson-hub.service"
+# systemd no hereda el PATH de la sesión (~/.local/bin, donde se instala synsema, no está): sin estas dos líneas el hub
+# arranca pero no puede encender ningún workspace ni los agentes encuentran node, git, claude…
+write_unit() {
+    mkdir -p "$(dirname "$unit")"
+    cat > "$unit" <<EOF
+[Unit]
+Description=Lampson hub (workspaces, tareas programadas, proxy)
+After=network.target
+[Service]
+WorkingDirectory=$here
+Environment=LAMPSON_HOME=$here
+Environment="LAMPSON_SYNSEMA=$(command -v synsema)"
+Environment="PATH=$(dirname "$(command -v synsema)"):$PATH"
+ExecStart=$(command -v synsema) serve hub.syn
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+[Install]
+WantedBy=default.target
+EOF
+}
+# una unit de antes de ese arreglo se reescribe sola (una vez) y el hub se reinicia con el PATH bueno
+if [ "$install" = "" ] && [ -f "$unit" ] && ! grep -q LAMPSON_SYNSEMA "$unit"; then
+    write_unit
+    systemctl --user daemon-reload && systemctl --user restart lampson-hub.service && echo "lampson: servicio del hub actualizado (PATH del motor)" >&2 || true
+fi
 # dominio propio (opcional): HTTPS automático con Let's Encrypt delante del hub
 if [ "$domain" != "-" ]; then
     (cd "$here" && LAMPSON_CMD=domain LAMPSON_DOMAIN="$domain" LAMPSON_EMAIL="$email" synsema run cli.syn | sed '$d')
@@ -91,26 +118,12 @@ if [ -n "$hub" ]; then
     exit 0
 fi
 if [ "$install" = install ]; then
-    unit="$HOME/.config/systemd/user/lampson-hub.service"; mkdir -p "$(dirname "$unit")"
-    cat > "$unit" <<EOF
-[Unit]
-Description=Lampson hub (workspaces, tareas programadas, proxy)
-After=network.target
-[Service]
-WorkingDirectory=$here
-Environment=LAMPSON_HOME=$here
-ExecStart=$(command -v synsema) serve hub.syn
-Restart=always
-RestartSec=3
-TimeoutStopSec=20
-[Install]
-WantedBy=default.target
-EOF
+    write_unit
     (cd "$here" && LAMPSON_CMD=hub-stop synsema run cli.syn >/dev/null 2>&1 || true)
     systemctl --user daemon-reload && systemctl --user enable --now lampson-hub.service && echo "instalado: systemd --user lampson-hub.service (arranca con tu sesión; 'loginctl enable-linger $USER' para que viva sin sesión abierta)"
     exit 0
 fi
-if [ "$install" = uninstall ]; then systemctl --user disable --now lampson-hub.service || true; rm -f "$HOME/.config/systemd/user/lampson-hub.service"; systemctl --user daemon-reload; echo "quitado"; exit 0; fi
+if [ "$install" = uninstall ]; then systemctl --user disable --now lampson-hub.service || true; rm -f "$unit"; systemctl --user daemon-reload; echo "quitado"; exit 0; fi
 # --- proyecto ---
 [ -z "$ws" ] && [ "$caller" != "$here" ] && ws="$caller"
 [ -n "$ws" ] || { echo "corré lampson desde la carpeta del proyecto, o --workspace /ruta (lampson --hub status lista los workspaces)" >&2; exit 1; }
