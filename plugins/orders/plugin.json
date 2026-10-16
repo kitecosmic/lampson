@@ -1,6 +1,6 @@
 {
   "name": "orders",
-  "description": "Take orders by chat: catalog, quotes with promos and delivery, orders saved with customer and address, stock kept up to date. Data in .lampson/orders/ of the project.",
+  "description": "Take orders by chat: catalog, quotes with promos and delivery, orders saved with customer and address (and changed or cancelled while still new), stock kept up to date. Data in .lampson/orders/ of the project.",
   "kind": "syn",
   "entry": "plugin.syn",
   "caps": "file=workspace/.lampson/orders,file=workspace/.lampson/orders/*",
@@ -42,6 +42,28 @@
         },
         "required": ["customer", "items", "delivery", "payment"]
       }
+    },
+    {
+      "name": "update_order",
+      "description": "Changes an order that is still 'new' (the store hasn't started it): the cart, delivery or pickup, address, payment, time or notes. Pass `items` as the WHOLE cart after the change (omit it to keep the cart). Re-prices everything and moves the stock. Only after the customer confirmed the change.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {"type": "string"},
+          "items": {"type": "array", "description": "the whole cart after the change", "items": {"type": "object", "properties": {"sku": {"type": "string"}, "qty": {"type": "integer", "minimum": 1}}, "required": ["sku", "qty"]}},
+          "delivery": {"type": "string", "enum": ["delivery", "pickup"]},
+          "address": {"type": "string"},
+          "payment": {"type": "string"},
+          "when": {"type": "string"},
+          "notes": {"type": "string"}
+        },
+        "required": ["order_id"]
+      }
+    },
+    {
+      "name": "cancel_order",
+      "description": "Cancels an order that is still 'new' and puts its stock back. Only after the customer clearly asked to cancel it.",
+      "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["order_id"]}
     },
     {
       "name": "find_customer",
