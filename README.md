@@ -96,19 +96,32 @@ plugins were called *lamps*; old `.lampson/lamps/` folders and `LAMP_*` variable
 
 ## Use it from your app
 
-Lampson also runs **headless**, as the engine behind something else — a bot that answers your shop's
-messages, a script that asks it about a database, another agent that delegates to it:
+Lampson's agents also work **inside other software**, as an engine: a bot that answers your shop's customers, your
+backend asking an agent something, another AI using your agents as a tool.
 
 ```sh
-lampson run "summarize what changed today"                      # prints the answer
-echo "do you have whole-wheat bread?" | lampson run --agent shop --thread whatsapp:+5491122334455 --json
+lampson key add --agent shop                     # an API key for your app (rate limit, allowed callbacks)
+curl -X POST http://127.0.0.1:8080/w/<workspace>/v1/messages -H "Authorization: Bearer lk_…"      -d '{"to": "shop", "thread": "customer-42", "text": "do you have whole-wheat bread?"}'
+lampson channel on telegram && lampson channel setup telegram     # a Telegram bot — even without a public URL
+lampson mcp serve --agent shop                   # your agent as a tool for Claude, Cursor or another Lampson
+lampson run --agent shop "hi"                    # one message from a script; --json streams every step
 ```
 
-An agent is a file: `.lampson/agents/shop.agent.json` in your project, with its own prompt, the exact tools it
-may use and its permissions (`strict` by default when nobody is there to approve). Same `--thread` → same
-conversation, so each customer keeps their own history. `--json` streams every step as JSON lines.
-Details in [guide.md](guide.md#headless-lampson-run); where this is going (HTTP API, MCP server, channels,
-agent teams) in [spec/engine.md](spec/engine.md).
+```js
+import { Lampson } from "lampson";               // also: pip install lampson
+const lampson = new Lampson({ local: { workspace: "./my-project" } });   // or { url, key } for a running Lampson
+const r = await lampson.ask({ agent: "shop", thread: "customer-42", text: "do you have whole-wheat bread?" });
+```
+
+- **An agent is a file**: `.lampson/agents/shop.agent.json` (or `~/lampson/agents/` for every project) — its prompt,
+  the exact tools it may use (optionally limited to some paths, with per-tool approval) and its model.
+- **One conversation per customer** (`thread`), and a mailbox per conversation: a burst of messages gets one
+  answer, and what arrives while the agent works joins the turn in progress.
+- **Channels are plugins**: Telegram and Chatwoot (WhatsApp, Instagram, email…) ship with Lampson; anyone can write
+  another with two actions, `receive` and `send`.
+- **Agent ↔ agent**: put another Lampson's `/v1/mcp` URL in your `mcp.json` and your agent can ask theirs.
+
+Docs: **[lampson.org/docs/engine](https://lampson.org/docs/engine)**. Design and status: [spec/engine.md](spec/engine.md).
 
 ## Also in the box
 
