@@ -18,6 +18,7 @@ require file(".lampson/*")
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require random
 
 use "./lib/permission.syn" as permission
 use "./lib/session.syn" as session
@@ -1313,3 +1314,113 @@ test "auth: la sesión se renueva con el uso, con tope a los 90 días del ingres
     assert_eq(r2["expires"], 90 * d, "nunca pasa el tope")
     let old be {"device": "x", "created": 0, "expires": 30 * d}
     assert_eq(auth.renewed(old, 10 * d)["hard"], 90 * d, "sesiones viejas sin hard/seen")
+
+-- ---------- runtime (lib/runtime.syn · spec/engine.md) ----------
+
+use "./lib/runtime.syn" as runtime
+
+task rm_file(path)
+    when env("OS", "") == "Windows_NT"
+        run("cmd", ["/c", "del", "/q", replace(path, "/", "\\")], 10)
+    otherwise
+        run("rm", ["-f", path], 10)
+
+test "runtime: validate completa defaults y rechaza specs inválidas"
+    let v be runtime.validate({"id": "soporte", "system": "Eres el asistente."}, "x")
+    assert(v["ok"], v["error"])
+    let s be v["spec"]
+    assert_eq(s["base"], "none")
+    assert_eq(s["tools"], [])
+    assert_eq(s["permission"], "")
+    assert_eq(s["steps"], 0)
+    assert_eq(s["model"], {"provider": "", "model": ""})
+    assert(not s["builtin"])
+    assert(not runtime.validate({"id": "Soporte", "system": "x"}, "x")["ok"], "id con mayúscula")
+    assert(not runtime.validate({"id": "a_b", "system": "x"}, "x")["ok"], "id con _")
+    assert(not runtime.validate({"id": "a", "base": "none"}, "x")["ok"], "base none sin system")
+    assert(runtime.validate({"id": "a", "base": "lampson"}, "x")["ok"], "base lampson sin system vale (usa el prompt de código)")
+    assert(not runtime.validate({"id": "a", "system": "x", "permission": "maybe"}, "x")["ok"])
+    assert(not runtime.validate({"id": "a", "system": "x", "tools": "read"}, "x")["ok"], "tools tiene que ser lista")
+    assert(not runtime.validate({"id": "a", "system": "x", "steps": -1}, "x")["ok"])
+    assert(not runtime.validate(["no", "map"], "x")["ok"])
+
+test "runtime: agentes del proyecto junto a los integrados; un archivo roto no tumba a los demás"
+    let dir be runtime.PROJECT_DIR
+    write_file(dir + "/rt-ok.agent.json", json_encode({"id": "rt-ok", "system": "Hola.", "tools": ["read"], "steps": 7}))
+    write_file(dir + "/rt-roto.agent.json", "{ esto no es json")
+    write_file(dir + "/rt-nombre.agent.json", json_encode({"id": "otro-id", "system": "x"}))
+    let lp be runtime.load_project()
+    assert_eq(apply((s) => s["id"], lp["specs"]), ["rt-ok"])
+    assert_eq(length(lp["errors"]), 2, json_encode(lp["errors"]))
+    let n be runtime.names()
+    assert(contains(n, "rt-ok"))
+    assert(contains(n, "build") and contains(n, "plan"), "los integrados siguen")
+    assert(not contains(n, "worker"), "worker es interno")
+    assert_eq(runtime.get("rt-ok")["steps"], 7)
+    assert(runtime.get("build")["builtin"])
+    assert_eq(runtime.get("nadie"), nothing)
+    each f in ["rt-ok", "rt-roto", "rt-nombre"]
+        rm_file(dir + "/" + f + ".agent.json")
+    assert_eq(runtime.get("rt-ok"), nothing)
+
+test "runtime: allow-list de tools — exacto o prefijo con *"
+    assert(runtime.allowed(["read", "plugin_pedidos_*"], "read"))
+    assert(runtime.allowed(["plugin_pedidos_*"], "plugin_pedidos_crear"))
+    assert(not runtime.allowed(["plugin_pedidos_*"], "plugin_otro_x"))
+    assert(not runtime.allowed(["read"], "write"))
+    assert(runtime.allowed(["mcp_*"], "mcp_db_query"))
+
+test "runtime: un agente del proyecto ve SOLO sus tools; un integrado, las de siempre"
+    let spec be runtime.validate({"id": "rt-a", "system": "x", "tools": ["read", "grep", "no-existe"]}, "x")["spec"]
+    let reg be runtime.registry_of(spec)
+    assert_eq(sort(keys(reg)), ["grep", "read"])
+    assert_eq(sort(apply((s) => s["name"], runtime.catalog_of(spec))), ["grep", "read"])
+    let sd be runtime.validate({"id": "rt-d", "system": "x", "tools": ["read", "delegate"]}, "x")["spec"]
+    assert(contains(runtime.registry_of(sd), "delegate"))
+    assert(contains(apply((s) => s["name"], runtime.catalog_of(sd)), "delegate"))
+    assert_eq(sort(keys(runtime.registry_of(runtime.get("plan")))), sort(keys(agents.registry_for("plan"))))
+    assert_eq(length(runtime.catalog_of(runtime.get("build"))), length(agents.catalog_for("build")))
+
+test "runtime: boot de un agente del proyecto — su prompt, pasos, presupuesto y permisos"
+    write_file(runtime.PROJECT_DIR + "/rt-b.agent.json", json_encode({"id": "rt-b", "system": "Eres el bot de la panadería.", "tools": ["read"], "steps": 5, "budget_tokens": 9000, "permission": "strict"}))
+    let ctx be runtime.boot("rt-b", {}, nothing)
+    assert(starts_with(ctx["system"]["content"], "Eres el bot de la panadería."), "base none: solo su prompt")
+    assert(not contains(ctx["system"]["content"], "You are Lampson"))
+    assert_eq(ctx["opts"]["max_steps"], 5)
+    assert_eq(ctx["opts"]["budget_tokens"], 9000)
+    assert_eq(ctx["opts"]["permission_mode"], "strict")
+    assert_eq(ctx["opts"]["inbox_fn"], nothing, "sin delegate no hay buzón de subagentes")
+    assert_eq(runtime.boot("rt-b", {"mode": "yolo"}, nothing)["opts"]["permission_mode"], "yolo", "la puerta pisa al agente")
+    let b be runtime.boot("build", {}, nothing)
+    assert(contains(b["system"]["content"], "You are Lampson"), "el integrado sigue con el prompt de código")
+    assert(b["opts"]["inbox_fn"] != nothing)
+    rm_file(runtime.PROJECT_DIR + "/rt-b.agent.json")
+    let failed be false
+    try
+        runtime.boot("rt-b", {}, nothing)
+    recover err
+        set failed to contains(text(err), "no agent named")
+    assert(failed, "agente inexistente → error claro")
+
+test "runtime: sesión por (agente, thread)"
+    let a be runtime.fresh_session()
+    assert(matches(a, "[0-9]{8}-[0-9]{6}-[0-9]{4}"), a)
+    assert_eq(runtime.thread_key("x", "t"), runtime.thread_key("x", "t"))
+    assert(runtime.thread_key("x", "t") != runtime.thread_key("y", "t"), "mismo thread, otro agente = otra sesión")
+    let o be {"session": "test-rt-thread", "thread": "whatsapp:+5491100000000", "ctx": {"agent": "rt-t"}}
+    runtime.save(o, [{"role": "system", "content": "s"}, {"role": "user", "content": "hola"}])
+    assert_eq(runtime.thread_session("rt-t", "whatsapp:+5491100000000"), "test-rt-thread")
+    assert_eq(runtime.thread_session("otro", "whatsapp:+5491100000000"), "")
+    assert_eq(runtime.thread_session("rt-t", ""), "")
+    let doc be session.load("test-rt-thread")
+    assert_eq(doc["meta"]["agent"], "rt-t")
+    assert_eq(doc["meta"]["thread"], "whatsapp:+5491100000000")
+    rm_file(runtime.THREADS_DIR + "/" + runtime.thread_key("rt-t", "whatsapp:+5491100000000") + ".json")
+    assert_eq(runtime.thread_session("rt-t", "whatsapp:+5491100000000"), "")
+
+test "session: ids viejos (14 dígitos) y del runtime (18) en orden de creación, sin perder precisión"
+    assert(session.id_key("20261016-122626-1735") > session.id_key("20261016-122626"), "mismo segundo: el del runtime después")
+    assert(session.id_key("20261016-122627") > session.id_key("20261016-122626-9999"), "un segundo más tarde gana")
+    assert(session.id_key("20261016-122626-0002") > session.id_key("20261016-122626-0001"))
+    assert_eq(session.id_key("test-rt-thread"), 0)
+    assert_eq(session.id_key("test-20261016-122626"), session.id_key("20261016-122626"), "los test- se ordenan como antes")
