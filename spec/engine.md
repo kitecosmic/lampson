@@ -289,7 +289,7 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
       y sin firma → 401, saliente ignorado, log); unitarios del manifiesto y del contrato.
 
 **Pendientes que salieron en la fase 4:**
-- [ ] Probar `plugins/chatwoot` contra un Chatwoot real (formato verificado con la doc oficial; `message_type`
+- [ ] **(después, decidido por Joel)** Probar `plugins/chatwoot` contra un Chatwoot real (formato verificado con la doc oficial; `message_type`
       llega como texto o número según la versión, cubierto).
 - [x] Imágenes entrantes: hoy van como link en el texto; pasarlas como imagen si el modelo tiene visión.
       → hecho: Telegram (getFile, la más grande ≤ 1 MB) y Chatwoot (adjuntos imagen ≤ 1,5 MB) las pasan como imagen.
@@ -348,8 +348,9 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
       local usa el comando `lampson` instalado. `tests/sdk_test.py`: los dos modos.
 - [x] A mano, modo local real (por el launcher, con el modelo de Joel, en `e-commerce`): JS y Python arrancan
       Lampson en ~4-5 s y el agente `tienda` responde; el hub no se toca.
-- [ ] Publicar: npm (sale con la próxima versión del paquete) y PyPI (`sdk/python`: paquete armado, `twine check`
-      PASSED, el nombre `lampson` está libre; lo sube Joel con su token).
+- [x] **npm: publicado `lampson@0.3.0`** (2026-10-16, tag `v0.3.0` desde `feat/engine`, con procedencia firmada):
+      `npm i lampson` trae el CLI y el SDK (`require` e `import` verificados en una carpeta limpia).
+- [ ] PyPI (`sdk/python`: paquete armado, `twine check` PASSED, el nombre `lampson` está libre; lo sube Joel).
 - [x] Modo local: los pedidos se atienden de a uno; varias conversaciones en paralelo necesitarían varios procesos o
       un `--stdio` concurrente.
       → hecho: protocolo 2, un agente por ask; misma conversación en fila, distintas en paralelo (6 s en vez de 12).
