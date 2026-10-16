@@ -147,7 +147,7 @@ serve on 8080
     describe
         about: "Lampson API — agents of this workspace for your apps, channels and other agents"
         version: "1.0.0"
-        api: ["POST /w/:slug/v1/messages -- send a message to an agent and get its answer (JSON); with \"callback\", 202 now and the answer POSTed later. Body: {to, thread, text, images?, from?, meta?, sent_at?, session?, callback?}", "POST /w/:slug/v1/messages/stream -- the same, as Server-Sent Events: session, the agent's steps, done", "GET /w/:slug/v1/agents -- the agents this API key can use", "GET /w/:slug/v1/jobs/:id -- status and result of a message sent with a callback", "POST /w/:slug/v1/mcp -- Model Context Protocol (Streamable HTTP, JSON responses): tools ask and agents, for other AI agents", "GET /w/:slug/v1/mcp -- 405: this MCP server opens no server-to-client stream"]
+        api: ["POST /w/:slug/v1/messages -- send a message to an agent and get its answer (JSON); with \"callback\", 202 now and the answer POSTed later. Body: {to, thread, text, images?, from?, meta?, sent_at?, session?, callback?}", "POST /w/:slug/v1/messages/stream -- the same, as Server-Sent Events: session, the agent's steps, done", "GET /w/:slug/v1/agents -- the agents this API key can use", "GET /w/:slug/v1/jobs/:id -- status and result of a message sent with a callback", "POST /w/:slug/v1/mcp -- Model Context Protocol (Streamable HTTP, JSON responses): tools ask, agents and history, for other AI agents", "POST /w/:slug/v1/mcp/stream -- the same MCP server answering with Server-Sent Events: with params._meta.progressToken, each step of the agent arrives as notifications/progress before the result", "GET /w/:slug/v1/mcp -- 405: this MCP server opens no server-to-client stream"]
 
     -- la UI vive bajo /w/<slug> (BASE en js/core.js); si alguien entra por el puerto del proceso, es lo mismo
     -- Acceso DIRECTO por el puerto del proceso (sin X-Forwarded-Host, que solo agrega el hub al proxyear): la UI se
@@ -821,6 +821,53 @@ serve on 8080
         when resp == nothing
             give respond("", "application/json", 202)
         give resp
+
+    -- la misma conversación MCP pero con respuestas SSE: si el pedido trae params._meta.progressToken, cada paso del
+    -- agente sale como notifications/progress antes de la respuesta. Ruta aparte porque en Synsema una ruta transmite
+    -- o no (un `stream` dentro de un `when` no transmite) y /v1/mcp debe contestar 202 vacío a las notificaciones.
+    route "POST /w/:slug/v1/mcp/stream" requires auth
+        expect body {jsonrpc: text, method: text}
+        let a be api.authorize(headers of request)
+        let offered be when a["ok"] then apply((x) => x["id"], api.agents_for(a["key"])) otherwise []
+        let req be json of request
+        let ptoken be nothing
+        when contains(req, "params") and type_of(req["params"]) == "map" and contains(req["params"], "_meta") and type_of(req["params"]["_meta"]) == "map" and contains(req["params"]["_meta"], "progressToken")
+            set ptoken to req["params"]["_meta"]["progressToken"]
+        stream
+            -- un ask por el buzón, mirando el bus de la conversación para el progreso
+            task deliver_sse(sobre, mode)
+                let mid be mailbox.new_id()
+                let sub be bus_subscribe("lampson.mb." + mailbox.key_of(sobre, mid))
+                mailbox.submit(sobre, {"mode": mode, "buffer": mailbox.buffer_of(runtime.get(sobre["to"]), false), "id": mid})
+                let n be 0
+                let result be nothing
+                let deadline be now() + mailbox.WAIT_TIMEOUT
+                while result == nothing and now() < deadline
+                    let ev be bus_recv(sub, 1)
+                    when ev != nothing
+                        let d be ev["data"]
+                        when d["kind"] == "done" and contains(d["data"]["batch"], mid)
+                            set result to d["data"]
+                        otherwise when ptoken != nothing and (d["kind"] == "assistant" or d["kind"] == "tool_call")
+                            set n to n + 1
+                            let what be when d["kind"] == "tool_call" then "using " + text(d["data"]["name"]) otherwise slice(text(d["data"]), 0, 200)
+                            send {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": ptoken, "progress": n, "message": what}} as "message"
+                    when result == nothing
+                        let r be state_get("mb:res:" + mid, nothing)
+                        when r != nothing
+                            set result to r
+                state_delete("mb:res:" + mid)
+                bus_unsubscribe(sub)
+                give when result == nothing then {"agent": sobre["to"], "thread": sobre["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: timed out"} otherwise result
+            when not a["ok"]
+                send {"jsonrpc": "2.0", "id": nothing, "error": {"code": -32001, "message": a["error"]}} as "message"
+            otherwise when length(offered) == 0
+                send {"jsonrpc": "2.0", "id": nothing, "error": {"code": -32001, "message": "this API key has no agents"}} as "message"
+            otherwise
+                state_set("lampson:last_used", now())
+                let resp be mcp_server.handle(req, offered, deliver_sse)
+                when resp != nothing
+                    send resp as "message"
 
     route "GET /w/:slug/v1/mcp"
         give fail(405, "this MCP server does not open a server-to-client stream; POST JSON-RPC messages")

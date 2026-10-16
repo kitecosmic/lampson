@@ -269,7 +269,7 @@ check(contains(init, "result") and init["result"]["serverInfo"]["name"] == "lamp
 proc_send(mp, json_encode({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
 let tl be rpc(2, "tools/list", {})
 let tnames be when contains(tl, "result") then apply((t) => t["name"], tl["result"]["tools"]) otherwise []
-check(tnames == ["ask", "agents"], "tools/list → ask y agents")
+check(tnames == ["ask", "agents", "history"], "tools/list → ask, agents y history")
 check(contains(tl, "result") and tl["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"] == ["rt-mute", "rt-shop"], "ask ofrece solo los agentes de LAMPSON_MCP_AGENTS")
 let a1 be rpc(3, "tools/call", {"name": "ask", "arguments": {"message": "ls", "agent": "rt-shop"}})
 let sc1 be when contains(a1, "result") then a1["result"]["structuredContent"] otherwise {}
@@ -282,6 +282,9 @@ check(contains(a3, "result") and a3["result"]["isError"], "un agente que no se o
 check(contains(rpc(6, "nope/nope", {}), "error"), "método desconocido → error JSON-RPC")
 let ag2 be rpc(7, "tools/call", {"name": "agents", "arguments": {}})
 check(contains(ag2, "result") and contains(ag2["result"]["content"][0]["text"], "rt-shop: bot de prueba"), "agents lista con descripción")
+let hi be rpc(8, "tools/call", {"name": "history", "arguments": {"thread": text(sc1["thread"]), "agent": "rt-shop"}})
+check(contains(hi, "result") and contains(hi["result"]["content"][0]["text"], "USER: ls") and contains(hi["result"]["content"][0]["text"], "AGENT: final ls") and length(hi["result"]["structuredContent"]["messages"]) == 4, "history devuelve la conversación (persona y agente)")
+check(contains(rpc(9, "tools/call", {"name": "history", "arguments": {"thread": "no-existe", "agent": "rt-shop"}}), "result"), "history de un thread sin conversación → mensaje claro, no error")
 set created to append(created, sc1["session"])
 set threads to append(threads, ["rt-shop", text(sc1["thread"])])
 proc_close(mp)

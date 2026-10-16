@@ -49,7 +49,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -86,7 +86,7 @@ task post(path, body, k)
 print("OpenAPI: publica SOLO la API /v1 (la UI, la terminal, los webhooks y el hub llevan private)")
 let oa be json_decode(text(http_get(BASE + "/openapi.json", {}, nothing, 10)["body"]))
 let oa_paths be sort(keys(oa["paths"]))
-check(oa_paths == ["/w/{slug}/v1/agents", "/w/{slug}/v1/jobs/{id}", "/w/{slug}/v1/mcp", "/w/{slug}/v1/messages", "/w/{slug}/v1/messages/stream"], "por /w/<slug>/v1/openapi.json (la ruta que el hub reenvía): solo /v1 → " + json_encode(oa_paths))
+check(oa_paths == ["/w/{slug}/v1/agents", "/w/{slug}/v1/jobs/{id}", "/w/{slug}/v1/mcp", "/w/{slug}/v1/mcp/stream", "/w/{slug}/v1/messages", "/w/{slug}/v1/messages/stream"], "por /w/<slug>/v1/openapi.json (la ruta que el hub reenvía): solo /v1 → " + json_encode(oa_paths))
 check(contains(oa["paths"]["/w/{slug}/v1/messages"]["post"], "security") and contains(oa["paths"]["/w/{slug}/v1/messages"]["post"], "requestBody"), "con auth Bearer y el body declarado")
 let oa_root be json_decode(text(http_get("http://127.0.0.1:47990/openapi.json", {}, nothing, 10)["body"]))
 check(sort(keys(oa_root["paths"])) == oa_paths, "el /openapi.json de la raíz publica lo mismo")
@@ -385,7 +385,7 @@ let mi be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "param
 check(mi["status"] == 200 and mi["json"]["result"]["serverInfo"]["name"] == "lampson" and mi["json"]["result"]["protocolVersion"] == "2025-03-26", "initialize negocia la versión que pide el cliente")
 check(mcp_rpc(ka, {"jsonrpc": "2.0", "method": "notifications/initialized"})["status"] == 202, "una notificación → 202")
 let mt be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-check(apply((t) => t["name"], mt["json"]["result"]["tools"]) == ["ask", "agents"] and not contains(mt["json"]["result"]["tools"][0]["inputSchema"]["properties"], "agent"), "la key A tiene un solo agente: ask sin parámetro agent")
+check(apply((t) => t["name"], mt["json"]["result"]["tools"]) == ["ask", "agents", "history"] and not contains(mt["json"]["result"]["tools"][0]["inputSchema"]["properties"], "agent"), "la key A tiene un solo agente: ask sin parámetro agent")
 let mtb be mcp_rpc(kb, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 check(contains(mtb["json"]["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"], "rt-api") and contains(mtb["json"]["result"]["tools"][0]["inputSchema"]["properties"]["agent"]["enum"], "build"), "la key * ofrece varios agentes")
 let ma be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "ask", "arguments": {"message": "ls", "thread": "mcp:http-1"}}})
@@ -394,6 +394,23 @@ let ma2 be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "para
 check(ma2["json"]["result"]["structuredContent"]["session"] == ma["json"]["result"]["structuredContent"]["session"] and contains(ma2["json"]["result"]["content"][0]["text"], "msgs=6"), "mismo thread → la conversación sigue")
 check(mcp_rpc(ka, {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "ask", "arguments": {"message": "x", "agent": "build"}}})["json"]["result"]["isError"], "un agente fuera de la key → isError")
 check(http_get(BASE + "/mcp", {"Authorization": "Bearer " + ka["key"]}, nothing, 10)["status"] == 405, "GET → 405 (sin stream servidor→cliente)")
+let mh be mcp_rpc(ka, {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "history", "arguments": {"thread": "mcp:http-1"}}})
+check(contains(mh["json"]["result"]["content"][0]["text"], "USER: ls") and contains(mh["json"]["result"]["content"][0]["text"], "AGENT: final directo"), "history por HTTP: la conversación de mcp:http-1")
+-- /v1/mcp/stream: SSE con progreso
+let ms be http_post(BASE + "/mcp/stream", json_encode({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "ask", "arguments": {"message": "ls", "thread": "mcp:http-2"}, "_meta": {"progressToken": "pt-1"}}}), {"Authorization": "Bearer " + ka["key"], "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}, 60)
+let sse_msgs be []
+each l in split(replace(text(ms["body"]), "\r", ""), "\n")
+    when starts_with(l, "data:")
+        try
+            set sse_msgs to append(sse_msgs, json_decode(trim(slice(l, 5, length(l)))))
+        recover err
+            set sse_msgs to sse_msgs
+let progress be where(sse_msgs, (m) => contains(m, "method") and m["method"] == "notifications/progress")
+let final_msg be where(sse_msgs, (m) => contains(m, "id") and m["id"] == 7)
+check(length(progress) >= 1 and progress[0]["params"]["progressToken"] == "pt-1", "SSE: notifications/progress mientras el agente trabaja (" + text(length(progress)) + ": " + (when length(progress) > 0 then text(progress[0]["params"]["message"]) otherwise "-") + ")")
+check(length(final_msg) == 1 and starts_with(final_msg[0]["result"]["content"][0]["text"], "final ls"), "y al final la respuesta con el id del pedido")
+let ms2 be http_post(BASE + "/mcp/stream", json_encode({"jsonrpc": "2.0", "id": 8, "method": "tools/list"}), {"Authorization": "Bearer " + ka["key"], "Content-Type": "application/json"}, 30)
+check(contains(text(ms2["body"]), "\"history\""), "por SSE también responde lo demás (tools/list)")
 
 print("agente ↔ agente: un Lampson usa al agente de otro Lampson por MCP HTTP (mcp.json con url + key)")
 -- Lampson A = `lampson run` con un mcp.json que apunta a este web.syn (Lampson B); la key va por ${LAMPSON_PROVEEDOR_KEY}
