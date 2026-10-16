@@ -1,0 +1,179 @@
+-- plugins/telegram/plugin.syn — canal Telegram (contrato en lib/channels.syn)
+--
+-- Un bot de Telegram contestado por un agente de Lampson. Gratis y sin intermediarios. Lampson lo corre con techo:
+-- stdout, time, env=PLUGIN_*, net.
+--
+--   setup    registra el webhook en Telegram (setWebhook) con la URL que le pasa `lampson channel setup telegram`
+--            y el secreto de LAMPSON_TELEGRAM_WEBHOOK_SECRET; muestra el @usuario del bot (getMe).
+--   receive  un Update de Telegram. Si hay secreto, exige X-Telegram-Bot-Api-Secret-Token (Telegram lo manda en cada
+--            webhook). Pasa los mensajes nuevos de personas: ignora ediciones, posts de canales y mensajes de otros
+--            bots. Foto/audio/documento llegan como una nota en el texto (con su caption, si tiene). Avisa
+--            "escribiendo…" en el chat apenas llega el mensaje (sendChatAction), mientras el agente trabaja.
+--   send     sendMessage al chat, en partes de hasta 4000 caracteres (Telegram corta en 4096), texto plano (sin parse
+--            mode: un markdown mal formado haría fallar el envío; se quitan los ** del modelo).
+--
+-- Config (en el .env de Lampson): LAMPSON_TELEGRAM_TOKEN=<token de @BotFather>,
+-- LAMPSON_TELEGRAM_WEBHOOK_SECRET=<cualquier texto largo: letras, números, _ y ->, LAMPSON_CHANNEL_TELEGRAM_AGENT=<el
+-- agente que atiende>. LAMPSON_TELEGRAM_API = otra base (un Bot API server propio, o los tests); por defecto la oficial.
+intent: "lampson channel plugin: Telegram bot ↔ Lampson agent"
+
+require env("PLUGIN_*")
+require net
+require time
+
+let action be env("PLUGIN_TOOL", "")
+let args be json_decode(env("PLUGIN_ARGS", "{}"))
+
+task field(m, k, fallback)
+    when m != nothing and type_of(m) == "map" and contains(m, k) and m[k] != nothing
+        give m[k]
+    give fallback
+
+task header(h, name)
+    each k in keys(h)
+        when lower(k) == name
+            give text(h[k])
+    give ""
+
+task api(method)
+    let base be env("PLUGIN_TELEGRAM_API", "")
+    when base == ""
+        set base to "https://api.telegram.org"
+    while ends_with(base, "/")
+        set base to slice(base, 0, length(base) - 1)
+    give base + "/bot" + env("PLUGIN_TELEGRAM_TOKEN", "") + "/" + method
+
+task tg(method, body)
+    let r be http_post(api(method), json_encode(body), {"Content-Type": "application/json"}, 20)
+    let d be {}
+    try
+        set d to json_decode(text(field(r, "body", "{}")))
+    recover err
+        set d to {}
+    give {"ok": r["ok"] and field(d, "ok", false) == true, "status": r["status"], "data": d}
+
+task out(m)
+    print(json_encode(m))
+
+task ignore(why)
+    out({"messages": [], "ignored": why})
+
+task need_token()
+    when env("PLUGIN_TELEGRAM_TOKEN", "") == ""
+        print("ERROR: set LAMPSON_TELEGRAM_TOKEN in Lampson's .env (the token @BotFather gave you)")
+        give false
+    give true
+
+task setup()
+    when not need_token()
+        give false
+    let url be text(field(args, "webhook_url", ""))
+    when not starts_with(url, "https://")
+        print("ERROR: Telegram only sends webhooks to an https:// URL (got '" + url + "')")
+        give false
+    let body be {"url": url, "allowed_updates": ["message"]}
+    let sec be env("PLUGIN_TELEGRAM_WEBHOOK_SECRET", "")
+    when sec != ""
+        set body["secret_token"] to sec
+    let me be tg("getMe", {})
+    let r be tg("setWebhook", body)
+    when not r["ok"]
+        print("ERROR: setWebhook failed (" + text(r["status"]) + "): " + text(field(r["data"], "description", "")))
+        give false
+    let who be when me["ok"] then "@" + text(field(field(me["data"], "result", {}), "username", "?")) otherwise "your bot"
+    print("webhook registered: " + who + " → " + url + (when sec == "" then "  (no secret: set LAMPSON_TELEGRAM_WEBHOOK_SECRET and run setup again so only Telegram can post here)" otherwise "  (with secret token)"))
+    give true
+
+task receive()
+    let h be field(args, "headers", {})
+    let sec be env("PLUGIN_TELEGRAM_WEBHOOK_SECRET", "")
+    when sec != "" and header(h, "x-telegram-bot-api-secret-token") != sec
+        out({"messages": [], "http": {"status": 401, "body": "invalid secret token"}})
+        give false
+    let up be nothing
+    try
+        set up to json_decode(text(field(args, "body", "")))
+    recover err
+        ignore("body is not JSON")
+        give false
+    -- solo mensajes nuevos: una edición contestada otra vez sería una respuesta duplicada
+    let m be field(up, "message", nothing)
+    when m == nothing
+        ignore("not a new message")
+        give false
+    let who be field(m, "from", {})
+    when field(who, "is_bot", false) == true
+        ignore("message from a bot")
+        give false
+    let content be text(field(m, "text", field(m, "caption", "")))
+    let notes be []
+    when contains(m, "photo")
+        set notes to append(notes, "[the user sent a photo]")
+    when contains(m, "voice") or contains(m, "audio")
+        set notes to append(notes, "[the user sent an audio message]")
+    when contains(m, "document")
+        set notes to append(notes, "[the user sent a file: " + text(field(field(m, "document", {}), "file_name", "")) + "]")
+    when contains(m, "location")
+        set notes to append(notes, "[the user shared a location]")
+    when length(notes) > 0
+        set content to trim(content + "\n" + join(notes, "\n"))
+    when trim(content) == ""
+        ignore("empty message")
+        give false
+    let chat be field(m, "chat", {})
+    let chat_id be field(chat, "id", nothing)
+    when chat_id == nothing
+        ignore("no chat id")
+        give false
+    -- "escribiendo…" mientras el agente trabaja (dura ~5 s en Telegram; si falla no importa)
+    when env("PLUGIN_TELEGRAM_TOKEN", "") != ""
+        try
+            tg("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        recover err
+            set chat_id to chat_id
+    let name be trim(text(field(who, "first_name", "")) + " " + text(field(who, "last_name", "")))
+    out({"messages": [{"thread": text(chat_id), "text": content, "sent_at": field(m, "date", nothing), "from": {"id": text(field(who, "id", "")), "name": name, "username": text(field(who, "username", "")), "kind": "human"}, "meta": {"chat_id": chat_id, "message_id": field(m, "message_id", nothing), "chat_type": text(field(chat, "type", ""))}}]})
+    give true
+
+-- partes de hasta `max` caracteres, cortando en un salto de línea si hay uno cerca
+task chunks(t, max)
+    let parts be []
+    let rest be t
+    while length(rest) > max
+        let cut be max
+        let head be slice(rest, 0, max)
+        let nl be split(head, "\n")
+        when length(nl) > 1
+            let last_len be length(nl[length(nl) - 1])
+            when max - last_len > max / 2
+                set cut to max - last_len
+        set parts to append(parts, trim(slice(rest, 0, cut)))
+        set rest to slice(rest, cut, length(rest))
+    when trim(rest) != ""
+        set parts to append(parts, trim(rest))
+    give parts
+
+task send()
+    when not need_token()
+        give false
+    let meta be field(args, "meta", {})
+    let chat_id be field(meta, "chat_id", field(args, "thread", nothing))
+    let t be replace(text(field(args, "text", "")), "**", "")
+    let n be 0
+    each part in chunks(t, 4000)
+        let r be tg("sendMessage", {"chat_id": chat_id, "text": part})
+        when not r["ok"]
+            print("ERROR: sendMessage failed (" + text(r["status"]) + "): " + text(field(r["data"], "description", "")))
+            give false
+        set n to n + 1
+    print("sent " + text(n) + " message(s) to chat " + text(chat_id))
+    give true
+
+when action == "setup"
+    setup()
+otherwise when action == "receive"
+    receive()
+otherwise when action == "send"
+    send()
+otherwise
+    print("ERROR: unknown action '" + action + "'")

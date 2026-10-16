@@ -49,7 +49,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -65,7 +65,7 @@ write_file(ADIR + "/rt-api2.agent.json", json_encode({"id": "rt-api2", "system":
 
 let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
 let cbs be proc_spawn("synsema", ["serve", "tests/mock_callback.syn"], {"stderr": "merge"})
-let web be proc_spawn("synsema", ["serve", "web.syn", "--port", "47990", "--bind", "127.0.0.1"], {"stderr": "merge", "env": {"LAMPSON_WEBHOOK_SECRET": "s3cret", "LAMPSON_CHATWOOT_URL": "http://127.0.0.1:8767/", "LAMPSON_CHATWOOT_TOKEN": "tok-test", "LAMPSON_CHATWOOT_WEBHOOK_SECRET": "cwsecret", "LAMPSON_CHANNEL_CHATWOOT_AGENT": "rt-buf"}})
+let web be proc_spawn("synsema", ["serve", "web.syn", "--port", "47990", "--bind", "127.0.0.1"], {"stderr": "merge", "env": {"LAMPSON_WEBHOOK_SECRET": "s3cret", "LAMPSON_CHATWOOT_URL": "http://127.0.0.1:8767/", "LAMPSON_CHATWOOT_TOKEN": "tok-test", "LAMPSON_CHATWOOT_WEBHOOK_SECRET": "cwsecret", "LAMPSON_CHANNEL_CHATWOOT_AGENT": "rt-buf", "LAMPSON_TELEGRAM_TOKEN": "T1", "LAMPSON_TELEGRAM_WEBHOOK_SECRET": "tgsecret", "LAMPSON_TELEGRAM_API": "http://127.0.0.1:8767", "LAMPSON_CHANNEL_TELEGRAM_AGENT": "rt-buf"}})
 check(wait_up("http://127.0.0.1:8765/v1/models"), "mock LLM arriba")
 check(wait_up("http://127.0.0.1:8767/last"), "receptor de callbacks arriba")
 check(wait_up("http://127.0.0.1:47990/w/test/api/health"), "web.syn arriba en :47990")
@@ -263,6 +263,100 @@ while not contains(chlog, "SENT 1:77") and tries4 < 40
 check(contains(chlog, "RECV 1:77") and contains(chlog, "SENT 1:77"), "el log del canal registra lo que entró y lo que salió")
 plugins.set_enabled("chatwoot", cw_was_on)
 rm_file(".lampson/channels/chatwoot.log")
+
+print("canales: el plugin telegram de punta a punta (setup, webhook con secreto, escribiendo…, sendMessage)")
+let tg_was_on be length(where(plugins.all(), (l) => l["name"] == "telegram" and l["enabled"])) > 0
+plugins.set_enabled("telegram", true)
+task tg_calls(method)
+    let all_calls be json_decode(text(http_get("http://127.0.0.1:8767/telegram/calls", {}, nothing, 10)["body"]))["calls"]
+    give where(all_calls, (c) => c["method"] == method)
+task tg_post(update, secret)
+    let hs be {"Content-Type": "application/json"}
+    when secret != ""
+        set hs["X-Telegram-Bot-Api-Secret-Token"] to secret
+    let r be http_post(CH + "/telegram", json_encode(update), hs, 30)
+    let d be {}
+    try
+        set d to json_decode(text(r["body"]))
+    recover err
+        set d to {"raw": text(r["body"])}
+    give {"status": r["status"], "json": d}
+task tg_msg(chat, text_, date, extra)
+    let m be {"message_id": date, "from": {"id": 9001, "is_bot": false, "first_name": "Ana", "username": "ana_p"}, "chat": {"id": chat, "type": "private"}, "date": date, "text": text_}
+    each k in keys(extra)
+        set m[k] to extra[k]
+    give {"update_id": date, "message": m}
+-- run.syn como lo llama `lampson channel …` (con la URL pública y el slug que pone el launcher)
+task channel_cli(cmd, name)
+    let p be proc_spawn("synsema", ["run", "run.syn"], {"env": {"LAMPSON_CHANNEL_CMD": cmd, "LAMPSON_CHANNEL_NAME": name, "LAMPSON_PUBLIC_URL": "https://example.test", "LAMPSON_WS": "test", "LAMPSON_TELEGRAM_TOKEN": "T1", "LAMPSON_TELEGRAM_WEBHOOK_SECRET": "tgsecret", "LAMPSON_TELEGRAM_API": "http://127.0.0.1:8767", "LAMPSON_CHANNEL_TELEGRAM_AGENT": "rt-buf"}, "stderr": "merge", "line_mode": true, "on_full": "drop_oldest"})
+    proc_close_stdin(p)
+    let lines be []
+    let code be nothing
+    let deadline be now() + 60
+    while code == nothing and now() < deadline
+        let ev be proc_recv(p, 1)
+        when ev != nothing
+            when ev["type"] == "exit"
+                set code to ev["data"]["exit_code"]
+            otherwise
+                set lines to append(lines, ev["data"])
+    proc_close(p)
+    give {"code": code, "out": join(lines, "\n")}
+let cl be channel_cli("list", "")
+check(cl["code"] == 0 and contains(cl["out"], "● telegram") and contains(cl["out"], "agente: rt-buf") and contains(cl["out"], "https://example.test/w/test/ch/telegram"), "lampson channel list: encendido, agente y URL del webhook")
+let cs be channel_cli("setup", "telegram")
+let hooks_set be tg_calls("setWebhook")
+check(cs["code"] == 0 and contains(cs["out"], "@lampson_test_bot") and length(hooks_set) > 0, "lampson channel setup telegram registra el webhook: " + trim(cs["out"]))
+check(length(hooks_set) > 0 and hooks_set[length(hooks_set) - 1]["body"]["url"] == "https://example.test/w/test/ch/telegram" and hooks_set[length(hooks_set) - 1]["body"]["secret_token"] == "tgsecret" and hooks_set[length(hooks_set) - 1]["bot"] == "botT1", "con la URL pública, el secreto y el token del .env")
+check(contains(channel_cli("setup", "chatwoot")["out"], "apagado") or contains(channel_cli("setup", "chatwoot")["out"], "pegá esta URL"), "un canal sin setup (o apagado) lo dice en vez de fallar")
+let sends_before be length(tg_calls("sendMessage"))
+let typing_before be length(tg_calls("sendChatAction"))
+let t1 be tg_post(tg_msg(555, "hola", 100, {}), "tgsecret")
+let t2 be tg_post(tg_msg(555, "tienen pan integral?", 200, {}), "tgsecret")
+check(t1["status"] == 200 and t1["json"]["accepted"] == 1 and t2["json"]["accepted"] == 1, "los dos updates aceptados enseguida")
+check(length(tg_calls("sendChatAction")) >= typing_before + 2, "avisa escribiendo… apenas llega cada mensaje")
+check(tg_post(tg_msg(555, "hola", 300, {}), "otro")["status"] == 401, "secreto inválido → 401")
+check(tg_post({"update_id": 1, "edited_message": {"message_id": 1, "chat": {"id": 555}, "from": {"id": 9001, "is_bot": false}, "text": "editado", "date": 1}}, "tgsecret")["json"]["accepted"] == 0, "una edición se ignora (no hay respuesta duplicada)")
+check(tg_post(tg_msg(555, "soy un bot", 301, {"from": {"id": 7, "is_bot": true, "first_name": "Otro"}}), "tgsecret")["json"]["accepted"] == 0, "un mensaje de otro bot se ignora")
+let tp be tg_post(tg_msg(557, nothing, 400, {"caption": "mirá esto", "photo": [{"file_id": "x"}]}), "tgsecret")
+check(tp["json"]["accepted"] == 1, "una foto con caption entra como texto con la nota")
+let sends be []
+let tries5 be 0
+while length(sends) < sends_before + 2 and tries5 < 60
+    sleep(0.5)
+    set tries5 to tries5 + 1
+    set sends to tg_calls("sendMessage")
+let to555 be where(sends, (c) => c["body"]["chat_id"] == 555)
+check(length(to555) == 1 and contains(to555[0]["body"]["text"], "msgs=3") and to555[0]["bot"] == "botT1", "UNA respuesta al chat 555 para la ráfaga de 2: " + (when length(to555) > 0 then to555[0]["body"]["text"] otherwise "(ninguna)"))
+check(length(where(sends, (c) => c["body"]["chat_id"] == 557)) == 1, "y otra al chat de la foto")
+let ts557 be runtime.thread_session("rt-buf", "telegram:557")
+let doc557 be when ts557 != "" then session.load(ts557) otherwise {"messages": []}
+check(length(where(doc557["messages"], (m) => m["role"] == "user" and contains(text(m["content"]), "mirá esto") and contains(text(m["content"]), "[the user sent a photo]"))) == 1, "el agente vio el caption y la nota de la foto")
+-- send en partes: el plugin solo, bajo su techo, con un texto de 9000 caracteres
+let longtxt be ""
+let li be 0
+while li < 180
+    set longtxt to longtxt + "Línea " + text(li) + " de una respuesta muy larga que Telegram no deja mandar entera.\n"
+    set li to li + 1
+let before_long be length(tg_calls("sendMessage"))
+let lp be proc_spawn("synsema", ["run", "--cap-set", "stdout,time,env=PLUGIN_*,env=LAMP_*,net", "plugins/telegram/plugin.syn"], {"env": {"PLUGIN_TOOL": "send", "PLUGIN_ARGS": json_encode({"thread": "558", "text": longtxt, "meta": {"chat_id": 558}}), "PLUGIN_TELEGRAM_TOKEN": "T1", "PLUGIN_TELEGRAM_API": "http://127.0.0.1:8767"}, "stderr": "merge", "line_mode": true})
+proc_close_stdin(lp)
+let lout be ""
+let lcode be nothing
+while lcode == nothing
+    let ev be proc_recv(lp, 30)
+    when ev == nothing
+        set lcode to -1
+    otherwise when ev["type"] == "exit"
+        set lcode to ev["data"]["exit_code"]
+    otherwise
+        set lout to lout + ev["data"]
+proc_close(lp)
+let parts be where(tg_calls("sendMessage"), (c) => c["body"]["chat_id"] == 558)
+check(length(parts) == 4 and length(where(parts, (c) => length(c["body"]["text"]) <= 4000)) == 4, "un texto de " + text(length(longtxt)) + " caracteres sale en 4 partes de ≤ 4000: " + lout)
+check(length(where(parts, (c) => ends_with(c["body"]["text"], "entera."))) == 4, "cada parte corta en un salto de línea, no a mitad de frase")
+plugins.set_enabled("telegram", tg_was_on)
+rm_file(".lampson/channels/telegram.log")
 
 print("MCP por HTTP (POST /v1/mcp): otro agente usa los de este workspace con la API key")
 task mcp_rpc(k, payload)

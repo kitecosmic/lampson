@@ -1501,6 +1501,9 @@ test "plugins: un canal puede no tener tools; config pasa los secretos; el chatw
     assert_eq(cw[0]["channel"], {"agent": ""})
     assert_eq(cw[0]["config"], ["CHATWOOT_URL", "CHATWOOT_TOKEN", "CHATWOOT_WEBHOOK_SECRET"])
     assert_eq(cw[0]["tools"], [])
+    let tgp be where(plugins.all(), (l) => l["name"] == "telegram")
+    assert(length(tgp) == 1 and tgp[0]["error"] == nothing and tgp[0]["channel"] != nothing, "plugins/telegram viene con lampson y es un canal")
+    assert_eq(tgp[0]["config"], ["TELEGRAM_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_API"])
     let d be plugins.PROJECT_DIR
     write_file(d + "/rt-ch/plugin.json", json_encode({"kind": "exec", "command": "node ch.js", "channel": {"agent": "Tienda"}}))
     write_file(d + "/rt-bad/plugin.json", json_encode({"kind": "exec", "command": "node x.js", "config": ["minusculas"], "channel": {}}))

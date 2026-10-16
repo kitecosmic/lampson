@@ -36,6 +36,19 @@ serve on 8767
         let l be state_get("cw_last")
         give {"count": when n == nothing then 0 otherwise n, "last": l}
 
+    -- la Bot API de Telegram que usa plugins/telegram: /bot<TOKEN>/<método>; guarda cada llamada
+    route "POST /:bot/:method"
+        let calls be state_get("tg_calls")
+        let entry be {"bot": params.bot, "method": params.method, "body": json of request}
+        state_set("tg_calls", append(when calls == nothing then [] otherwise calls, entry))
+        when params.method == "getMe"
+            give {"ok": true, "result": {"id": 1, "is_bot": true, "username": "lampson_test_bot"}}
+        give {"ok": true, "result": true}
+
+    route "GET /telegram/calls"
+        let calls be state_get("tg_calls")
+        give {"calls": when calls == nothing then [] otherwise calls}
+
     route "GET /last"
         let n be state_get("count")
         let l be state_get("last")

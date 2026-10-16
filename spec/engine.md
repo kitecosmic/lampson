@@ -282,8 +282,19 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
 - [ ] Imágenes entrantes: hoy van como link en el texto; pasarlas como imagen si el modelo tiene visión.
 - [ ] Indicador de "escribiendo…" mientras el agente trabaja (acción opcional `typing` del canal).
 - [ ] Panel de canales en la web (encender, ver el log, la URL del webhook) — con la documentación final.
-- [ ] Próximos canales oficiales: Telegram (el más simple, buen segundo ejemplo), WhatsApp Cloud API directo,
-      Slack, Discord.
+- [x] **Telegram** (`plugins/telegram`, Synsema con techo `net`), para quien no usa Chatwoot: gratis, sin
+      intermediarios. Verifica `X-Telegram-Bot-Api-Secret-Token`; solo mensajes nuevos de personas (ignora
+      ediciones, posts de canal y otros bots); foto/audio/archivo/ubicación como nota en el texto (con el caption);
+      "escribiendo…" (`sendChatAction`) apenas llega el mensaje; respuestas en partes de ≤ 4000 caracteres cortando
+      en saltos de línea, texto plano. Config: `LAMPSON_TELEGRAM_TOKEN`, `_WEBHOOK_SECRET`, `_API` (opcional).
+- [x] Acción opcional **`setup`** en el contrato de canales + CLI: `lampson channel list` (canales, encendido,
+      agente, URL del webhook) · `lampson channel on|off <canal>` · `lampson channel setup <canal>` (registra el
+      webhook con la URL pública; Telegram → `setWebhook` con el secreto). Un canal sin `setup` (Chatwoot) muestra la
+      URL para pegarla en la plataforma.
+- [x] Tests (`api_test.syn`) contra una Bot API simulada: list, setup (URL pública + secreto + token), ráfaga → una
+      respuesta, escribiendo…, secreto inválido → 401, edición y bot ignorados, foto con caption, partes de ≤ 4000.
+- [ ] Probar `plugins/telegram` con un bot real (hace falta un token de @BotFather y la URL pública por https).
+- [ ] Próximos canales oficiales: WhatsApp Cloud API directo, Slack, Discord.
 
 ### Fase 5 — SDK
 - [ ] npm: `import { Lampson } from "lampson"` (wrapper sobre `lampson run --stdio` o la API)

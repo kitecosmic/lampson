@@ -42,6 +42,8 @@ use "./lib/mcp.syn" as mcp
 use "./lib/apikeys.syn" as apikeys
 use "./lib/mcp_server.syn" as mcp_server
 use "./lib/approvals.syn" as approvals
+use "./lib/plugins.syn" as plugins
+use "./lib/channels.syn" as channels
 
 -- `lampson key add|list|remove`: API keys de la API /v1 de este workspace (lib/apikeys.syn, lib/api.syn)
 --   LAMPSON_KEY_CMD=add [LAMPSON_KEY_NAME] [LAMPSON_KEY_AGENTS=tienda,soporte]   · list · remove LAMPSON_KEY_ID
@@ -86,6 +88,49 @@ when key_cmd != ""
         print("uso: lampson key add [--agent ID[,ID]] [--name NOMBRE] · lampson key list · lampson key remove <id>")
         exit(2)
     exit(0)
+
+-- `lampson channel list|on|off|setup [canal]`: los canales (plugins con "channel", lib/channels.syn)
+let ch_cmd be env("LAMPSON_CHANNEL_CMD", "")
+when ch_cmd != ""
+    let ch_name be lower(env("LAMPSON_CHANNEL_NAME", ""))
+    let pub_ch be approvals.public_url()
+    let slug be env("LAMPSON_WS", "")
+    task hook_url(n)
+        give (when pub_ch != "" then pub_ch otherwise "http://127.0.0.1:8080") + "/w/" + (when slug == "" then "local" otherwise slug) + "/ch/" + n
+    let chs be where(plugins.all(), (l) => l["channel"] != nothing)
+    when ch_cmd == "list"
+        when length(chs) == 0
+            print("no hay canales instalados (un canal es un plugin con \"channel\" en su plugin.json)")
+        each l in chs
+            let ag be when l["error"] == nothing then channels.agent_for(l["name"], l, {}) otherwise "?"
+            print("  " + (when l["enabled"] then "● " otherwise "○ ") + l["name"] + "  " + (when l["error"] != nothing then "roto: " + text(l["error"]) otherwise "agente: " + ag + "  webhook: " + hook_url(l["name"])))
+        when pub_ch == ""
+            print("  (sin URL pública: las plataformas no llegan a esta PC. `lampson --domain …` o un túnel; ver lampson.org/docs/phone)")
+        exit(0)
+    let found be where(chs, (l) => l["name"] == ch_name)
+    when length(found) == 0
+        print("lampson channel: no hay un canal '" + ch_name + "' · instalados: " + join(apply((l) => l["name"], chs), ", "))
+        exit(2)
+    let l be found[0]
+    when ch_cmd == "on" or ch_cmd == "off"
+        plugins.set_enabled(ch_name, ch_cmd == "on")
+        print("canal " + ch_name + (when ch_cmd == "on" then " encendido · webhook: " + hook_url(ch_name) otherwise " apagado"))
+        exit(0)
+    when ch_cmd == "setup"
+        when not l["enabled"]
+            print("lampson channel: el canal " + ch_name + " está apagado — `lampson channel on " + ch_name + "` primero")
+            exit(2)
+        when pub_ch == ""
+            print("lampson channel: hace falta una URL pública (https) para que " + ch_name + " llegue a este Lampson: `lampson --domain …`, un túnel, o LAMPSON_PUBLIC_URL en .env")
+            exit(2)
+        let out be text(plugins.invoke(l, "setup", {"webhook_url": hook_url(ch_name)}))
+        when contains(out, "unknown action 'setup'")
+            print("el canal " + ch_name + " se configura desde la plataforma: pegá esta URL como webhook → " + hook_url(ch_name))
+            exit(0)
+        print(trim(out))
+        exit(when starts_with(trim(out), "ERROR") then 1 otherwise 0)
+    print("uso: lampson channel list · channel on|off <canal> · channel setup <canal>")
+    exit(2)
 
 -- `lampson mcp serve`: Lampson como servidor MCP por stdio (lib/mcp_server.syn); stdout queda SOLO para JSON-RPC
 when env("LAMPSON_MCP_SERVE", "") == "1"
