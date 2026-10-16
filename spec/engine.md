@@ -144,6 +144,11 @@ orquestación va en su propia rama.
 - [ ] Merge de `feat/engine` a `main` (cierra la fase 1)
 
 **Pendientes que salieron en la fase 1** (no bloquean; se toman cuando toque):
+- [ ] **Alcance por ruta en el allow-list** (visto 2026-10-16 con el agente `tienda` de prueba): `"tools": ["read"]`
+      permite leer *cualquier* archivo del workspace. Si un cliente logra manipular al modelo, podría sacar un `.env`.
+      Propuesta: `"tools": [{"name": "read", "paths": [".lampson/tienda/*"]}]`, que el runtime haga cumplir antes de
+      llamar a la tool. Mientras tanto, para agentes de cara al público: un plugin con una acción concreta
+      (`catalogo_buscar`) en vez de `read`.
 - [ ] En la terminal, un agente del proyecto con `model` propio usa igual el modelo configurado (`chat.syn` tiene
       su `cfg` global para `/model`). Web y `lampson run` sí lo respetan.
 - [ ] Agentes globales (`<LAMPSON_HOME>/agents/`): sumar `agents` a `LINKS` de `lib/workspaces.syn` y a `bin/lampson.js`.
