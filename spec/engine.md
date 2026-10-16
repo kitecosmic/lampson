@@ -296,6 +296,23 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
 - [ ] Probar `plugins/telegram` con un bot real (hace falta un token de @BotFather y la URL pública por https).
 - [ ] Próximos canales oficiales: WhatsApp Cloud API directo, Slack, Discord.
 
+### Fase 5a — OpenAPI de la API pública (lo que destraba todos los lenguajes)
+- [x] Solo se publica la API `/v1` (6 operaciones: messages, messages/stream, agents, jobs/{id}, mcp POST/GET): las
+      64 rutas internas de `web.syn` (UI `/api/*`, terminal, aprobaciones, webhooks `/ch/*`) llevan `private` al
+      inicio del cuerpo — se siguen sirviendo, pero quedan fuera de `/openapi.json`, `/llms.txt`, `/docs` y la agent
+      card. El hub entero es `private` (verificado en vivo: los documentos dan 404; ojo, la CLI `synsema openapi`
+      ignora el `private` del bloque serve, el servidor no).
+- [x] `describe` con título, versión de la API (1.0.0) y una descripción por operación; `requires auth` en `/v1`
+      → el documento declara Bearer; `expect body` → requestBody (`text` en messages, `jsonrpc`+`method` en mcp).
+- [x] `GET /w/<slug>/v1/openapi.json`: el documento por la ruta que el hub sí reenvía.
+- [x] Seguridad: `check_client` acepta una API key (`lk_…`) **solo** en rutas `/v1/…` — si no, una key de la API
+      abriría la UI, el chat con tools y la terminal en un Lampson sin hub (Docker). La verificación por ruta
+      (`api.authorize`) sigue: por loopback tampoco entra nadie sin key.
+- [x] Test (`api_test.syn`): el documento por `/v1/openapi.json` y por la raíz solo trae `/v1`, con auth y body;
+      `/llms.txt` no lista la UI, la terminal ni los webhooks.
+- [ ] `expect body` solo expresa campos obligatorios: los opcionales del sobre (`to`, `thread`, `callback`…) van en
+      la descripción. Un generador de clientes ve solo `text`; los SDK escritos a mano (5b) los tipan todos.
+
 ### Fase 5 — SDK
 - [ ] npm: `import { Lampson } from "lampson"` (wrapper sobre `lampson run --stdio` o la API)
 - [ ] Python, si hay demanda
@@ -310,7 +327,7 @@ comunidad suma los suyos, y nosotros vamos publicando uno cada tanto para cubrir
 
 ## Estado
 
-**Fase actual:** 5 — SDK. Fases 1, 2 (con el buzón), 3, 3b y 4 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
+**Fase actual:** 5 — SDK (5a OpenAPI hecha). Fases 1, 2 (con el buzón), 3, 3b y 4 hechas y probadas. **Rama:** `feat/engine` (desde `main` @ 61fae00).
 **Sin merge a `main` hasta terminar y probar todo el motor** (decisión de Joel, 2026-10-16): por ahora solo nosotros
 sabemos que existe. **Documentación pública al final**, con todo probado; mientras tanto el detalle vive acá.
 
@@ -341,6 +358,10 @@ Decisiones y cambios de rumbo, lo más nuevo arriba.
   - `lampson.ps1` corre dentro de la sesión de PowerShell del usuario: las variables de `run`/`key` se borran al
     terminar (un `LAMPSON_SESSION` que quedaba hacía que el siguiente `lampson` retomara esa sesión).
 
+- **2026-10-16** — El hub se cayó durante las pruebas. Hipótesis (sin confirmar): (a) los hubs que reinicié desde
+  las herramientas de Claude Code mueren con esa sesión de comandos; (b) otro agente trabajando en Synsema en la
+  misma PC reinició su servidor (:8120) y pudo matar todos los procesos `synsema`. No fue un choque de puertos. Regla
+  desde ahora: el hub lo reinicia Joel desde su terminal.
 - **2026-10-16** — No se mergea a `main` por fase: se termina y prueba todo el motor y recién ahí se documenta y se
   mergea. El alcance por ruta es **opcional**: sin `paths` el agente ve todo (uso personal, código, modelo local).
 

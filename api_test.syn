@@ -83,6 +83,16 @@ task post(path, body, k)
         set d to nothing
     give {"status": r["status"], "json": d, "raw": text(r["body"])}
 
+print("OpenAPI: publica SOLO la API /v1 (la UI, la terminal, los webhooks y el hub llevan private)")
+let oa be json_decode(text(http_get(BASE + "/openapi.json", {}, nothing, 10)["body"]))
+let oa_paths be sort(keys(oa["paths"]))
+check(oa_paths == ["/w/{slug}/v1/agents", "/w/{slug}/v1/jobs/{id}", "/w/{slug}/v1/mcp", "/w/{slug}/v1/messages", "/w/{slug}/v1/messages/stream"], "por /w/<slug>/v1/openapi.json (la ruta que el hub reenvía): solo /v1 → " + json_encode(oa_paths))
+check(contains(oa["paths"]["/w/{slug}/v1/messages"]["post"], "security") and contains(oa["paths"]["/w/{slug}/v1/messages"]["post"], "requestBody"), "con auth Bearer y el body declarado")
+let oa_root be json_decode(text(http_get("http://127.0.0.1:47990/openapi.json", {}, nothing, 10)["body"]))
+check(sort(keys(oa_root["paths"])) == oa_paths, "el /openapi.json de la raíz publica lo mismo")
+let llms be text(http_get("http://127.0.0.1:47990/llms.txt", {}, nothing, 10)["body"])
+check(contains(llms, "/v1/messages") and not contains(llms, "/api/term") and not contains(llms, "/api/chat") and not contains(llms, "/ch/"), "/llms.txt tampoco lista la UI, la terminal ni los webhooks")
+
 print("auth")
 check(http_get(BASE + "/agents", {}, nothing, 10)["status"] == 401, "sin key → 401")
 check(http_get(BASE + "/agents", {"Authorization": "Bearer lk_nope"}, nothing, 10)["status"] == 401, "key inventada → 401")
