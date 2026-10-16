@@ -30,6 +30,7 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require db(".lampson/teams.db")
 require judge
 require file("workspace")
 require file("workspace/*")
@@ -75,6 +76,8 @@ use "./lib/runtime.syn" as runtime
 use "./lib/api.syn" as api
 use "./lib/apikeys.syn" as apikeys
 use "./lib/mailbox.syn" as mailbox
+use "./lib/teamrun.syn" as teamrun
+use "./lib/teams.syn" as teams
 use "./lib/channels.syn" as channels
 use "./lib/mcp_server.syn" as mcp_server
 
@@ -126,6 +129,11 @@ task lampson_channel_poller(name)
 task channel_poll_tick()
     give channels.poll_tick()
 cron_every(5, channel_poll_tick)
+
+-- EQUIPOS (lib/teamrun.syn): entrega los mensajes entre agentes (tool send) por el buzón y lanza las rondas
+task team_tick()
+    give teamrun.tick()
+cron_every(teamrun.TICK_SECONDS, team_tick)
 
 -- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
 -- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada

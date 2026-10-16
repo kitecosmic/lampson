@@ -387,13 +387,17 @@ planifica, trabaja en su rama en rondas y pide aprobación para mergear); despu�
 repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anuncio).
 
 #### 6a — Motor común
-- [ ] Tool `send(to, text)` entre agentes → buzón / `deliver` (generaliza `delegate`); quién puede escribirle a quién
-- [ ] Tablero: tareas {id, título, dueño, estado, depende de, objetivo/equipo, notas} en `.lampson/boards/`, tools
-      `board_*` para los agentes; eventos por el bus para la web
-- [ ] Rondas por agente: cron (`lib/schedule.syn`), mensaje nuevo o tarea asignada; repaso barato («¿hay algo para
-      mí?», `judge`) antes de gastar un turno completo; sin trabajo → no corre
-- [ ] Presupuesto diario por agente y por objetivo/equipo; al llegar, para y avisa
-- [ ] Aprobaciones de acciones hacia afuera por el canal que ya existe (celular)
+- [x] Tool `send(recipient, message)` entre agentes → base → `lib/teamrun.syn` (tick cada 3 s) → buzón del destinatario, thread `team:<id>`; el grafo del equipo decide quién le escribe a quién (jefe ↔ reporte + `talks`), lo demás se rechaza
+- [x] Tablero: tareas {id, título, dueño, estado, depende de, notas} en SQLite (`.lampson/teams.db`), tool `board`
+      (list/add/claim/update/show/log); tomar es atómico; mueve el dueño, quien la creó o un jefe del dueño
+- [x] Registro (ledger) de todo; cada turno de equipo arranca con «desde tu último turno» + sus tareas + las sin dueño
+- [ ] Eventos por el bus para la web (con la pantalla)
+- [x] Rondas por agente (`round_minutes` del equipo): solo con trabajo (novedades de otros o tareas suyas abiertas),
+      una por intervalo; el hub mantiene vivo un workspace con equipos que hacen rondas
+- [ ] Repaso barato con `judge` antes de un turno completo (si las rondas resultan caras en la prueba real)
+- [x] Presupuesto diario por agente dentro del equipo (`budget_daily_tokens`); al llegar no recibe turnos y queda una
+      entrada en el registro por día
+- [x] Aprobaciones: las del buzón de siempre (cola de aprobación → UI / celular), con el permiso del archivo del agente
 
 #### 6b — Objetivos
 - [ ] Objetivo = {id, texto, agente, estado, tareas, resultado, presupuesto}; crear por API/CLI/web
@@ -436,6 +440,15 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — 6a (motor común de equipos) hecho. `lib/teams.syn` (archivo de equipo, grafo, SQLite con tareas,
+  registro, mensajes, cursores, rondas, gasto; tools `send` y `board`) + `lib/teamrun.syn` (el pulso: entrega y
+  rondas por el buzón). Decisiones: una conversación por agente y equipo (`team:<id>`) en lugar de una por par —
+  el agente tiene todo su trabajo en un solo hilo; su respuesta final no la ve nadie (para hablar, `send`; para
+  avanzar, el tablero). Los miembros de un equipo reciben `send`/`board` solos y su rol va al prompt. Quién llama lo
+  pone el loop (`opts.agent_id` → `_agent`), el modelo no puede elegirlo (probado: un `_agent` falso se pisa).
+  `call_tool` pasa los args como parámetros con nombre: `to` es palabra reservada y `text` un builtin, por eso los
+  parámetros son `recipient`/`message`.
 
 - **2026-10-16** — Arranca la fase 6 en `feat/teams`. Nombres: agente, equipo, rol, tablero/tareas, ronda, mensaje
   (tabla en la fase 6). «Agente» también de cara al usuario: un solo término en archivos, API, interfaz y docs.

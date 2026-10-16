@@ -209,6 +209,7 @@ task user_msg(it)
 
 -- un lote: un turno con todos los mensajes (y los que lleguen mientras), resultados, callbacks, jobs
 task run_batch(k, spec, items)
+    require db(".lampson/teams.db")
     require net
     require exec
     require time
@@ -339,6 +340,7 @@ task run_batch(k, spec, items)
     give result
 
 export task work(spec_json)
+    require db(".lampson/teams.db")
     require net
     require exec
     require time
@@ -374,6 +376,7 @@ export task work(spec_json)
 -- MIGA runtime (igual que agents.Child): un `agent` solo ve sus parámetros, las builtins y las tasks TOP-LEVEL del
 -- entry. web.syn define `task lampson_mailbox_worker(spec_json) give mailbox.work(spec_json)`.
 agent MailboxWorker
+    require db(".lampson/teams.db")
     require net
     require exec
     require time

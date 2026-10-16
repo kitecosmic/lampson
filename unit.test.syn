@@ -20,6 +20,7 @@ require file(".lampson/*")
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require db(".lampson/teams.db")
 require random
 
 use "./lib/permission.syn" as permission
@@ -1585,6 +1586,11 @@ test "workspaces: un workspace con un canal encendido cuenta como en uso (no se 
     write_file(d + "/.lampson/plugins.json", json_encode({"enabled": {"telegram": false, "otro": true}}))
     assert_eq(wsp.channels_on_disk({"slug": "test-chan"}), 0, "apagado no cuenta")
     assert_eq(wsp.channels_on_disk({"slug": "no-existe"}), 0)
+    -- un equipo con rondas también (las rondas corren en el proceso del workspace); uno sin rondas, no
+    write_file(d + "/workspace/.lampson/teams/a.team.json", json_encode({"id": "a", "members": [{"agent": "x"}], "round_minutes": 30}))
+    write_file(d + "/workspace/.lampson/teams/b.team.json", json_encode({"id": "b", "members": [{"agent": "x"}]}))
+    assert_eq(wsp.teams_on_disk({"slug": "test-chan"}), 1)
+    assert_eq(wsp.teams_on_disk({"slug": "no-existe"}), 0)
     when env("OS", "") == "Windows_NT"
         run("cmd", ["/c", "rmdir", "/s", "/q", replace(d, "/", "\\")], 10)
     otherwise
@@ -1659,3 +1665,105 @@ test "plugin orders: cotiza con promos, valida, guarda el pedido, baja el stock 
     write_file(f2, json_encode(doc2))
     assert(contains(json_decode(plugins.call("plugin_orders_update_order", {"order_id": o2["order_id"], "items": [{"sku": "PAN", "qty": 2}]}))["error"], "'preparing'"))
     assert(contains(plugins.set_enabled("orders", false), "OFF"))
+
+-- ---------- equipos (lib/teams.syn) ----------
+use "./lib/teams.syn" as teams
+
+task team_fixture()
+    db_open(teams.DB)
+    teams.tasks("team:t-test")
+    each tb in ["tasks", "ledger", "messages", "cursors", "rounds"]
+        sql_exec("DELETE FROM " + tb + " WHERE scope = 'team:t-test'")
+    sql_exec("DELETE FROM spend WHERE agent LIKE 'tt%'")
+    each a in ["ttceo", "ttcto", "ttdev", "ttcmo"]
+        write_file(runtime.PROJECT_DIR + "/" + a + ".agent.json", json_encode({"id": a, "system": "Eres " + a + ".", "tools": ["read"], "permission": "strict"}))
+    write_file(teams.DIR + "/t-test.team.json", json_encode({"id": "t-test", "description": "equipo de prueba", "members": [{"agent": "ttceo", "role": "CEO"}, {"agent": "ttcto", "role": "CTO", "reports_to": "ttceo"}, {"agent": "ttdev", "role": "Dev", "reports_to": "ttcto"}, {"agent": "ttcmo", "role": "CMO", "reports_to": "ttceo"}], "talks": [["ttcmo", "ttcto"]], "round_minutes": 1, "budget_daily_tokens": 1000}))
+    give teams.get("t-test")
+
+task board(agent, args)
+    let a be args
+    set a["_agent"] to agent
+    give teams.board_with(a)
+
+test "equipos: validar el archivo — id, miembros, reports_to y talks dentro del equipo"
+    assert(teams.validate({"id": "x", "members": [{"agent": "a"}]}, "f")["ok"])
+    assert(not teams.validate({"id": "X Y", "members": [{"agent": "a"}]}, "f")["ok"])
+    assert(not teams.validate({"id": "x", "members": []}, "f")["ok"])
+    assert(contains(teams.validate({"id": "x", "members": [{"agent": "a", "reports_to": "nadie"}]}, "f")["error"], "not in the team"))
+    assert(contains(teams.validate({"id": "x", "members": [{"agent": "a"}, {"agent": "a"}]}, "f")["error"], "twice"))
+    assert(not teams.validate({"id": "x", "members": [{"agent": "a"}], "talks": [["a", "b"]]}, "f")["ok"])
+
+test "equipos: el grafo es una regla — a quién le puede escribir cada uno"
+    let t be team_fixture()
+    assert_eq(sort(teams.peers(t, "ttdev")), ["ttcto"])
+    assert_eq(sort(teams.peers(t, "ttcto")), ["ttceo", "ttcmo", "ttdev"])
+    assert_eq(sort(teams.peers(t, "ttceo")), ["ttcmo", "ttcto"])
+    assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "ttceo", "message": "hola jefe del jefe"}), "can't message ttceo"))
+    assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "ttcto", "message": "terminé el login"}), "sent to ttcto"))
+    assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "nadie", "message": "x"}), "not in team"))
+    assert(contains(teams.send_with({"recipient": "ttcto", "message": "x"}), "who is sending"), "sin _agent no hay send")
+    assert(contains(teams.send_with({"_agent": "rt-ajeno", "recipient": "ttcto", "message": "x"}), "not in any team"))
+    let p be where(teams.pending(), (m) => m["scope"] == "team:t-test")
+    assert(length(p) == 1 and p[0]["sender"] == "ttdev" and p[0]["recipient"] == "ttcto")
+
+test "equipos: un miembro tiene send y board, su rol en el prompt, y opts sabe quién es"
+    team_fixture()
+    let spec be runtime.get("ttdev")
+    assert(contains(keys(runtime.registry_of(spec)), "send") and contains(keys(runtime.registry_of(spec)), "board"))
+    assert(length(where(runtime.catalog_of(spec), (s) => s["name"] == "board")) == 1)
+    let ctx be runtime.boot("ttdev", {}, nothing)
+    assert(contains(ctx["system"]["content"], "# Team t-test — equipo de prueba\nYou are ttdev, role: Dev. You report to ttcto."), ctx["system"]["content"])
+    assert(contains(ctx["system"]["content"], "You can message: ttcto"))
+    assert_eq(ctx["opts"]["agent_id"], "ttdev")
+    write_file(runtime.PROJECT_DIR + "/rt-solo.agent.json", json_encode({"id": "rt-solo", "system": "solo", "tools": ["read"]}))
+    assert(not contains(keys(runtime.registry_of(runtime.get("rt-solo"))), "send"), "fuera de un equipo, sin send")
+    assert(not contains(keys(runtime.registry_of(runtime.get("build"))), "board"), "el de programación no coordina equipos")
+    rm_file(runtime.PROJECT_DIR + "/rt-solo.agent.json")
+
+test "equipos: el tablero — tomar es atómico, dueño/creador/jefe mueven, dependencias primero"
+    team_fixture()
+    assert(contains(board("ttcto", {"action": "add", "title": "API de login", "notes": "JWT"}), "added #"))
+    let t1 be teams.tasks("team:t-test")[0]["id"]
+    assert(contains(board("ttcto", {"action": "add", "title": "Pantalla de login", "depends": [t1]}), "added #"))
+    let t2 be teams.tasks("team:t-test")[1]["id"]
+    assert(contains(board("ttdev", {"action": "claim", "id": t2}), "depends on #" + text(t1)), "dependencias primero")
+    -- seis agentes intentan tomar la misma tarea a la vez: gana uno
+    -- (parallel_map corre cada lambda en otro hilo, sin las variables de acá: todo va en el item)
+    let res be parallel_map((x) => board(x["a"], {"action": "claim", "id": x["id"]}), apply(["ttdev", "ttcmo", "ttceo", "ttdev", "ttcmo", "ttceo"], (a) => {"a": a, "id": t1}))
+    assert_eq(length(where(res, (r) => contains(r, "is yours now"))), 1, json_encode(res))
+    let owner be teams.task_get("team:t-test", t1)["owner"]
+    let stranger be when owner == "ttcmo" then "ttdev" otherwise "ttcmo"
+    assert(contains(board(stranger, {"action": "update", "id": t1, "status": "done"}), "only they"), "un tercero no la mueve")
+    assert(contains(board("ttcto", {"action": "update", "id": t1, "owner": "ttdev"}), "owner ttdev"), "quien la creó la reasigna")
+    assert(contains(board("ttdev", {"action": "update", "id": t1, "status": "review", "notes": "PR listo"}), "doing → review"))
+    assert(contains(board("ttceo", {"action": "update", "id": t1, "status": "done"}), "review → done"), "el jefe del jefe también")
+    assert(contains(board("ttdev", {"action": "claim", "id": t2}), "is yours now"), "con la dependencia hecha, se toma")
+    assert(contains(board("ttdev", {"action": "update", "id": t2, "status": "nope"}), "status must be"))
+    assert(contains(board("ttdev", {"action": "list", "mine": true}), "Pantalla de login — ttdev"))
+    assert(contains(board("ttdev", {"action": "log"}), "claimed"))
+
+test "equipos: registro — cada agente ve lo de los demás desde su último turno, una vez"
+    team_fixture()
+    board("ttcto", {"action": "add", "title": "Landing"})
+    teams.send_with({"_agent": "ttcto", "recipient": "ttcmo", "message": "¿escribís el anuncio?"})
+    let d be teams.digest("team:t-test", "ttcmo")
+    assert(length(d) == 2 and contains(d[0], "ttcto added") and contains(d[1], "ttcto message → ttcmo: ¿escribís el anuncio?"), json_encode(d))
+    assert_eq(teams.digest("team:t-test", "ttcmo"), [], "ya leído")
+    assert_eq(length(teams.digest("team:t-test", "ttcto")), 0, "lo propio no se le cuenta")
+    let tt be teams.turn_text(teams.get("t-test"), "ttdev", "[message from ttcto (CTO)]\nhola")
+    assert(starts_with(tt, "[message from ttcto (CTO)]\nhola\n\n[team t-test] Since your last turn:") and contains(tt, "Tasks nobody owns:\n#"), tt)
+
+test "equipos: presupuesto diario y rondas (solo con trabajo, una por intervalo)"
+    let t be team_fixture()
+    assert(not teams.over_budget(t, "ttdev"))
+    teams.record_spend("ttdev", 600)
+    teams.record_spend("ttdev", 500)
+    assert(teams.over_budget(t, "ttdev") and teams.spent_today("ttdev") == 1100)
+    teams.digest("team:t-test", "ttcmo")
+    assert(not teams.round_due(t, "ttcmo"), "sin novedades ni tareas: no hay ronda")
+    board("ttcmo", {"action": "add", "title": "Anuncio", "owner": "ttcmo"})
+    assert(teams.round_due(t, "ttcmo"), "con una tarea suya abierta, sí")
+    assert(not teams.round_due(t, "ttcmo"), "y no otra vez dentro del intervalo")
+    each a in ["ttceo", "ttcto", "ttdev", "ttcmo"]
+        rm_file(runtime.PROJECT_DIR + "/" + a + ".agent.json")
+    rm_file(teams.DIR + "/t-test.team.json")

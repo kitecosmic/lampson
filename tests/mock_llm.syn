@@ -105,6 +105,16 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("ls", {"path": "."})])
             give reply_text("final espera · msgs=" + text(length(msgs)))
+        -- equipos (lib/teams.syn): A le escribe a B con send (y trata de hacerse pasar por otro con _agent: el loop lo pisa);
+        -- B, al recibirlo, agrega una tarea al tablero
+        when starts_with(q, "avisa-equipo")
+            when tools_seen == 0
+                give reply_tools([tool_call("send", {"recipient": "rt-team-b", "message": "hola B, ¿tomás el login?", "_agent": "rt-team-c"})])
+            give reply_text("final avisa · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        when starts_with(q, "[message from rt-team-a")
+            when tools_seen == 0
+                give reply_tools([tool_call("board", {"action": "add", "title": "login de B", "owner": "rt-team-b"})])
+            give reply_text("final equipo-b · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
         -- "piensa": el modelo tarda 3 s y contesta sin tools (lo que llega mientras escribe tiene que rehacer la respuesta)
         when starts_with(q, "piensa")
             sleep(3)

@@ -1,0 +1,85 @@
+-- lib/teamrun.syn — el pulso de los equipos: entrega los mensajes entre agentes y lanza las rondas
+--
+-- Corre en el proceso del workspace (web.syn, cron cada TICK_SECONDS). Todo entra al agente por el BUZÓN
+-- (lib/mailbox.syn), como un mensaje de un cliente: una conversación por agente y equipo (thread "team:<id>"),
+-- nunca dos turnos a la vez, ráfagas juntas. Cada turno arranca con lo que llegó + lo que pasó en el equipo desde su
+-- último turno + sus tareas (teams.turn_text).
+--   * mensajes: los que `send` dejó pendientes en la base → al buzón del destinatario
+--   * rondas: un agente con trabajo (novedades de otros o tareas suyas abiertas) cada round_minutes del equipo
+--   * presupuesto: un agente que pasó su tope diario no recibe turnos (sus mensajes esperan al día siguiente);
+--     queda UNA entrada en el registro por día
+use "./teams.syn" as teams
+use "./mailbox.syn" as mailbox
+use "./runtime.syn" as runtime
+
+export let TICK_SECONDS be 3
+export let ROUND_TEXT be "[round] Your periodic round: look at your open tasks and the team's news above, and move your work forward. If there is nothing for you to do, reply with one short line and stop — don't invent work."
+
+task flag_budget(team, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    let k be "teams:budget:" + team["id"] + ":" + agent + ":" + format_time(now(), "%Y-%m-%d")
+    when state_get(k) == nothing
+        state_set(k, true)
+        teams.log("team:" + team["id"], agent, "budget", "", "daily budget reached (" + text(team["budget_daily_tokens"]) + " tokens): no more turns today")
+
+-- un turno para `agent` en su conversación del equipo
+export task deliver_to(team, agent, sender, head)
+    require db(".lampson/teams.db")
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let spec be runtime.get(agent)
+    when spec == nothing
+        teams.log("team:" + team["id"], "lampson", "error", "", "no agent file for '" + agent + "' — create .lampson/agents/" + agent + ".agent.json")
+        give false
+    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head), "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
+    mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, false)})
+    give true
+
+export task tick()
+    require db(".lampson/teams.db")
+    require time
+    require random
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    let teams_now be teams.all()
+    when length(teams_now) == 0
+        give 0
+    let n be 0
+    each m in teams.pending()
+        let tid be slice(m["scope"], 5, length(m["scope"]))
+        let found be where(teams_now, (t) => t["id"] == tid)
+        when length(found) == 0
+            teams.mark(m["id"], "dropped")
+        otherwise
+            let team be found[0]
+            when teams.over_budget(team, m["recipient"])
+                flag_budget(team, m["recipient"])
+            otherwise
+                let who be teams.member(team, m["sender"])
+                let head be "[message from " + m["sender"] + (when who != nothing then " (" + who["role"] + ")" otherwise "") + "]\n" + m["text"]
+                when deliver_to(team, m["recipient"], m["sender"], head)
+                    teams.mark(m["id"], "delivered")
+                    set n to n + 1
+                otherwise
+                    teams.mark(m["id"], "failed")
+    each team in teams_now
+        each mem in team["members"]
+            when teams.over_budget(team, mem["agent"])
+                flag_budget(team, mem["agent"])
+            otherwise when teams.round_due(team, mem["agent"])
+                deliver_to(team, mem["agent"], "lampson", ROUND_TEXT)
+                set n to n + 1
+    give n

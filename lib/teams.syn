@@ -1,0 +1,535 @@
+-- lib/teams.syn — equipos de agentes: el grafo, el tablero, el registro, los mensajes, las rondas y el presupuesto
+--
+-- Vocabulario (spec/engine.md, fase 6): agente · equipo · rol · tablero con tareas · ronda · mensaje · objetivo.
+--
+-- Un EQUIPO es un archivo del proyecto, workspace/.lampson/teams/<id>.team.json:
+--   {"id": "empresa", "description": "…",
+--    "members": [{"agent": "ceo", "role": "CEO"},
+--                {"agent": "cto", "role": "CTO", "reports_to": "ceo"},
+--                {"agent": "dev", "role": "Dev", "reports_to": "cto"}],
+--    "talks": [["cmo", "cpo"]],           (opcional: pares que también se escriben, además de jefe ↔ reporte)
+--    "round_minutes": 60,                 (opcional: cada cuánto un agente con trabajo hace una ronda; 0 = sin rondas)
+--    "budget_daily_tokens": 400000}       (opcional: tope diario POR agente dentro del equipo; 0 = sin tope)
+-- Los agentes son los de siempre (lib/runtime.syn): su archivo pone la personalidad, el modelo y los permisos; el
+-- equipo pone el rol y el grafo. El grafo es una REGLA: `send` a quien no tiene flecha se rechaza en el motor.
+--
+-- Todo lo compartido vive en SQLite (.lampson/teams.db, del workspace): varios agentes trabajan en paralelo y un
+-- JSON se pisaría; "tomar una tarea" es un UPDATE condicional (gana uno solo). Si el proceso se reinicia, nada se
+-- pierde. Tablas:
+--   tasks    (id, scope, title, notes, owner, status, depends, created_by, created_at, updated_at)
+--   ledger   el registro: quién hizo qué y cuándo — solo crece (como el historial de git)
+--   messages de un agente a otro; el tick del servidor (lib/teamrun.syn) los entrega por el buzón
+--   cursors  hasta dónde leyó cada agente el registro (para «desde tu último turno pasó esto»)
+--   rounds   cuándo fue la última ronda de cada agente
+--   spend    tokens por día y por agente (el presupuesto)
+-- scope = "team:<id>" (después también "objective:<id>").
+--
+-- Quién llama: las tools `send` y `board` reciben `_agent` (lo pone lib/loop.syn desde opts.agent_id; el modelo no
+-- puede elegirlo). Este módulo no importa runtime ni mailbox (ellos lo importan a él).
+
+export let DB be ".lampson/teams.db"
+export let DIR be "workspace/.lampson/teams"
+export let STATUSES be ["todo", "doing", "review", "done", "blocked"]
+let DIGEST_MAX be 30
+
+-- ---------- base de datos ----------
+task open()
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    db_open(DB)
+    sql_exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, title TEXT NOT NULL, notes TEXT DEFAULT '', owner TEXT DEFAULT '', status TEXT DEFAULT 'todo', depends TEXT DEFAULT '[]', created_by TEXT DEFAULT '', created_at REAL, updated_at REAL)")
+    sql_exec("CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, at REAL, actor TEXT, kind TEXT, ref TEXT DEFAULT '', text TEXT DEFAULT '')")
+    sql_exec("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, sender TEXT, recipient TEXT, text TEXT, at REAL, state TEXT DEFAULT 'pending')")
+    sql_exec("CREATE TABLE IF NOT EXISTS cursors (agent TEXT, scope TEXT, last INTEGER DEFAULT 0, PRIMARY KEY (agent, scope))")
+    sql_exec("CREATE TABLE IF NOT EXISTS rounds (agent TEXT, scope TEXT, last_at REAL DEFAULT 0, PRIMARY KEY (agent, scope))")
+    sql_exec("CREATE TABLE IF NOT EXISTS spend (day TEXT, agent TEXT, tokens INTEGER DEFAULT 0, PRIMARY KEY (day, agent))")
+    give true
+
+-- ---------- equipos (archivos) ----------
+task field(m, k, fallback)
+    when contains(m, k) and m[k] != nothing
+        give m[k]
+    give fallback
+
+-- valida un equipo; {ok, team} o {ok: false, error}
+export task validate(raw, source)
+    when type_of(raw) != "map"
+        give {"ok": false, "error": source + ": a team is a JSON object"}
+    let id be lower(text(field(raw, "id", "")))
+    when not matches(id, "[a-z0-9][a-z0-9-]{0,39}")
+        give {"ok": false, "error": source + ": id must be lowercase letters, digits and - (got '" + id + "')"}
+    let raw_members be field(raw, "members", [])
+    when type_of(raw_members) != "list" or length(raw_members) == 0
+        give {"ok": false, "error": source + ": members must be a non-empty list"}
+    let members be []
+    let names be []
+    each m in raw_members
+        let a be lower(text(field(m, "agent", "")))
+        when a == ""
+            give {"ok": false, "error": source + ": every member needs \"agent\""}
+        when contains(names, a)
+            give {"ok": false, "error": source + ": agent '" + a + "' is twice in the team"}
+        set names to append(names, a)
+        set members to append(members, {"agent": a, "role": text(field(m, "role", a)), "reports_to": lower(text(field(m, "reports_to", "")))})
+    each m in members
+        when m["reports_to"] != "" and not contains(names, m["reports_to"])
+            give {"ok": false, "error": source + ": " + m["agent"] + " reports_to '" + m["reports_to"] + "', who is not in the team"}
+    let talks be []
+    each pair in field(raw, "talks", [])
+        when type_of(pair) != "list" or length(pair) != 2 or not contains(names, lower(text(pair[0]))) or not contains(names, lower(text(pair[1])))
+            give {"ok": false, "error": source + ": talks is a list of [agent, agent] pairs of team members"}
+        set talks to append(talks, [lower(text(pair[0])), lower(text(pair[1]))])
+    give {"ok": true, "team": {"id": id, "description": text(field(raw, "description", "")), "members": members, "talks": talks, "round_minutes": number(field(raw, "round_minutes", 0)), "budget_daily_tokens": floor(number(field(raw, "budget_daily_tokens", 0))), "source": source}}
+
+-- todos los equipos del proyecto: {teams, errors}
+export task scan()
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let teams be []
+    let errors be []
+    try
+        each e in list_dir(DIR)
+            when not e["is_dir"] and ends_with(e["name"], ".team.json")
+                let src be ".lampson/teams/" + e["name"]
+                try
+                    let v be validate(json_decode(read_file(DIR + "/" + e["name"])), src)
+                    when v["ok"]
+                        set teams to append(teams, v["team"])
+                    otherwise
+                        set errors to append(errors, v["error"])
+                recover err
+                    set errors to append(errors, src + ": " + text(err))
+    recover err
+        give {"teams": [], "errors": []}
+    give {"teams": teams, "errors": errors}
+
+export task all()
+    require file.read("workspace")
+    require file.read("workspace/*")
+    give scan()["teams"]
+
+export task get(id)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let f be where(all(), (t) => t["id"] == id)
+    give when length(f) == 0 then nothing otherwise f[0]
+
+export task teams_of(agent)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    give where(all(), (t) => length(where(t["members"], (m) => m["agent"] == agent)) > 0)
+
+export task member(team, agent)
+    let f be where(team["members"], (m) => m["agent"] == agent)
+    give when length(f) == 0 then nothing otherwise f[0]
+
+-- a quién le puede escribir `agent` en el equipo: su jefe, los que le reportan y los pares de "talks"
+export task peers(team, agent)
+    let me be member(team, agent)
+    when me == nothing
+        give []
+    let out be []
+    each m in team["members"]
+        when m["agent"] != agent and (m["agent"] == me["reports_to"] or m["reports_to"] == agent)
+            set out to append(out, m["agent"])
+    each pair in team["talks"]
+        when pair[0] == agent and not contains(out, pair[1])
+            set out to append(out, pair[1])
+        when pair[1] == agent and not contains(out, pair[0])
+            set out to append(out, pair[0])
+    give out
+
+-- el jefe de `agent` y los jefes de su jefe (para quién puede reasignar sus tareas)
+task managers(team, agent)
+    let out be []
+    let cur be member(team, agent)
+    while cur != nothing and cur["reports_to"] != "" and not contains(out, cur["reports_to"])
+        set out to append(out, cur["reports_to"])
+        set cur to member(team, cur["reports_to"])
+    give out
+
+-- el equipo de una llamada: el pedido (`team`) o el único del agente. {ok, team} / {ok: false, error}
+export task resolve(agent, wanted)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let mine be teams_of(agent)
+    when wanted != nothing and text(wanted) != ""
+        let f be where(mine, (t) => t["id"] == lower(text(wanted)))
+        when length(f) == 0
+            give {"ok": false, "error": "you are not in a team called '" + text(wanted) + "'" + (when length(mine) > 0 then " (yours: " + join(apply(mine, (t) => t["id"]), ", ") + ")" otherwise "")}
+        give {"ok": true, "team": f[0]}
+    when length(mine) == 0
+        give {"ok": false, "error": "you are not in any team"}
+    when length(mine) > 1
+        give {"ok": false, "error": "you are in several teams — say which: " + join(apply(mine, (t) => t["id"]), ", ")}
+    give {"ok": true, "team": mine[0]}
+
+-- lo que el agente tiene que saber de su equipo, para su prompt (lib/runtime.syn → system_for)
+export task instructions(agent)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let out be ""
+    each t in teams_of(agent)
+        let me be member(t, agent)
+        let lines be []
+        each m in t["members"]
+            set lines to append(lines, "- " + m["agent"] + ": " + m["role"] + (when m["reports_to"] != "" then " (reports to " + m["reports_to"] + ")" otherwise ""))
+        let ps be peers(t, agent)
+        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note), add the tasks you break work into. Never work on a task someone else owns. Each turn starts with what changed in the team since your last turn. Your final reply in a turn is not seen by anyone: to tell someone something, `send` it; to record progress, update the board."
+    give out
+
+-- ---------- registro ----------
+export task log(scope, actor, kind, ref, txt)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    give sql_exec("INSERT INTO ledger (scope, at, actor, kind, ref, text) VALUES (?, ?, ?, ?, ?, ?)", [scope, now(), actor, kind, ref, slice(text(txt), 0, 400)])["last_id"]
+
+export task ledger(scope, after, limit)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    give sql("SELECT * FROM ledger WHERE scope = ? AND id > ? ORDER BY id DESC LIMIT ?", [scope, after, limit])
+
+-- lo que pasó en el equipo desde el último turno de `agent` (sin lo suyo), y avanza su cursor
+export task digest(scope, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    let cur be sql("SELECT last FROM cursors WHERE agent = ? AND scope = ?", [agent, scope])
+    let after be when length(cur) == 0 then 0 otherwise cur[0]["last"]
+    let rows be sql("SELECT * FROM ledger WHERE scope = ? AND id > ? ORDER BY id", [scope, after])
+    let top be sql("SELECT MAX(id) AS m FROM ledger WHERE scope = ?", [scope])
+    let last be when length(top) == 0 or top[0]["m"] == nothing then 0 otherwise top[0]["m"]
+    sql_exec("INSERT INTO cursors (agent, scope, last) VALUES (?, ?, ?) ON CONFLICT(agent, scope) DO UPDATE SET last = excluded.last", [agent, scope, last])
+    let others be where(rows, (r) => r["actor"] != agent)
+    let shown be when length(others) > DIGEST_MAX then slice(others, length(others) - DIGEST_MAX, length(others)) otherwise others
+    give apply(shown, (r) => format_time(r["at"], "%H:%M") + " " + r["actor"] + " " + r["kind"] + (when r["ref"] != "" then " " + r["ref"] otherwise "") + (when r["text"] != "" then ": " + r["text"] otherwise ""))
+
+-- ---------- tablero ----------
+task row_text(t)
+    let deps be json_decode(t["depends"])
+    give "#" + text(t["id"]) + " [" + t["status"] + "] " + t["title"] + (when t["owner"] != "" then " — " + t["owner"] otherwise " — (nobody)") + (when length(deps) > 0 then " · depends on " + join(apply(deps, (d) => "#" + text(d)), ", ") otherwise "") + (when t["notes"] != "" then "\n    " + t["notes"] otherwise "")
+
+export task tasks(scope)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    give sql("SELECT * FROM tasks WHERE scope = ? ORDER BY id", [scope])
+
+export task task_get(scope, id)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    let r be sql("SELECT * FROM tasks WHERE scope = ? AND id = ?", [scope, id])
+    give when length(r) == 0 then nothing otherwise r[0]
+
+export task add_task(scope, actor, title, notes, owner, depends)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    when trim(text(title)) == ""
+        raise("a task needs a title")
+    each d in depends
+        when task_get(scope, d) == nothing
+            raise("depends on #" + text(d) + ", which does not exist")
+    let id be sql_exec("INSERT INTO tasks (scope, title, notes, owner, status, depends, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [scope, trim(text(title)), text(notes), owner, "todo", json_encode(depends), actor, now(), now()])["last_id"]
+    log(scope, actor, "added", "#" + text(id), trim(text(title)) + (when owner != "" then " → " + owner otherwise ""))
+    give id
+
+-- tomar una tarea sin dueño: atómico (UPDATE condicional). Las dependencias tienen que estar hechas.
+export task claim(scope, actor, id)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    let t be task_get(scope, id)
+    when t == nothing
+        raise("no task #" + text(id))
+    when t["owner"] == actor
+        give "#" + text(id) + " is already yours"
+    when t["owner"] != ""
+        raise("#" + text(id) + " is " + t["owner"] + "'s — pick another one or message them")
+    each d in json_decode(t["depends"])
+        let dt be task_get(scope, d)
+        when dt != nothing and dt["status"] != "done"
+            raise("#" + text(id) + " depends on #" + text(d) + " (" + dt["status"] + (when dt["owner"] != "" then ", " + dt["owner"] otherwise "") + ") — it has to be done first")
+    let r be sql_exec("UPDATE tasks SET owner = ?, status = 'doing', updated_at = ? WHERE scope = ? AND id = ? AND owner = ''", [actor, now(), scope, id])
+    when r["rows_affected"] == 0
+        let again be task_get(scope, id)
+        raise("#" + text(id) + " was just taken by " + again["owner"])
+    log(scope, actor, "claimed", "#" + text(id), t["title"])
+    give "#" + text(id) + " is yours now (doing)"
+
+-- mover una tarea: estado, notas, dueño. Puede su dueño, quien la creó o un jefe del dueño; una tarea sin dueño,
+-- cualquiera del equipo (para asignarla).
+export task update_task(team, actor, id, changes)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    let scope be "team:" + team["id"]
+    let t be task_get(scope, id)
+    when t == nothing
+        raise("no task #" + text(id))
+    let boss be contains(managers(team, t["owner"]), actor)
+    when t["owner"] != "" and t["owner"] != actor and t["created_by"] != actor and not boss
+        raise("#" + text(id) + " is " + t["owner"] + "'s — only they, whoever created it or their manager can change it")
+    let parts be []
+    let st be t["status"]
+    when contains(changes, "status") and changes["status"] != nothing and text(changes["status"]) != ""
+        set st to lower(text(changes["status"]))
+        when not contains(STATUSES, st)
+            raise("status must be one of " + join(STATUSES, ", "))
+        set parts to append(parts, t["status"] + " → " + st)
+    let owner be t["owner"]
+    when contains(changes, "owner") and changes["owner"] != nothing
+        set owner to lower(text(changes["owner"]))
+        when owner != "" and member(team, owner) == nothing
+            raise("'" + owner + "' is not in the team")
+        set parts to append(parts, "owner " + (when owner == "" then "(nobody)" otherwise owner))
+    let notes be t["notes"]
+    when contains(changes, "notes") and changes["notes"] != nothing and text(changes["notes"]) != ""
+        set notes to text(changes["notes"])
+        set parts to append(parts, "notes: " + slice(notes, 0, 160))
+    sql_exec("UPDATE tasks SET status = ?, owner = ?, notes = ?, updated_at = ? WHERE id = ?", [st, owner, notes, now(), id])
+    log(scope, actor, "updated", "#" + text(id), t["title"] + " · " + join(parts, " · "))
+    give "#" + text(id) + " updated: " + join(parts, " · ")
+
+-- ---------- mensajes ----------
+export task send(team, sender, dest, txt)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    let d be lower(trim(text(dest)))
+    when member(team, d) == nothing
+        raise("'" + d + "' is not in team " + team["id"])
+    when not contains(peers(team, sender), d)
+        let ps be peers(team, sender)
+        raise("you can't message " + d + " in team " + team["id"] + " — you can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")))
+    when trim(text(txt)) == ""
+        raise("empty message")
+    let scope be "team:" + team["id"]
+    let id be sql_exec("INSERT INTO messages (scope, sender, recipient, text, at) VALUES (?, ?, ?, ?, ?)", [scope, sender, d, text(txt), now()])["last_id"]
+    log(scope, sender, "message", "→ " + d, text(txt))
+    give id
+
+-- los mensajes por entregar (los entrega lib/teamrun.syn por el buzón)
+export task pending()
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    give sql("SELECT * FROM messages WHERE state = 'pending' ORDER BY id", [])
+
+export task mark(id, state)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    sql_exec("UPDATE messages SET state = ? WHERE id = ?", [state, id])
+    give true
+
+-- ---------- presupuesto ----------
+task today()
+    require time
+    give format_time(now(), "%Y-%m-%d")
+
+export task record_spend(agent, tokens)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    sql_exec("INSERT INTO spend (day, agent, tokens) VALUES (?, ?, ?) ON CONFLICT(day, agent) DO UPDATE SET tokens = tokens + excluded.tokens", [today(), agent, floor(tokens)])
+    give true
+
+export task spent_today(agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    let r be sql("SELECT tokens FROM spend WHERE day = ? AND agent = ?", [today(), agent])
+    give when length(r) == 0 then 0 otherwise r[0]["tokens"]
+
+export task over_budget(team, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    give team["budget_daily_tokens"] > 0 and spent_today(agent) >= team["budget_daily_tokens"]
+
+-- ---------- rondas ----------
+-- ¿tiene `agent` algo que hacer en el equipo? novedades de otros en el registro, o tareas suyas abiertas
+export task has_work(scope, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    let cur be sql("SELECT last FROM cursors WHERE agent = ? AND scope = ?", [agent, scope])
+    let after be when length(cur) == 0 then 0 otherwise cur[0]["last"]
+    let news be sql("SELECT COUNT(*) AS n FROM ledger WHERE scope = ? AND id > ? AND actor != ?", [scope, after, agent])
+    let mine be sql("SELECT COUNT(*) AS n FROM tasks WHERE scope = ? AND owner = ? AND status IN ('todo', 'doing')", [scope, agent])
+    give news[0]["n"] > 0 or mine[0]["n"] > 0
+
+-- marca la ronda si toca: true = toca ahora (y queda registrada), false = todavía no
+export task round_due(team, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    when team["round_minutes"] <= 0
+        give false
+    open()
+    let scope be "team:" + team["id"]
+    let r be sql("SELECT last_at FROM rounds WHERE agent = ? AND scope = ?", [agent, scope])
+    let last be when length(r) == 0 then 0 otherwise r[0]["last_at"]
+    when now() - last < team["round_minutes"] * 60
+        give false
+    when not has_work(scope, agent)
+        give false
+    let upd be sql_exec("INSERT INTO rounds (agent, scope, last_at) VALUES (?, ?, ?) ON CONFLICT(agent, scope) DO UPDATE SET last_at = excluded.last_at WHERE rounds.last_at = ?", [agent, scope, now(), last])
+    give upd["rows_affected"] > 0
+
+-- el texto con el que arranca un turno de equipo: lo que llegó + novedades + sus tareas
+export task turn_text(team, agent, head)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    let scope be "team:" + team["id"]
+    let news be digest(scope, agent)
+    let mine be where(tasks(scope), (t) => t["owner"] == agent and t["status"] != "done")
+    let free be where(tasks(scope), (t) => t["owner"] == "" and t["status"] == "todo")
+    let out be head
+    set out to out + "\n\n[team " + team["id"] + "] Since your last turn:" + (when length(news) == 0 then " nothing new." otherwise "\n" + join(apply(news, (n) => "- " + n), "\n"))
+    set out to out + "\nYour open tasks:" + (when length(mine) == 0 then " none." otherwise "\n" + join(apply(mine, (t) => row_text(t)), "\n"))
+    when length(free) > 0
+        set out to out + "\nTasks nobody owns:\n" + join(apply(free, (t) => row_text(t)), "\n")
+    give out
+
+-- ---------- tools del modelo ----------
+export let SEND_SPEC be {
+    "name": "send",
+    "description": "Send a message to a teammate (only the ones your team lets you message: your manager, the people who report to you, and explicit pairs). It arrives in their conversation as a new message and they act on it. Use it to ask, hand over work, report or answer — your final reply in a turn is not seen by anyone.",
+    "parameters": {"type": "object", "properties": {
+        "recipient": {"type": "string", "description": "the teammate's agent id"},
+        "message": {"type": "string", "description": "what you want to tell them"},
+        "team": {"type": "string", "description": "only if you are in several teams"}
+    }, "required": ["recipient", "message"]}
+}
+
+export let BOARD_SPEC be {
+    "name": "board",
+    "description": "Your team's shared board of tasks. list: every task (or mine=true for yours). add: a new task (title, notes, optional owner and depends=[ids]). claim: take a task nobody owns before working on it (fails if someone took it or its dependencies are not done). update: move a task you own (or created, or that belongs to someone who reports to you): status todo|doing|review|done|blocked, notes, owner. show: one task. log: the last entries of the team's record.",
+    "parameters": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["list", "add", "claim", "update", "show", "log"]},
+        "id": {"type": "integer"},
+        "title": {"type": "string"},
+        "notes": {"type": "string"},
+        "owner": {"type": "string"},
+        "status": {"type": "string", "enum": ["todo", "doing", "review", "done", "blocked"]},
+        "depends": {"type": "array", "items": {"type": "integer"}},
+        "mine": {"type": "boolean"},
+        "team": {"type": "string", "description": "only if you are in several teams"}
+    }, "required": ["action"]}
+}
+
+-- call_tool pasa los args del modelo como parámetros CON NOMBRE (y `to`/`text` no sirven de nombre: palabra
+-- reservada y builtin). Las versiones *_with reciben el mapa (los tests las usan directo).
+export task send_tool(recipient, message, team, _agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require time
+    give send_with({"recipient": recipient, "message": message, "team": team, "_agent": _agent})
+
+export task board_tool(action, id, title, notes, owner, status, depends, mine, team, _agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require time
+    let a be {"_agent": _agent}
+    each pair in [["action", action], ["id", id], ["title", title], ["notes", notes], ["owner", owner], ["status", status], ["depends", depends], ["mine", mine], ["team", team]]
+        when pair[1] != nothing
+            set a[pair[0]] to pair[1]
+    give board_with(a)
+
+export task send_with(args)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require time
+    let me be text(field(args, "_agent", ""))
+    when me == ""
+        give "ERROR: send needs to know who is sending (not available here)"
+    let rt be resolve(me, field(args, "team", ""))
+    when not rt["ok"]
+        give "ERROR: " + rt["error"]
+    try
+        send(rt["team"], me, field(args, "recipient", ""), field(args, "message", ""))
+        give "sent to " + lower(text(field(args, "recipient", ""))) + " — it reaches them as a new message"
+    recover err
+        give "ERROR: " + regex_replace(text(err), "^.*?:\\d+:\\d+: ", "")
+
+export task board_with(args)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require time
+    let me be text(field(args, "_agent", ""))
+    when me == ""
+        give "ERROR: board needs to know who is asking (not available here)"
+    let rt be resolve(me, field(args, "team", ""))
+    when not rt["ok"]
+        give "ERROR: " + rt["error"]
+    let team be rt["team"]
+    let scope be "team:" + team["id"]
+    let action be lower(text(field(args, "action", "list")))
+    try
+        when action == "list"
+            let all_t be tasks(scope)
+            let rows be when field(args, "mine", false) == true then where(all_t, (t) => t["owner"] == me) otherwise all_t
+            give when length(rows) == 0 then "the board is empty" otherwise join(apply(rows, (t) => row_text(t)), "\n")
+        when action == "show"
+            let t be task_get(scope, floor(number(field(args, "id", 0))))
+            give when t == nothing then "ERROR: no such task" otherwise row_text(t)
+        when action == "add"
+            let owner be lower(text(field(args, "owner", "")))
+            when owner != "" and member(team, owner) == nothing
+                give "ERROR: '" + owner + "' is not in the team"
+            let deps be apply(field(args, "depends", []), (d) => floor(number(d)))
+            let id be add_task(scope, me, field(args, "title", ""), field(args, "notes", ""), owner, deps)
+            give "added #" + text(id) + (when owner != "" then " for " + owner otherwise " (nobody owns it yet)")
+        when action == "claim"
+            give claim(scope, me, floor(number(field(args, "id", 0))))
+        when action == "update"
+            give update_task(team, me, floor(number(field(args, "id", 0))), args)
+        when action == "log"
+            let rows be ledger(scope, 0, 20)
+            give join(apply(rows, (r) => format_time(r["at"], "%m-%d %H:%M") + " " + r["actor"] + " " + r["kind"] + " " + r["ref"] + (when r["text"] != "" then ": " + r["text"] otherwise "")), "\n")
+        give "ERROR: unknown action '" + action + "' (list, add, claim, update, show, log)"
+    recover err
+        give "ERROR: " + regex_replace(text(err), "^.*?:\\d+:\\d+: ", "")

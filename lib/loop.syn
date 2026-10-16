@@ -332,6 +332,11 @@ task execute(tc, opts, on_event)
         -- tools de plugins: un proceso hijo por llamada (lib/plugins.syn)
         otherwise when registry[name] == "plugin"
             set out to text(plugins.call(name, args))
+        -- equipos: send/board saben quién llama por opts.agent_id (el modelo no lo elige: se pisa lo que mande)
+        otherwise when name == "send" or name == "board"
+            let targs be args
+            set targs["_agent"] to when contains(opts, "agent_id") then opts["agent_id"] otherwise ""
+            set out to text(call_tool(registry[name], targs))
         otherwise
             set out to text(call_tool(registry[name], args))
     recover err

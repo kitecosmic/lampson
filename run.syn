@@ -24,6 +24,7 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require db(".lampson/teams.db")
 require judge
 require file("workspace")
 require file("workspace/*")

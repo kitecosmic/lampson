@@ -16,7 +16,9 @@ require file.read("plugins")
 require file.read("plugins/*")
 require file("agents")
 require file("agents/*")
+require db(".lampson/teams.db")
 use "./lib/apikeys.syn" as apikeys
+use "./lib/teams.syn" as teams
 use "./lib/plugins.syn" as plugins
 use "./lib/runtime.syn" as runtime
 use "./lib/session.syn" as session
@@ -51,7 +53,7 @@ task wait_up(url)
 let BASE be "http://127.0.0.1:47990/w/test/v1"
 
 -- todos los threads que toca este test: se limpian AL EMPEZAR (una corrida abortada no contamina la siguiente) y al terminar
-let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-mid", "api:tarde"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"], ["rt-ask", "api:aprob-1"], ["rt-ask", "api:aprob-2"]]
+let TEST_THREADS be [["rt-api", "api:cliente-1"], ["rt-api", "api:cliente-2"], ["rt-api", "api:cliente-3"], ["rt-api", "api:par-1"], ["rt-api", "api:par-2"], ["rt-buf", "api:rafaga"], ["rt-mid", "api:mitad"], ["rt-mid", "api:tarde"], ["rt-buf", "api:cb-rafaga"], ["rt-buf", "chatwoot:1:77"], ["rt-api", "mcp:http-1"], ["rt-api", "a2a-1"], ["rt-api", "mcp:http-2"], ["rt-buf", "telegram:555"], ["rt-buf", "telegram:557"], ["rt-buf", "api:cb-allowed"], ["rt-buf", "telegram:600"], ["rt-ask", "api:aprob-1"], ["rt-ask", "api:aprob-2"], ["rt-team-a", "api:equipo"], ["rt-team-b", "team:rt-team"]]
 task purge_threads()
     each t in TEST_THREADS
         let ts be runtime.thread_session(t[0], t[1])
@@ -578,6 +580,43 @@ print("revocar")
 apikeys.remove(ka["id"])
 check(http_get(BASE + "/agents", {"Authorization": "Bearer " + ka["key"]}, nothing, 10)["status"] == 401, "key revocada → 401")
 check(apikeys.list() != nothing and length(where(apikeys.list(), (k) => k["id"] == ka["id"])) == 0, "ya no está en la lista")
+
+print("equipos: A le escribe a B (send), el pulso del servidor le da el turno a B en su conversación del equipo")
+db_open(teams.DB)
+teams.tasks("team:rt-team")
+each tb in ["tasks", "ledger", "messages", "cursors", "rounds"]
+    sql_exec("DELETE FROM " + tb + " WHERE scope = 'team:rt-team'")
+sql_exec("DELETE FROM spend WHERE agent LIKE 'rt-team-%'")
+write_file(ADIR + "/rt-team-a.agent.json", json_encode({"id": "rt-team-a", "system": "Líder.", "tools": [], "permission": "strict", "buffer": false}))
+write_file(ADIR + "/rt-team-b.agent.json", json_encode({"id": "rt-team-b", "system": "Dev.", "tools": [], "permission": "strict", "buffer": false}))
+write_file(teams.DIR + "/rt-team.team.json", json_encode({"id": "rt-team", "members": [{"agent": "rt-team-a", "role": "Líder"}, {"agent": "rt-team-b", "role": "Dev", "reports_to": "rt-team-a"}, {"agent": "rt-team-c", "role": "Otro"}]}))
+let ta be post("/messages", {"to": "rt-team-a", "thread": "api:equipo", "text": "avisa-equipo"}, kb)
+check(ta["status"] == 200 and contains(ta["json"]["text"], "sent to rt-team-b"), "A usó send: " + ta["raw"])
+let bdoc_t be nothing
+let waited be 0
+while bdoc_t == nothing and waited < 30
+    sleep(1)
+    set waited to waited + 1
+    let bs be runtime.thread_session("rt-team-b", "team:rt-team")
+    when bs != nothing and bs != "" and session.exists(bs)
+        let d be session.load(bs)
+        when length(where(d["messages"], (m) => m["role"] == "assistant" and contains(text(m["content"]), "final equipo-b"))) > 0
+            set bdoc_t to d
+check(bdoc_t != nothing, "B tuvo su turno en la conversación team:rt-team (" + text(waited) + " s)")
+when bdoc_t != nothing
+    let first_user be where(bdoc_t["messages"], (m) => m["role"] == "user")[0]["content"]
+    check(starts_with(first_user, "[message from rt-team-a (Líder)]\nhola B, ¿tomás el login?") and contains(first_user, "[team rt-team] Since your last turn:"), "con el mensaje, quién lo manda y las novedades del equipo: " + slice(first_user, 0, 120))
+    check(contains(text(bdoc_t["messages"][0]["content"]), "# Team rt-team") and contains(text(bdoc_t["messages"][0]["content"]), "You report to rt-team-a"), "su rol en el prompt")
+    set created to append(created, runtime.thread_session("rt-team-b", "team:rt-team"))
+let lg be teams.ledger("team:rt-team", 0, 20)
+check(length(where(lg, (r) => r["kind"] == "message" and r["actor"] == "rt-team-a")) == 1 and length(where(lg, (r) => r["actor"] == "rt-team-c")) == 0, "en el registro el mensaje es de rt-team-a: el _agent que mandó el modelo no cuenta")
+check(length(where(lg, (r) => r["kind"] == "added" and r["actor"] == "rt-team-b")) == 1, "B agregó su tarea al tablero")
+check(length(where(teams.pending(), (m) => m["scope"] == "team:rt-team")) == 0, "no quedan mensajes por entregar")
+check(teams.spent_today("rt-team-b") > 0, "el turno de B cuenta para su presupuesto: " + text(teams.spent_today("rt-team-b")))
+set created to append(created, ta["json"]["session"])
+rm_file(ADIR + "/rt-team-a.agent.json")
+rm_file(ADIR + "/rt-team-b.agent.json")
+rm_file(teams.DIR + "/rt-team.team.json")
 
 -- limpieza
 apikeys.remove(kb["id"])
