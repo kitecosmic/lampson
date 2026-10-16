@@ -868,6 +868,15 @@ let profile be lower(env("LAMPSON_AGENT", "build"))
 when not contains(runtime.names(), profile)
     print("agente '" + profile + "' no disponible · disponibles: " + join(runtime.names(), ", ") + " · uso build")
     set profile to "build"
+-- un agente del proyecto con "model" propio corre con ese modelo (los integrados y los que no dicen, con el configurado).
+-- /model lo cambia para la sesión, como siempre.
+task cfg_for_agent(p)
+    let spec be runtime.get(p)
+    when spec != nothing and (spec["model"]["provider"] != "" or spec["model"]["model"] != "")
+        give provider.config_for(spec["model"]["provider"], spec["model"]["model"])
+    give provider.config()
+set cfg to cfg_for_agent(profile)
+set env_info to agents.env_info(cfg)
 -- agentes por lib/runtime.syn (integrados y los del proyecto): el system prompt se arma una vez por sesión/cambio
 -- de agente (prompt cache); las opts en cada turno (catálogo fresco)
 task system_for(p)
@@ -1452,6 +1461,11 @@ while running
                 print("agente=" + profile + " · disponibles: " + join(runtime.names(), ", "))
             otherwise when contains(runtime.names(), want)
                 set profile to want
+                let prev_model be cfg["provider"] + "/" + cfg["model"]
+                set cfg to cfg_for_agent(profile)
+                set env_info to agents.env_info(cfg)
+                when cfg["provider"] + "/" + cfg["model"] != prev_model
+                    print("modelo=" + cfg["provider"] + "/" + cfg["model"] + " (el del agente " + profile + ")")
                 set system_msg to system_for(profile)
                 set opts to opts_for(profile, mode)
                 -- el system prompt cambia con el perfil; el historial se conserva (cambiar de agente no borra la conversación)
