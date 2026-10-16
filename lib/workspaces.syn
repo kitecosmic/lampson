@@ -744,6 +744,10 @@ export task should_live(w, hc)
     -- que el próximo mensaje encuentre un 502 en el hub
     when api_keys_on_disk(w) > 0
         give true
+    -- con un canal encendido (lib/channels.syn) también: en modo poll se caería el poller, y en modo webhook la
+    -- plataforma recibiría un 502 del hub (que no enciende workspaces por un webhook)
+    when channels_on_disk(w) > 0
+        give true
     let ih be idle_hours()
     when ih == 0
         give true
@@ -751,6 +755,29 @@ export task should_live(w, hc)
     give now() - last < ih * 3600
 
 -- tareas encendidas según el json del workspace (sirve aunque el proceso esté apagado)
+-- canales encendidos en el workspace: plugins encendidos (.lampson/plugins.json del ws) cuyo plugin.json declara
+-- "channel" — globales (plugins/ de la instalación, leídos por el link del ws) o del proyecto (.lampson/plugins/)
+export task channels_on_disk(w)
+    let n be 0
+    try
+        let st be json_decode(read_file(dir_of(w["slug"]) + "/.lampson/plugins.json"))
+        let on be when contains(st, "enabled") then st["enabled"] otherwise {}
+        each name in keys(on)
+            when on[name] == true
+                let found be false
+                each f in [dir_of(w["slug"]) + "/plugins/" + name + "/plugin.json", dir_of(w["slug"]) + "/workspace/.lampson/plugins/" + name + "/plugin.json"]
+                    when not found
+                        try
+                            when contains(read_file(f), "\"channel\"")
+                                set found to true
+                        recover err
+                            set found to found
+                when found
+                    set n to n + 1
+    recover err
+        give 0
+    give n
+
 task api_keys_on_disk(w)
     try
         give length(json_decode(read_file(dir_of(w["slug"]) + "/.lampson/api_keys.json"))["keys"])

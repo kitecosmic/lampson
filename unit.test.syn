@@ -1575,3 +1575,17 @@ test "runtime: agentes globales (agents/ de la instalación); uno del proyecto c
     assert_eq(runtime.get("rt-glob")["description"], "global", "sin el del proyecto vuelve el global")
     rm_file(runtime.GLOBAL_DIR + "/rt-glob.agent.json")
     assert_eq(runtime.get("rt-glob"), nothing)
+
+test "workspaces: un workspace con un canal encendido cuenta como en uso (no se apaga por inactividad)"
+    let d be ".lampson/ws/test-chan"
+    write_file(d + "/plugins/telegram/plugin.json", json_encode({"kind": "syn", "entry": "plugin.syn", "channel": {"agent": ""}}))
+    write_file(d + "/plugins/otro/plugin.json", json_encode({"kind": "syn", "entry": "x.syn", "tools": [{"name": "t"}]}))
+    write_file(d + "/.lampson/plugins.json", json_encode({"enabled": {"telegram": true, "otro": true}}))
+    assert_eq(wsp.channels_on_disk({"slug": "test-chan"}), 1, "telegram encendido cuenta; un plugin que no es canal, no")
+    write_file(d + "/.lampson/plugins.json", json_encode({"enabled": {"telegram": false, "otro": true}}))
+    assert_eq(wsp.channels_on_disk({"slug": "test-chan"}), 0, "apagado no cuenta")
+    assert_eq(wsp.channels_on_disk({"slug": "no-existe"}), 0)
+    when env("OS", "") == "Windows_NT"
+        run("cmd", ["/c", "rmdir", "/s", "/q", replace(d, "/", "\\")], 10)
+    otherwise
+        run("rm", ["-rf", d], 10)
