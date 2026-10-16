@@ -368,13 +368,45 @@ Vocabulario fijado por Joel (2026-10-16) — vale para archivos, API, interfaz y
 | la lista compartida de trabajo | **tablero** (`board`) con **tareas** | dueño, estado, dependencias |
 | cuándo un agente trabaja solo | **ronda** | mira si hay algo para él; sin trabajo, no gasta |
 | de un agente a otro | **mensaje** (tool `send`) | entra por el buzón, como un cliente |
+| lo que le pedís a un agente o a un equipo | **objetivo** | «reservame…», «buscá el precio más barato…», «agregá tal feature» |
 
-- [ ] Tool `send(to, text)` entre agentes → `deliver` (generaliza `delegate`)
-- [ ] Tablero compartido de tareas (estado, dueño, dependencias) — blackboard de Synsema
-- [ ] Despertadores por agente: mensaje, cron (`lib/schedule.syn`), evento; sin trabajo → no corre
-- [ ] Repaso periódico barato con `judge` ("¿hay algo para mí?") antes de gastar un turno completo
-- [ ] Equipos: carpeta de agentes con roles; estilos coordinador (un jefe reparte) y tablero (cada uno toma lo suyo)
-- [ ] Presupuesto diario por agente y por equipo
+**Dos superficies, un motor** (decidido con Joel, 2026-10-16):
+
+- **Objetivos** — le pedís algo a un agente y trabaja solo hasta terminarlo: arma su plan como tareas en el tablero,
+  avanza en rondas, cuenta en qué está, deja el resultado, y pide aprobación (celular) antes de cualquier acción hacia
+  afuera (reservar, comprar, mandar, mergear). Un objetivo es un equipo de un agente.
+- **Equipos** — un lienzo (grafo) en la web: nodos = agentes con puesto, personalidad, modelo, tools y permisos;
+  flechas = a quién reporta / a quién puede escribir. Al lado, el tablero y la actividad en vivo. Sirve para algo chico
+  (ventas + soporte) y para una empresa (CEO, CTO, CPO, CMO, dev) sobre un repo: cada agente en su rama (worktree) y con
+  su nombre de autor; la persona aprueba lo que llega a `main`.
+- Web: una sección nueva con dos pestañas, **Objetivos** y **Equipos**.
+
+**Orden** (Joel): primero el motor común, después **Objetivos**, después **Equipos**. **Escenario de prueba real:**
+una empresa sobre un repo de prueba — primero el objetivo de un solo agente (el CTO recibe «agregá tal feature»,
+planifica, trabaja en su rama en rondas y pide aprobación para mergear); después el equipo completo sobre el mismo
+repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anuncio).
+
+#### 6a — Motor común
+- [ ] Tool `send(to, text)` entre agentes → buzón / `deliver` (generaliza `delegate`); quién puede escribirle a quién
+- [ ] Tablero: tareas {id, título, dueño, estado, depende de, objetivo/equipo, notas} en `.lampson/boards/`, tools
+      `board_*` para los agentes; eventos por el bus para la web
+- [ ] Rondas por agente: cron (`lib/schedule.syn`), mensaje nuevo o tarea asignada; repaso barato («¿hay algo para
+      mí?», `judge`) antes de gastar un turno completo; sin trabajo → no corre
+- [ ] Presupuesto diario por agente y por objetivo/equipo; al llegar, para y avisa
+- [ ] Aprobaciones de acciones hacia afuera por el canal que ya existe (celular)
+
+#### 6b — Objetivos
+- [ ] Objetivo = {id, texto, agente, estado, tareas, resultado, presupuesto}; crear por API/CLI/web
+- [ ] Pestaña **Objetivos** en la web: lista, estado, tareas, actividad, resultado, aprobaciones pendientes
+- [ ] Repo de prueba: el CTO recibe un feature, trabaja en su rama en rondas y pide aprobación para mergear
+- [ ] Documentación (en/es/pt) con la corrida real
+
+#### 6c — Equipos
+- [ ] `.lampson/teams/<id>.team.json`: agentes, roles, personalidad, quién reporta a quién, quién escribe a quién
+- [ ] Ramas por agente (git worktree) y autor por agente en los commits; merge a `main` con aprobación
+- [ ] Pestaña **Equipos**: lienzo para crear y editar (nodos y flechas), tablero y actividad en vivo
+- [ ] Escenario real: la empresa completa sobre el repo de prueba
+- [ ] Documentación (en/es/pt) con la corrida real
 
 ## Estado
 
