@@ -32,6 +32,9 @@ require file.read("hub.tpl.syn")
 require file("hub.syn")
 require file.read("public")
 require file.read("public/*")
+-- equipos que no programan: su carpeta vive en la instalación (equipos/<nombre>/), creada desde /equipos
+require file("equipos")
+require file("equipos/*")
 require random
 
 use "./lib/workspaces.syn" as ws
@@ -170,6 +173,10 @@ serve on 8080
     route "GET /w/:slug"
         when not page_allowed(request)
             give redirect("/login", 302)
+        -- /w/empresa-demo → /w/empresa-demo-f0bfe45d si un solo workspace se llama así (el hash solo desempata)
+        let full be ws.resolve_slug(params.slug)
+        when full != nothing and full != params.slug
+            give redirect("/w/" + full, 302)
         -- entrar a un workspace apagado lo enciende (y levanta la pausa manual): si alguien abre la URL es para usarlo
         let w be ws.get(params.slug)
         when w != nothing and ws.health(w) == nothing
@@ -182,12 +189,54 @@ serve on 8080
     route "GET /w/:slug/equipos"
         when not page_allowed(request)
             give redirect("/login", 302)
+        let full be ws.resolve_slug(params.slug)
+        when full != nothing and full != params.slug
+            give redirect("/w/" + full + "/equipos" + (when contains(query, "new") then "?new=1" otherwise ""), 302)
         let w be ws.get(params.slug)
         when w != nothing and ws.health(w) == nothing
             ws.start_ws(w)
             ws.wait_ready(w, 8)
             ws.summary()
         give html(read_file("public/teams.html"))
+
+    -- EQUIPOS Y OBJETIVOS de todos los workspaces (public/teams-home.html): lo que espera a la persona, cada proyecto
+    -- con sus equipos y objetivos, y «+ equipo». Lee el resumen que escribe cada workspace (lib/teamrun.syn).
+    route "GET /equipos"
+        when not page_allowed(request)
+            give redirect("/login", 302)
+        give html(read_file("public/teams-home.html"))
+
+    route "GET /api/teams-home" requires auth
+        let out be []
+        each w in ws.summary_cached(20)
+            let s be ws.teams_summary(w)
+            set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "alive": w["alive"], "teams": s["teams"], "objectives": s["objectives"], "approvals": s["approvals"], "active": s["active"], "waiting": s["waiting"]})
+        give {"workspaces": out}
+
+    -- un equipo nuevo: en un workspace que ya existe, o en una carpeta nueva equipos/<nombre> (para un equipo que no
+    -- programa: ventas, soporte, investigación). Devuelve la pantalla del workspace con el editor abierto.
+    route "POST /api/teams-home/new" requires auth
+        let b be json of request
+        let slug be when contains(b, "slug") and b["slug"] != nothing then text(b["slug"]) otherwise ""
+        let w be nothing
+        when slug != ""
+            set w to ws.get(slug)
+            when w == nothing
+                give fail(404, "no such workspace")
+        otherwise
+            let nm be lower(trim(when contains(b, "name") and b["name"] != nothing then text(b["name"]) otherwise ""))
+            when not matches(nm, "[a-z0-9][a-z0-9-]{0,39}")
+                give fail(400, "el nombre va en minúsculas, números y guiones (por ejemplo «ventas»)")
+            when not file_exists("equipos/" + nm + "/README.md")
+                write_file("equipos/" + nm + "/README.md", "# " + nm + "\n\nCarpeta del equipo «" + nm + "» de Lampson: sus agentes, su tablero y sus objetivos viven en .lampson/.\nLo que el equipo produzca (notas, informes, archivos) puede quedar acá.\n")
+            try
+                set w to ws.ensure(ws.home() + "/equipos/" + nm)
+            recover err
+                give fail(400, text(err))
+        ws.start_ws(w)
+        ws.wait_ready(w, 8)
+        ws.summary()
+        give {"ok": true, "slug": w["slug"], "url": "/w/" + w["slug"] + "/equipos?new=1"}
 
     route "GET /api/hub" requires auth
         give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home(), "local": request.user["local"]}

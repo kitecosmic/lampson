@@ -11,8 +11,11 @@
 use "./teams.syn" as teams
 use "./mailbox.syn" as mailbox
 use "./runtime.syn" as runtime
+use "./approvals.syn" as approvals
 
 export let TICK_SECONDS be 3
+-- lo que el hub muestra de este workspace (inicio, /equipos) sin abrir su base: equipos, objetivos y lo que espera
+export let SUMMARY_FILE be ".lampson/teams-summary.json"
 export let ROUND_TEXT be "[round] Your periodic round: look at your open tasks and the team's news above, and move your work forward. If there is nothing for you to do, reply with one short line and stop — don't invent work."
 
 task flag_budget(team, agent)
@@ -97,7 +100,37 @@ export task objective_due(o)
         give teams.has_work("team:" + o["team"], o["agent"])
     give true
 
+-- escribe el resumen si cambió: equipos, objetivos abiertos (y los últimos cerrados) y aprobaciones pendientes
+export task write_summary()
+    require db(".lampson/teams.db")
+    require time
+    require net
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let ts be apply(teams.all(), (t) => {"id": t["id"], "description": t["description"], "members": length(t["members"]), "lead": teams.lead_of(t)})
+    let objs be teams.obj_list()
+    let open_o be where(objs, (o) => contains(["active", "waiting", "paused"], o["status"]))
+    let closed be slice(where(objs, (o) => not contains(["active", "waiting", "paused"], o["status"])), 0, 5)
+    let brief be apply(open_o + closed, (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": slice(o["text"], 0, 240), "status": o["status"], "question": o["question"], "question_kind": o["question_kind"], "progress": slice(o["progress"], 0, 240), "spent": o["spent"], "updated_at": o["updated_at"]})
+    let aps be []
+    try
+        set aps to apply(approvals.pending(), (a) => {"id": a["id"], "message": a["message"], "why": a["why"], "created": a["created"]})
+    recover err
+        set aps to []
+    let body be {"teams": ts, "objectives": brief, "approvals": aps, "active": length(where(open_o, (o) => o["status"] == "active")), "waiting": length(where(open_o, (o) => o["status"] == "waiting")) + length(aps)}
+    let enc be json_encode(body)
+    when state_get("teams:summary:last", "") != enc
+        state_set("teams:summary:last", enc)
+        set body["updated"] to now()
+        write_file(SUMMARY_FILE, json_encode(body))
+    give body
+
 export task tick()
+    require net
+    require env("LAMPSON_*")
     require db(".lampson/teams.db")
     require time
     require random
@@ -108,6 +141,10 @@ export task tick()
     require file.read("agents")
     require file.read("agents/*")
     let n be 0
+    try
+        write_summary()
+    recover err
+        set n to 0
     each o in teams.obj_list()
         when objective_due(o)
             when deliver_objective(o)

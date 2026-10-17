@@ -141,8 +141,10 @@ lampson objective list · objective show 2 · objective reply 2 --approve · obj
 lampson team list
 ```
 
-A full-screen view at `http://127.0.0.1:8080/w/<workspace>/equipos` (button **equipos** in the web UI) shows the
-objectives, what waits for you, the team as a live graph, its board and its record — and lets you build the team.
+Start at `http://127.0.0.1:8080/equipos`: every project's teams and objectives, everything waiting for you, and
+**+ equipo** (in a project you have, or a new folder for a team that doesn't code). Each project has a full-screen
+view at `/w/<project>/equipos` with the objectives, the team as a live graph, its board and its record — and the
+editor to build the team.
 → **[lampson.org/docs/teams](https://lampson.org/docs/teams)**
 
 ## Also in the box

@@ -25,7 +25,11 @@ async function paintGrid() {
   grid.innerHTML = '';
   for (const w of (r.workspaces || [])) {
     const c = document.createElement('a'); c.className = 'card ws' + (w.alive ? ' on' : ' off'); c.href = w.url;
-    c.innerHTML = `<h3>${w.alive ? '● vivo' : '○ apagado'}${w.schedules_on ? ' · ⏰ ' + w.schedules_on : ''}</h3><p class="nm">${esc(w.name)}</p><p class="pth">${esc(w.path)}</p><p class="meta">último uso ${esc(fmtWhen(w.last_used))}</p>`;
+    const t = w.teams || {};
+    const tline = (t.teams || t.active || t.waiting) ? `<p class="tm" data-href="${esc(w.url)}/equipos">${t.teams ? '◇ ' + t.teams + (t.teams === 1 ? ' equipo' : ' equipos') : '◇ objetivos'}${t.active ? ' · ' + t.active + ' trabajando' : ''}${t.waiting ? ' · <b>⚑ ' + t.waiting + ' te espera' + (t.waiting === 1 ? '' : 'n') + '</b>' : ''}</p>` : '';
+    c.innerHTML = `<h3>${w.alive ? '● vivo' : '○ apagado'}${w.schedules_on ? ' · ⏰ ' + w.schedules_on : ''}</h3><p class="nm">${esc(w.name)}</p><p class="pth">${esc(w.path)}</p><p class="meta">último uso ${esc(fmtWhen(w.last_used))}</p>${tline}`;
+    const tm = c.querySelector('.tm');
+    if (tm) tm.onclick = (e) => { e.preventDefault(); e.stopPropagation(); location.href = tm.dataset.href; };
     // entrar = usarlo: si está apagado se enciende acá mismo (con aviso en la tarjeta) y después se abre. La ruta
     // /w/<slug> del hub también lo enciende sola, así que un link directo funciona igual; esto solo da feedback.
     if (!w.alive) c.onclick = async (e) => {
@@ -36,6 +40,11 @@ async function paintGrid() {
     };
     grid.appendChild(c);
   }
+  // equipos y objetivos de todos los proyectos (/equipos): lo que te espera de un vistazo, y «+ equipo»
+  const tot = (r.workspaces || []).reduce((acc, w) => { const t = w.teams || {}; acc.teams += t.teams || 0; acc.active += t.active || 0; acc.waiting += t.waiting || 0; return acc; }, { teams: 0, active: 0, waiting: 0 });
+  const tc = document.createElement('a'); tc.className = 'card ws teamscard' + (tot.waiting ? ' wait' : ''); tc.href = '/equipos';
+  tc.innerHTML = `<h3>◇ equipos y objetivos</h3><p class="nm">${tot.waiting ? '⚑ ' + tot.waiting + ' te espera' + (tot.waiting === 1 ? '' : 'n') : tot.active ? tot.active + ' trabajando' : 'agentes que trabajan solos'}</p><p class="pth">${tot.teams ? tot.teams + (tot.teams === 1 ? ' equipo' : ' equipos') + ' en tus proyectos' : 'armá un equipo con roles o dale un objetivo a un agente'}</p>`;
+  grid.appendChild(tc);
   const add = document.createElement('a'); add.className = 'card ws new'; add.href = '#'; add.innerHTML = '<h3>+</h3><p class="nm">nuevo workspace</p><p class="pth">elegí una carpeta de tu disco</p>';
   add.onclick = (e) => { e.preventDefault(); openWorkspaces('__new'); };
   grid.appendChild(add);
