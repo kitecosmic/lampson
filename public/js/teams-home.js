@@ -38,6 +38,9 @@ function renderAttention() {
   }
   box.hidden = html === '';
   box.innerHTML = html;
+  // el mismo contador que la pestaña muestra en el inicio
+  const total = data.reduce((n, w) => n + w.objectives.filter((o) => o.status === 'waiting').length + w.approvals.length, 0);
+  $('#teamsBadge').hidden = !total; $('#teamsBadge').textContent = total ? '⚑ ' + total : '';
   box.querySelectorAll('input[data-k]').forEach((i) => { if (keep[i.dataset.k]) i.value = keep[i.dataset.k]; });
   const note = (k) => (box.querySelector(`input[data-k="${k}"]`) || {}).value || '';
   const reply = async (k, text, approved) => { const [slug, id] = k.split(':'); await post(`/w/${slug}/api/objectives/${id}/reply`, { text, approved }); refresh(); };
@@ -68,6 +71,8 @@ function renderProjects() {
 
 // ---------- + equipo ----------
 $('#newTeam').onclick = () => { $('#newBox').hidden = false; $('#nName').focus(); };
+// /equipos?new=1 (el «+ equipo» del inicio) abre el formulario de una
+if (new URLSearchParams(location.search).has('new')) $('#newTeam').onclick();
 $('#nCancel').onclick = () => ($('#newBox').hidden = true);
 $('#nName').onfocus = () => (document.querySelector('input[name=where][value=new]').checked = true);
 $('#nWs').onfocus = () => (document.querySelector('input[name=where][value=ws]').checked = true);

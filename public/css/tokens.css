@@ -55,3 +55,10 @@ button:disabled { opacity:.45; cursor:default; }
 *::-webkit-scrollbar-track { background:transparent; }
 *::-webkit-scrollbar-thumb { background:var(--rule-2); border-radius:4px; }
 *::-webkit-scrollbar-thumb:hover { background:var(--ink-3); }
+
+/* pestañas del hub: Proyectos · Equipos son las dos mitades del producto (public/hub.html y public/teams-home.html) */
+.navtabs { display:flex; align-items:center; gap:2px; margin-left:6px; }
+.navtabs a { font:400 12px/1 var(--mono); color:var(--ink-3); text-decoration:none; padding:7px 10px; border-radius:2px; display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.navtabs a:hover { color:var(--ink); background:var(--paper-2); }
+.navtabs a.on { color:var(--ink); background:var(--paper-3); }
+.navtabs .badge { font:600 10px/1 var(--mono); color:var(--paper); background:var(--rubric); border-radius:8px; padding:2px 6px; }
