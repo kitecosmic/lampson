@@ -23,3 +23,12 @@ body.hub #stage { display:flex; align-items:center; padding:20px 40px; }
   body.hub #stage { padding:16px; align-items:flex-start; }
   .wsgrid { grid-template-columns:1fr; }
 }
+
+/* equipos y objetivos: la línea de cada proyecto y la tarjeta de /equipos */
+.card.ws .tm { font:400 11px/1.4 var(--mono); color:var(--accent); margin:6px 0 0; padding-top:6px; border-top:1px dashed var(--rule); }
+.card.ws .tm:hover { text-decoration:underline; }
+.card.ws .tm b { color:var(--rubric); font-weight:600; }
+.card.ws.teamscard { border-color:var(--rule-2); }
+.card.ws.teamscard h3 { color:var(--accent); }
+.card.ws.teamscard.wait { border-color:var(--rubric); }
+.card.ws.teamscard.wait .nm { color:var(--rubric); }

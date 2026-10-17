@@ -665,6 +665,17 @@ while ov["status"] == "active" and ow < 40
     set ov to obj_now(oid)
 check(ov["status"] == "done" and contains(ov["result"], "npm test"), "terminó con el resultado (" + text(ow) + " s): " + ov["status"] + " · " + ov["result"])
 check(ov["turns"] == 2 and ov["spent"] > 0, "dos turnos, con gasto: " + text(ov["turns"]) + " · " + text(ov["spent"]))
+-- el pulso (cada 3 s) lo escribe: esperar un par de pulsos
+let tsum be {"objectives": []}
+let tw be 0
+while tw < 10 and length(where(tsum["objectives"], (o) => text(o["id"]) == oid and o["status"] == "done")) == 0
+    sleep(1)
+    set tw to tw + 1
+    try
+        set tsum to json_decode(read_file(".lampson/teams-summary.json"))
+    recover err
+        set tsum to {"objectives": []}
+check(length(where(tsum["objectives"], (o) => text(o["id"]) == oid and o["status"] == "done")) == 1, "el resumen para el hub (.lampson/teams-summary.json) ya lo tiene hecho")
 check(length(where(ov["ledger"], (r) => r["kind"] == "approved")) == 1 and length(where(ov["ledger"], (r) => r["kind"] == "done")) == 1, "en el registro: aprobado y hecho")
 check(post("/objectives/" + oid + "/reply", {"text": "otra"}, kb)["status"] == 409, "uno terminado no se responde")
 let lst be json_decode(text(http_get(BASE + "/objectives", auth(kb), nothing, 10)["body"]))

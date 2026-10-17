@@ -11,6 +11,7 @@ const STATUS = { active: 'trabajando', waiting: 'te espera', done: 'hecho', fail
 const KIND = { added: 'agregó', claimed: 'tomó', updated: 'movió', message: 'escribió', report: 'informó', asked: 'preguntó', 'approval requested': 'pide aprobación', approved: 'aprobó', denied: 'denegó', answered: 'respondió', done: 'terminó', failed: 'falló', cancelled: 'canceló', paused: 'pausado', budget: 'presupuesto', objective: 'nuevo objetivo', error: 'error' };
 
 const PRESETS = [['code', 'código (leer, editar, comandos)'], ['read', 'leer y correr comandos (no edita)'], ['none', 'ninguna (solo coordina)']];
+if (new URLSearchParams(location.search).get('new')) { try { localStorage.setItem('lampson.teams.tab', 'teams'); } catch (e) {} }
 const state = { approvals: [], teamsMeta: [], draft: null, sel: null, tab: new URLSearchParams(location.search).get('tab') || localStorage.getItem('lampson.teams.tab') || 'objectives', obj: Number(new URLSearchParams(location.search).get('o')) || null, team: null, objectives: [], agents: [], teams: [], seen: new Set() };
 
 async function api(path, body) {
@@ -190,6 +191,7 @@ function draftFrom(team) {
     members: team.members.map((m) => ({ agent: m.agent, role: m.role, reports_to: m.reports_to, description: m.description, system: m.system, preset: presetOf(m.tools), permission: m.permission || 'strict', dirty: false })) };
 }
 function presetOf(tools) { const t = tools || []; if (!t.length) return 'none'; if (t.includes('write') || t.includes('edit')) return 'code'; return 'read'; }
+function slugName() { return (BASE ? BASE.slice(3) : 'equipo').replace(/-[0-9a-f]{8}$/, '').replace(/[^a-z0-9-]/g, '').slice(0, 40) || 'equipo'; }
 function startNewTeam() {
   state.draft = { isNew: true, id: '', description: '', round_minutes: 0, budget_daily_tokens: 300000, worktrees: true, talks: [], members: [{ agent: 'lider', role: 'Líder', reports_to: '', description: '', system: '', preset: 'code', permission: 'strict', dirty: true }] };
   state.sel = 'lider'; renderTeams();
@@ -282,6 +284,12 @@ async function refreshTeams() {
   const r = await api('teams');
   if (!r.ok) return false;
   state.teams = r.data.teams;
+  // ?new=1 (desde /equipos → «+ equipo»): el editor de un equipo nuevo, con el nombre del proyecto
+  if (new URLSearchParams(location.search).get('new') && !state.newOpened) {
+    state.newOpened = true; startNewTeam();
+    if (!state.teams.some((t) => t.id === slugName())) state.draft.id = slugName();
+    renderTeams(); history.replaceState(null, '', location.pathname + '?tab=teams'); return true;
+  }
   // ?edit=<equipo> abre el editor de ese equipo (enlaces directos, capturas)
   const ed = new URLSearchParams(location.search).get('edit');
   if (ed && !state.editOpened) { state.editOpened = true; const t = state.teams.find((x) => x.id === ed); if (t) { state.team = t.id; state.draft = draftFrom(t); state.sel = t.lead || t.members[0].agent; renderTeams(); return true; } }

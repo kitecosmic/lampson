@@ -753,6 +753,10 @@ export task should_live(w, hc)
     -- con un equipo que hace rondas (lib/teams.syn: round_minutes > 0): las rondas corren en el proceso del workspace
     when teams_on_disk(w) > 0
         give true
+    -- un objetivo trabajando (o esperando a la persona): apagarlo lo dejaría a mitad de camino
+    let tsum be teams_summary(w)
+    when tsum["active"] > 0 or tsum["waiting"] > 0
+        give true
     let ih be idle_hours()
     when ih == 0
         give true
@@ -782,6 +786,22 @@ export task channels_on_disk(w)
     recover err
         give 0
     give n
+
+-- el resumen de equipos y objetivos que escribe el workspace (lib/teamrun.syn) — lo que el hub muestra sin abrir su base
+export task teams_summary(w)
+    try
+        give json_decode(read_file(dir_of(w["slug"]) + "/.lampson/teams-summary.json"))
+    recover err
+        give {"teams": [], "objectives": [], "approvals": [], "active": 0, "waiting": 0}
+
+-- /w/<nombre> sin el hash: el slug completo si un solo workspace se llama así (si no, nothing)
+export task resolve_slug(name)
+    require file(".lampson")
+    require file(".lampson/*")
+    when get(name) != nothing
+        give name
+    let hits be where(all(), (w) => starts_with(w["slug"], lower(name) + "-") and length(w["slug"]) == length(name) + 9)
+    give when length(hits) == 1 then hits[0]["slug"] otherwise nothing
 
 -- equipos con rondas en el proyecto (leídos por el link workspace/ del ws: el hub no tiene permiso sobre el proyecto)
 export task teams_on_disk(w)
@@ -846,6 +866,11 @@ export task tick()
     give {"started": started, "stopped": stopped}
 
 -- resumen para la UI del hub
+-- contadores para la tarjeta del inicio: equipos, objetivos trabajando, lo que espera a la persona
+task team_counts(w)
+    let s be teams_summary(w)
+    give {"teams": length(s["teams"]), "active": s["active"], "waiting": s["waiting"]}
+
 export task summary()
     require exec
     require time
@@ -860,7 +885,7 @@ export task summary()
     each e in enumerate(list)
         let w be e["item"]
         let hc be hcs[e["index"]]
-        set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "port": w["port"], "policy": when contains(w, "policy") then w["policy"] otherwise "auto", "created": w["created"], "last_used": when hc != nothing and contains(hc, "last_used") and hc["last_used"] != nothing then hc["last_used"] otherwise w["last_used"], "alive": hc != nothing, "paused": contains(w, "paused") and w["paused"] == true, "schedules_on": when hc != nothing and contains(hc, "schedules_on") then hc["schedules_on"] otherwise schedules_on_disk(w), "url": "/w/" + w["slug"]})
+        set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "port": w["port"], "policy": when contains(w, "policy") then w["policy"] otherwise "auto", "created": w["created"], "last_used": when hc != nothing and contains(hc, "last_used") and hc["last_used"] != nothing then hc["last_used"] otherwise w["last_used"], "alive": hc != nothing, "paused": contains(w, "paused") and w["paused"] == true, "schedules_on": when hc != nothing and contains(hc, "schedules_on") then hc["schedules_on"] otherwise schedules_on_disk(w), "url": "/w/" + w["slug"], "teams": team_counts(w)})
     share out as "hub:summary"
     share now() as "hub:summary_at"
     give out

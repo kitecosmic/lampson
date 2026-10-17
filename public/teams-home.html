@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>Lampson · equipos y objetivos</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131412">
+<link rel="manifest" href="/manifest.webmanifest">
+<!-- equipos y objetivos de TODOS los proyectos (el hub): lo que te espera, cada proyecto con sus equipos y objetivos,
+     y «+ equipo». Cada proyecto tiene su pantalla propia en /w/<proyecto>/equipos (public/teams.html). -->
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/teams.css">
+<script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body class="home">
+<header class="tbar">
+  <a class="back" href="/" title="inicio: tus proyectos">←</a>
+  <span class="brand">lampson<span class="proj">equipos y objetivos</span></span>
+  <span class="spacer"></span>
+  <button class="primary" id="newTeam">+ equipo</button>
+  <span class="live" id="live" title="actualizado en vivo">en vivo</span>
+  <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
+</header>
+
+<section class="attention" id="attention" hidden></section>
+
+<main class="homegrid">
+  <section class="newteam" id="newBox" hidden>
+    <h5>Un equipo nuevo</h5>
+    <p class="hint0">Un equipo vive en un proyecto: sus agentes trabajan sobre esa carpeta (y, si tiene git, cada uno en su rama). Para un equipo que no programa —ventas, soporte, investigación— Lampson le crea su carpeta.</p>
+    <label class="opt"><input type="radio" name="where" value="new" checked> carpeta nueva para el equipo <input id="nName" placeholder="ventas" autocomplete="off"></label>
+    <label class="opt"><input type="radio" name="where" value="ws"> en un proyecto que ya tenés <select id="nWs"></select></label>
+    <div class="row2"><button class="primary" id="nGo">Crear y armar el equipo</button><button id="nCancel">Cancelar</button></div>
+    <p class="ferr" id="nErr"></p>
+  </section>
+  <div id="projects"></div>
+</main>
+
+<script src="/js/teams-home.js"></script>
+</body>
+</html>

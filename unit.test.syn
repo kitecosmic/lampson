@@ -1591,6 +1591,10 @@ test "workspaces: un workspace con un canal encendido cuenta como en uso (no se 
     write_file(d + "/workspace/.lampson/teams/b.team.json", json_encode({"id": "b", "members": [{"agent": "x"}]}))
     assert_eq(wsp.teams_on_disk({"slug": "test-chan"}), 1)
     assert_eq(wsp.teams_on_disk({"slug": "no-existe"}), 0)
+    -- el resumen de equipos que escribe el workspace: el hub lo lee para el inicio y para mantenerlo vivo
+    assert_eq(wsp.teams_summary({"slug": "test-chan"})["active"], 0, "sin resumen: ceros")
+    write_file(d + "/.lampson/teams-summary.json", json_encode({"teams": [{"id": "a"}], "objectives": [], "approvals": [], "active": 1, "waiting": 2}))
+    assert_eq(wsp.teams_summary({"slug": "test-chan"})["waiting"], 2)
     when env("OS", "") == "Windows_NT"
         run("cmd", ["/c", "rmdir", "/s", "/q", replace(d, "/", "\\")], 10)
     otherwise
@@ -1870,3 +1874,14 @@ test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del
     each a in ["ttceo", "ttcto", "ttdev", "ttcmo"]
         rm_file(runtime.PROJECT_DIR + "/" + a + ".agent.json")
     rm_file(teams.DIR + "/t-test.team.json")
+
+
+test "workspaces: /w/<nombre> sin el hash resuelve al workspace si hay uno solo con ese nombre"
+    let reg be wsp.all()
+    when length(reg) > 0
+        let w be reg[0]
+        assert_eq(wsp.resolve_slug(w["slug"]), w["slug"], "el slug completo es él mismo")
+        let short be slice(w["slug"], 0, length(w["slug"]) - 9)
+        let same be where(reg, (x) => starts_with(x["slug"], short + "-") and length(x["slug"]) == length(short) + 9)
+        assert_eq(wsp.resolve_slug(short), when length(same) == 1 then w["slug"] otherwise nothing)
+    assert_eq(wsp.resolve_slug("no-existe-nunca"), nothing)
