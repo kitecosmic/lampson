@@ -1691,6 +1691,9 @@ task board(agent, args)
 
 test "equipos: validar el archivo — id, miembros, reports_to y talks dentro del equipo"
     assert(teams.validate({"id": "x", "members": [{"agent": "a"}]}, "f")["ok"])
+    -- el nombre visible: libre y editable; sin él, el id
+    assert_eq(teams.validate({"id": "x", "members": [{"agent": "a"}]}, "f")["team"]["name"], "x")
+    assert_eq(teams.validate({"id": "x", "name": "  Mantenimiento web ", "members": [{"agent": "a"}]}, "f")["team"]["name"], "Mantenimiento web")
     assert(not teams.validate({"id": "X Y", "members": [{"agent": "a"}]}, "f")["ok"])
     assert(not teams.validate({"id": "x", "members": []}, "f")["ok"])
     assert(contains(teams.validate({"id": "x", "members": [{"agent": "a", "reports_to": "nadie"}]}, "f")["error"], "not in the team"))
@@ -1707,6 +1710,11 @@ test "equipos: el grafo es una regla — a quién le puede escribir cada uno"
     assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "nadie", "message": "x"}), "not in team"))
     assert(contains(teams.send_with({"recipient": "ttcto", "message": "x"}), "who is sending"), "sin _agent no hay send")
     assert(contains(teams.send_with({"_agent": "rt-ajeno", "recipient": "ttcto", "message": "x"}), "not in any team"))
+    -- los del mismo nivel se hablan solo si el par está en "talks" (no se da por hecho)
+    let flat be {"members": [{"agent": "a", "reports_to": ""}, {"agent": "b", "reports_to": "a"}, {"agent": "c", "reports_to": "a"}, {"agent": "d", "reports_to": "b"}], "talks": []}
+    assert_eq(sort(teams.peers(flat, "b")), ["a", "d"])
+    set flat["talks"] to [["b", "c"]]
+    assert_eq(sort(teams.peers(flat, "b")), ["a", "c", "d"])
     rm_file(runtime.PROJECT_DIR + "/ttcmo.agent.json")
     assert(contains(teams.send_with({"_agent": "ttceo", "recipient": "ttcmo", "message": "x"}), "has no agent file"), "un mensaje que nadie leería se rechaza en el momento")
     write_file(runtime.PROJECT_DIR + "/ttcmo.agent.json", json_encode({"id": "ttcmo", "system": "Eres ttcmo.", "tools": ["read"], "permission": "strict"}))
@@ -1721,6 +1729,9 @@ test "equipos: un miembro tiene send y board, su rol en el prompt, y opts sabe q
     let ctx be runtime.boot("ttdev", {}, nothing)
     assert(contains(ctx["system"]["content"], "# Team t-test — equipo de prueba\nYou are ttdev, role: Dev. You report to ttcto."), ctx["system"]["content"])
     assert(contains(ctx["system"]["content"], "You can message: ttcto"))
+    -- la cadena de mando: el dev le pregunta a su jefe, nunca a la persona; el líder es el único que le pregunta
+    assert(contains(ctx["system"]["content"], "Chain of command: when you are stuck, unsure what to do, or need a decision, ask ttcto with `send` — never the person."))
+    assert(contains(runtime.boot("ttceo", {}, nothing)["system"]["content"], "You lead the team."))
     assert_eq(ctx["opts"]["agent_id"], "ttdev")
     write_file(runtime.PROJECT_DIR + "/rt-solo.agent.json", json_encode({"id": "rt-solo", "system": "solo", "tools": ["read"]}))
     assert(not contains(keys(runtime.registry_of(runtime.get("rt-solo"))), "send"), "fuera de un equipo, sin send")

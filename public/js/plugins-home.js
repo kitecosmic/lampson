@@ -16,13 +16,11 @@ const PITCH = {
   telegram: 'Un bot de Telegram atendido por un agente. Gratis y sin intermediarios: creás el bot con @BotFather y le pasás el token.',
   chatwoot: 'Tu bandeja de Chatwoot —WhatsApp, Instagram, Facebook, email, chat web— respondida por un agente.',
   orders: 'Tomar pedidos por chat: catálogo, presupuestos con promos y envío, pedidos con cliente y dirección, y stock al día.',
-  'example-hello': 'Un plugin de ejemplo para copiar y hacer el tuyo: un programa Synsema con techo de permisos.',
 };
-const isExample = (p) => p.name.startsWith('example');
 
 function card(p, where) {
   const on = data.workspaces.filter((w) => w.enabled.includes(p.name) && (p.scope === 'global' || w.slug === where.slug));
-  const tags = [p.channel ? 'canal' : '', p.tools.length ? `${p.tools.length} herramienta${p.tools.length === 1 ? '' : 's'}` : '', p.config.length ? 'necesita configurar' : '', p.scope === 'project' ? 'solo en ' + where.name : '', isExample(p) ? 'ejemplo' : ''].filter(Boolean);
+  const tags = [p.channel ? 'canal' : '', p.tools.length ? `${p.tools.length} herramienta${p.tools.length === 1 ? '' : 's'}` : '', p.config.length ? 'necesita configurar' : '', p.scope === 'project' ? 'solo en ' + where.name : ''].filter(Boolean);
   const key = p.scope + ':' + p.name + ':' + (where.slug || '');
   const targets = p.scope === 'global' ? data.workspaces : data.workspaces.filter((w) => w.slug === where.slug);
   return `<div class="pcard${on.length ? ' used' : ''}">
@@ -39,8 +37,8 @@ function card(p, where) {
 
 function render() {
   if (!data) return;
-  const global = data.global.slice().sort((a, b) => isExample(a) - isExample(b) || a.name.localeCompare(b.name));
-  const local = data.workspaces.flatMap((w) => w.local.map((p) => ({ p, w })));
+  const global = data.global.filter((p) => !p.example).sort((a, b) => a.name.localeCompare(b.name));
+  const local = data.workspaces.flatMap((w) => w.local.filter((p) => !p.example).map((p) => ({ p, w })));
   $('#grid').innerHTML = (global.length || local.length)
     ? global.map((p) => card(p, {})).join('') + local.map(({ p, w }) => card(p, w)).join('')
     : '<div class="vempty"><p><b>No hay plugins instalados.</b></p><p>Los que vienen con lampson viven en la carpeta <code>plugins/</code> de la instalación.</p></div>';

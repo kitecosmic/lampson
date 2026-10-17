@@ -230,7 +230,7 @@ export task teams_view()
             set members to append(members, {"agent": m["agent"], "role": m["role"], "reports_to": m["reports_to"], "description": when spec == nothing then "" otherwise spec["description"], "system": when spec == nothing then "" otherwise spec["system"], "tools": when spec == nothing then [] otherwise spec["tools"], "permission": when spec == nothing then "" otherwise spec["permission"], "missing": spec == nothing, "working": mailbox.working(m["agent"], scope), "spent_today": teams.spent_today(m["agent"]), "peers": teams.peers(t, m["agent"])})
         let ts be apply(teams.tasks(scope), (x) => {"id": x["id"], "title": x["title"], "status": x["status"], "owner": x["owner"], "notes": x["notes"], "depends": json_decode(x["depends"])})
         let lg be apply(teams.ledger(scope, 0, 150), (r) => {"id": r["id"], "at": r["at"], "actor": r["actor"], "kind": r["kind"], "ref": r["ref"], "text": r["text"]})
-        set out to append(out, {"id": t["id"], "description": t["description"], "members": members, "talks": t["talks"], "round_minutes": t["round_minutes"], "budget_daily_tokens": t["budget_daily_tokens"], "worktrees": t["worktrees"], "lead": teams.lead_of(t), "tasks": ts, "ledger": lg})
+        set out to append(out, {"id": t["id"], "name": t["name"], "description": t["description"], "members": members, "talks": t["talks"], "round_minutes": t["round_minutes"], "budget_daily_tokens": t["budget_daily_tokens"], "worktrees": t["worktrees"], "lead": teams.lead_of(t), "tasks": ts, "ledger": lg})
     give {"teams": out, "errors": sc["errors"]}
 
 
@@ -286,7 +286,7 @@ export task save_team(body)
             give {"ok": false, "error": "agent '" + m["agent"] + "' has no file yet — give it a personality to create it"}
     each f in files
         write_file(f["path"], json_encode(f["doc"]))
-    let raw be {"id": team["id"], "description": team["description"], "members": apply(team["members"], (m) => {"agent": m["agent"], "role": m["role"], "reports_to": m["reports_to"]}), "talks": team["talks"], "round_minutes": team["round_minutes"], "budget_daily_tokens": team["budget_daily_tokens"], "worktrees": team["worktrees"]}
+    let raw be {"id": team["id"], "name": team["name"], "description": team["description"], "members": apply(team["members"], (m) => {"agent": m["agent"], "role": m["role"], "reports_to": m["reports_to"]}), "talks": team["talks"], "round_minutes": team["round_minutes"], "budget_daily_tokens": team["budget_daily_tokens"], "worktrees": team["worktrees"]}
     write_file(teams.DIR + "/" + team["id"] + ".team.json", json_encode(raw))
     teams.log("team:" + team["id"], "person", "team saved", "", join(apply(team["members"], (m) => m["agent"] + " (" + m["role"] + ")"), ", "))
     give {"ok": true, "error": ""}

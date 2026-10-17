@@ -67,7 +67,6 @@ function empty() {
   const name = (cfg.workspace || '').split(/[\\/]/).filter(Boolean).pop() || 'workspace';
   log.classList.add('hero');
   log.innerHTML = `<div class="empty">
-    <p class="eyebrow">workspace</p>
     <h1>${esc(name)}</h1>
     <p class="lead">Un agente con herramientas acotadas a este proyecto. Vos pedís; él lee, busca, edita y corre comandos — y cada paso queda a la vista.</p>
     <div class="grid">

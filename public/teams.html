@@ -15,14 +15,13 @@
 </head>
 <body>
 <header class="tbar">
-  <a class="back" id="back" href="#" title="volver al agente de programación">←</a>
-  <span class="brand">lampson<span class="proj" id="proj"></span></span>
+  <nav class="crumbs" aria-label="dónde estás"><a href="/">Proyectos</a><span class="sep">›</span><a id="crProj" href="#" title="volver al proyecto"></a><span class="sep">›</span><span class="here">Equipos y objetivos</span></nav>
   <nav class="tabs" id="tabs">
     <button data-tab="objectives" class="on">Objetivos</button>
     <button data-tab="teams">Equipos</button>
   </nav>
   <span class="spacer"></span>
-  <a class="alllink" href="/equipos" title="equipos y objetivos de todos tus proyectos">todos los proyectos</a>
+  <a class="alllink" href="/equipos" title="equipos y objetivos de todos tus proyectos">todos los equipos</a>
   <span class="live" id="live" title="actualizado en vivo">en vivo</span>
   <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
 </header>
@@ -54,23 +53,21 @@
   </aside>
 </main>
 
-<main class="view" id="v-teams" hidden>
-  <aside class="col list">
-    <div class="colhead"><span>Equipos</span></div>
-    <ul class="items" id="teamList"></ul>
-    <div class="hint" id="teamHint"></div>
-  </aside>
-  <section class="col detail">
-    <div class="graphwrap"><svg id="graph" role="img" aria-label="el equipo: quién reporta a quién"></svg></div>
-    <div class="teaminfo" id="teamInfo"></div>
-    <div class="board" id="teamBoard"></div>
-  </section>
-  <aside class="col timeline">
-    <div class="colhead"><span>Registro</span></div>
-    <ol class="log" id="teamLog"></ol>
-  </aside>
+<!-- equipos: las tarjetas de los equipos del proyecto (y «+ nuevo equipo»); el lienzo, al crear o editar uno -->
+<main class="view teamsview" id="v-teams" hidden>
+  <section class="tlist" id="tlist"></section>
+  <div class="tedit" id="tedit" hidden>
+    <div class="tsub editing" id="tsub"></div>
+    <div class="canvas" id="canvas">
+      <div id="graph" role="application" aria-label="el equipo: quién le reporta a quién"></div>
+      <div class="ov ov-add" id="ovAdd"></div>
+      <aside class="ov ov-insp" id="inspector" hidden></aside>
+    </div>
+  </div>
+  <div class="ov ov-wizard" id="wizard" hidden></div>
 </main>
 
+<script src="/js/flow.js"></script>
 <script src="/js/teams.js"></script>
 </body>
 </html>

@@ -3,7 +3,8 @@
 -- Vocabulario (spec/engine.md, fase 6): agente · equipo · rol · tablero con tareas · ronda · mensaje · objetivo.
 --
 -- Un EQUIPO es un archivo del proyecto, workspace/.lampson/teams/<id>.team.json:
---   {"id": "empresa", "description": "…",
+--   {"id": "empresa", "name": "La empresa", "description": "…",   (name: el nombre visible, editable; sin él, el id. El id
+--                                         es la clave — archivo, objetivos, conversación team:<id>, ramas — y no cambia)
 --    "members": [{"agent": "ceo", "role": "CEO"},
 --                {"agent": "cto", "role": "CTO", "reports_to": "ceo"},
 --                {"agent": "dev", "role": "Dev", "reports_to": "cto"}],
@@ -87,7 +88,8 @@ export task validate(raw, source)
         when type_of(pair) != "list" or length(pair) != 2 or not contains(names, lower(text(pair[0]))) or not contains(names, lower(text(pair[1])))
             give {"ok": false, "error": source + ": talks is a list of [agent, agent] pairs of team members"}
         set talks to append(talks, [lower(text(pair[0])), lower(text(pair[1]))])
-    give {"ok": true, "team": {"id": id, "description": text(field(raw, "description", "")), "members": members, "talks": talks, "round_minutes": number(field(raw, "round_minutes", 0)), "worktrees": field(raw, "worktrees", true) != false, "budget_daily_tokens": floor(number(field(raw, "budget_daily_tokens", 0))), "source": source}}
+    let nm be trim(text(field(raw, "name", "")))
+    give {"ok": true, "team": {"id": id, "name": when nm == "" then id otherwise slice(nm, 0, 60), "description": text(field(raw, "description", "")), "members": members, "talks": talks, "round_minutes": number(field(raw, "round_minutes", 0)), "worktrees": field(raw, "worktrees", true) != false, "budget_daily_tokens": floor(number(field(raw, "budget_daily_tokens", 0))), "source": source}}
 
 -- todos los equipos del proyecto: {teams, errors}
 export task scan()
@@ -131,7 +133,8 @@ export task member(team, agent)
     let f be where(team["members"], (m) => m["agent"] == agent)
     give when length(f) == 0 then nothing otherwise f[0]
 
--- a quién le puede escribir `agent` en el equipo: su jefe, los que le reportan y los pares de "talks"
+-- a quién le puede escribir `agent` en el equipo: su jefe, los que le reportan y los pares de "talks" (la pantalla los
+-- propone al unir dos asientos bajo el mismo jefe, pero se hablan solo si el par está: lo decide quien arma el equipo)
 export task peers(team, agent)
     let me be member(team, agent)
     when me == nothing
@@ -183,7 +186,12 @@ export task instructions(agent)
         each m in t["members"]
             set lines to append(lines, "- " + m["agent"] + ": " + m["role"] + (when m["reports_to"] != "" then " (reports to " + m["reports_to"] + ")" otherwise ""))
         let ps be peers(t, agent)
-        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note), add the tasks you break work into. Never work on a task someone else owns. Each turn starts with what changed in the team since your last turn. Your final reply in a turn is not seen by anyone: to tell someone something, `send` it; to record progress, update the board." + (when t["worktrees"] then "\nGit: if the project uses git, you work in your OWN working copy (it is your root for files and bash), on branch team/" + t["id"] + "/" + agent + ", and your commits carry your name. Commit your work there and say which branch when you hand it over. The main checkout is ../../.. — merging into it (e.g. `git -C ../../.. merge team/" + t["id"] + "/<agent>`) or pushing touches the shared history: Lampson asks the person to approve it first. Don't edit files of other agents' copies." otherwise "")
+        let lead be lead_of(t)
+        -- la cadena de mando: cada uno le pregunta a su jefe; solo el líder le pregunta a la persona (y solo lo que el
+        -- equipo no puede resolver). Lo mismo con lo que necesita aprobación: lib/loop.syn no deja que un asiento que
+        -- no es el líder abra una aprobación a la persona (opts.escalate_to, lib/runtime.syn)
+        let chain be when agent == lead then "\nYou lead the team. The others bring their questions and anything that needs approval to their boss, and it comes up to you only if their boss can't solve it. Solve what you can: decide, unblock, re-plan. Ask the person (`objective` ask or request_approval) only what truly only they can decide or approve — they shouldn't hear about anything the team can handle." otherwise "\nChain of command: when you are stuck, unsure what to do, or need a decision, ask " + me["reports_to"] + " with `send` — never the person. Anything that needs approval (a merge, a push, a risky command) also goes to " + me["reports_to"] + ": you can't ask the person, only the lead does, and only if it is really needed. When someone who reports to you asks you something, answer it if you can; if you can't, ask your own boss."
+        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note), add the tasks you break work into. Never work on a task someone else owns. Each turn starts with what changed in the team since your last turn. Your final reply in a turn is not seen by anyone: to tell someone something, `send` it; to record progress, update the board." + chain + (when t["worktrees"] then "\nGit: if the project uses git, you work in your OWN working copy (it is your root for files and bash), on branch team/" + t["id"] + "/" + agent + ", and your commits carry your name. Commit your work there and say which branch when you hand it over. The main checkout is ../../.. — merging into it (e.g. `git -C ../../.. merge team/" + t["id"] + "/<agent>`) or pushing touches the shared history: " + (when agent == lead then "Lampson asks the person to approve it first." otherwise "only the lead does it (Lampson asks the person to approve it) — hand your branch over to " + me["reports_to"] + ".") + " Don't edit files of other agents' copies." otherwise "")
     give out
 
 -- ---------- registro ----------

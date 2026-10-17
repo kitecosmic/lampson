@@ -387,7 +387,7 @@ planifica, trabaja en su rama en rondas y pide aprobación para mergear); despu�
 repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anuncio).
 
 #### 6a — Motor común
-- [x] Tool `send(recipient, message)` entre agentes → base → `lib/teamrun.syn` (tick cada 3 s) → buzón del destinatario, thread `team:<id>`; el grafo del equipo decide quién le escribe a quién (jefe ↔ reporte + `talks`), lo demás se rechaza
+- [x] Tool `send(recipient, message)` entre agentes → base → `lib/teamrun.syn` (tick cada 3 s) → buzón del destinatario, thread `team:<id>`; el grafo del equipo decide quién le escribe a quién (jefe ↔ reporte + `talks`; la pantalla propone el par al unir dos asientos bajo el mismo jefe), lo demás se rechaza
 - [x] Tablero: tareas {id, título, dueño, estado, depende de, notas} en SQLite (`.lampson/teams.db`), tool `board`
       (list/add/claim/update/show/log); tomar es atómico; mueve el dueño, quien la creó o un jefe del dueño
 - [x] Registro (ledger) de todo; cada turno de equipo arranca con «desde tu último turno» + sus tareas + las sin dueño
@@ -398,6 +398,9 @@ repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anunci
 - [x] Presupuesto diario por agente dentro del equipo (`budget_daily_tokens`); al llegar no recibe turnos y queda una
       entrada en el registro por día
 - [x] Aprobaciones: las del buzón de siempre (cola de aprobación → UI / celular), con el permiso del archivo del agente
+- [x] Cadena de mando: cada asiento le pregunta a su jefe (`send`), nunca a la persona; el jefe resuelve o sube al suyo y solo
+      el líder pregunta o pide aprobación a la persona. El loop lo hace cumplir: lo que pediría aprobación en un asiento que
+      no es el líder no abre la cola, vuelve «pedíselo a tu jefe» (`opts.escalate_to`, lib/runtime.syn → lib/loop.syn)
 
 #### 6b — Objetivos
 - [x] Objetivo = {id, texto, agente, estado, informe, pregunta, resultado, turnos, gasto, presupuesto} en la tabla
@@ -423,7 +426,7 @@ repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anunci
 - [x] Ramas por agente: `lib/worktree.syn` crea `.lampson/worktrees/<agente>` en `team/<equipo>/<agente>` con su autor
       (config por worktree; `.lampson/` en `.git/info/exclude`); el loop traduce rutas y bash a esa copia; un merge,
       rebase, reset o push que sale de su copia pide aprobación SIEMPRE (cola de aprobaciones, 30 min, con el nombre
-      del agente). Los merges a main quedan con el autor de la copia principal (la persona que aprobó)
+      del agente) — la pide el líder; un asiento que no lo es le pasa su rama a su jefe (cadena de mando). Los merges a main quedan con el autor de la copia principal (la persona que aprobó)
 - [x] Pestaña **Equipos**: grafo en vivo + editor (crear equipo, agregar/quitar agentes, rol, a quién reporta, con
       quién más habla, personalidad, herramientas, permiso; guarda el equipo y los archivos de agentes). Objetivos
       para un equipo desde el mismo formulario. Las aprobaciones de la cola también en la franja

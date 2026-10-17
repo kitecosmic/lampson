@@ -3,7 +3,7 @@
 let pluginsData = [], pluginsMeta = { global: 'plugins/', project: '.lampson/plugins/' };
 async function fetchPlugins() {
   let r; try { r = await (await fetch(BASE + '/api/plugins')).json(); } catch (e) { return pluginsData; }
-  pluginsData = r.plugins || []; pluginsMeta = { global: r.global || 'plugins/', project: r.project || '.lampson/plugins/' };
+  pluginsData = (r.plugins || []).filter(l => !l.example || l.enabled); pluginsMeta = { global: r.global || 'plugins/', project: r.project || '.lampson/plugins/' };
   const on = pluginsData.filter(l => l.enabled).length;
   const pill = $('#plugins'); pill.textContent = pluginsData.length ? `plugins ${on}/${pluginsData.length}` : 'plugins'; pill.classList.toggle('on', on > 0);
   pill.title = pluginsData.length ? `${on} de ${pluginsData.length} plugins instalados encendidos en este proyecto · clic para ver qué hace cada uno y encender los que quieras` : 'plugins: tools propias que vos encendés · clic para ver y activar';
@@ -15,7 +15,7 @@ async function fetchPlugins() {
 // sigue siendo decisión de la persona: la pista solo abre el panel.
 function paintPlugHint() {
   const el = $('#plugHint'); if (!el) return;
-  const off = pluginsData.filter(l => !l.enabled && !l.error && !l.name.startsWith('example'));
+  const off = pluginsData.filter(l => !l.enabled && !l.error);
   el.hidden = !off.length; if (!off.length) return;
   const names = off.slice(0, 3).map(l => `<b>${esc(l.name)}</b>`).join(', ') + (off.length > 3 ? ` y ${off.length - 3} más` : '');
   el.innerHTML = `⧉ ${off.length === 1 ? 'Hay un plugin instalado que este proyecto no tiene encendido' : `Hay ${off.length} plugins instalados que este proyecto no tiene encendidos`}: ${names}. <span class="try">ver qué hacen →</span>`;

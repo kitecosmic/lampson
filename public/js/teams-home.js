@@ -49,21 +49,45 @@ function renderAttention() {
   box.querySelectorAll('[data-qno]').forEach((b) => (b.onclick = () => q(b.dataset.qno, false)));
 }
 
-// ---------- cada proyecto: sus equipos y sus objetivos ----------
+// ---------- una tarjeta por equipo: quiénes son, qué están haciendo ahora y qué podés hacer vos ----------
+// Revelación progresiva: el objetivo en curso en una oración (el texto completo está en la pantalla del equipo), los
+// terminados plegados. Lo que espera una respuesta ya está arriba, en «lo que te espera».
+const OPEN = ['waiting', 'active', 'paused'];
+const doneOpen = new Set();
+function firstSentence(t) {
+  const s = String(t || '').replace(/\s+/g, ' ').trim(), m = s.match(/^(.{20,}?[.:;!?])(\s|$)/);
+  const out = m ? m[1] : s;
+  return out.length > 150 ? out.slice(0, 147).replace(/\s+\S*$/, '') + '…' : out;
+}
+function objLine(w, o) {
+  return `<a class="oline" href="/w/${esc(w.slug)}/equipos?o=${o.id}"><span class="st ${o.status}">${STATUS[o.status] || o.status}</span><span class="otext">${esc(firstSentence(o.text))}</span></a>`;
+}
+function teamCard(w, t) {
+  const mine = w.objectives.filter((o) => o.team === t.id);
+  const now = mine.filter((o) => OPEN.includes(o.status)).sort((a, b) => OPEN.indexOf(a.status) - OPEN.indexOf(b.status)), done = mine.filter((o) => !OPEN.includes(o.status));
+  const roles = t.roles && t.roles.length ? t.roles : null, key = w.slug + ':' + t.id;
+  return `<article class="tcard">
+    <div class="thead"><h2>${esc(t.name || t.id)}</h2><a class="tproj" href="/w/${esc(w.slug)}/equipos" title="${esc(w.path)}"><span class="dot${w.alive ? ' on' : ''}"></span>${esc(w.name || short(w.slug))}</a></div>
+    ${t.description ? `<p class="tdesc">${esc(t.description)}</p>` : ''}
+    <div class="roles">${roles ? roles.map((r, i) => `<span class="role${i === 0 ? ' lead' : ''}"${i === 0 ? ' title="lo lidera"' : ''}>${esc(r)}</span>`).join('') : `<span class="role">${t.members} agente${t.members === 1 ? '' : 's'}</span><span class="role lead">lo lidera ${esc(t.lead)}</span>`}</div>
+    <div class="tnow">${now.length ? now.map((o) => objLine(w, o) + (o.progress && o.status === 'active' ? `<p class="oprog">${esc(firstSentence(o.progress))}</p>` : '')).join('') : '<p class="tidle">Nada en curso. Dale un objetivo y el equipo se reparte el trabajo.</p>'}</div>
+    <div class="tacts"><a class="btn${now.length ? '' : ' primary'}" href="/w/${esc(w.slug)}/equipos?tab=objectives&objetivo=${encodeURIComponent(t.id)}">Darle un objetivo</a><a class="lnk" href="/w/${esc(w.slug)}/equipos?tab=teams">Ver el equipo</a></div>
+    ${done.length ? `<details class="tdone" data-key="${esc(key)}"${doneOpen.has(key) ? ' open' : ''}><summary>${done.length} objetivo${done.length === 1 ? '' : 's'} terminado${done.length === 1 ? '' : 's'}</summary>${done.map((o) => objLine(w, o)).join('')}</details>` : ''}
+  </article>`;
+}
 function renderProjects() {
-  const withStuff = data.filter((w) => w.teams.length || w.objectives.length);
-  const rest = data.filter((w) => !w.teams.length && !w.objectives.length);
-  $('#projects').innerHTML = (withStuff.length ? withStuff.map((w) => `
-    <section class="pblock">
-      <div class="projhead"><a href="/w/${esc(w.slug)}/equipos" class="pname">${esc(short(w.slug))}</a><span class="ppath">${esc(w.path)}</span>
-        <span class="spacer"></span>${w.alive ? '<span class="dot on"></span>' : '<span class="dot"></span>'}<a class="open" href="/w/${esc(w.slug)}/equipos">abrir →</a></div>
-      <div class="pcols">
-        <div><h6>Equipos</h6>${w.teams.length ? w.teams.map((t) => `<a class="trow" href="/w/${esc(w.slug)}/equipos?tab=teams"><b>${esc(t.id)}</b> · ${t.members} agentes · lo lidera ${esc(t.lead)}${t.description ? `<span>${esc(t.description)}</span>` : ''}</a>`).join('') : '<p class="none">sin equipos</p>'}</div>
-        <div><h6>Objetivos</h6>${w.objectives.length ? w.objectives.map((o) => `<a class="orow" href="/w/${esc(w.slug)}/equipos?o=${o.id}"><span class="st ${o.status}">${STATUS[o.status] || o.status}</span> <b>${esc(o.ref)}</b> ${o.team ? 'equipo ' + esc(o.team) : esc(o.agent)} — ${esc(o.text)}${o.progress && o.status === 'active' ? `<span>${esc(o.progress)}</span>` : ''}</a>`).join('') : '<p class="none">sin objetivos</p>'}</div>
-      </div>
-    </section>`).join('') : `<div class="empty">Todavía no hay equipos ni objetivos. Tocá <b>+ equipo</b> para armar el primero, o abrí un proyecto y dale un objetivo a uno de sus agentes.</div>`) +
-    (rest.length ? `<p class="others">Otros proyectos: ${rest.map((w) => `<a href="/w/${esc(w.slug)}/equipos">${esc(short(w.slug))}</a>`).join(' · ')}</p>` : '');
-  $('#nWs').innerHTML = data.map((w) => `<option value="${esc(w.slug)}">${esc(short(w.slug))} — ${esc(w.path)}</option>`).join('');
+  const cards = data.flatMap((w) => w.teams.map((t) => teamCard(w, t)));
+  // objetivos de un agente solo (sin equipo) que siguen abiertos
+  const solo = data.flatMap((w) => w.objectives.filter((o) => !o.team && OPEN.includes(o.status)).map((o) => ({ w, o })));
+  $('#projects').innerHTML = (cards.length ? `<div class="tgrid">${cards.join('')}</div>`
+      : `<div class="tinvite"><h2>Armá tu primer equipo</h2><p>Un equipo son agentes con roles —por ejemplo un CEO, un CTO y un desarrollador— que trabajan solos hacia un objetivo, se coordinan entre ellos y te consultan antes de lo irreversible.</p><button class="primary" data-new>+ equipo</button></div>`) +
+    (solo.length ? `<h3 class="solohead">Agentes con un objetivo</h3><div class="solo">${solo.map(({ w, o }) => `<div class="srow"><span class="swho">${esc(o.agent)} <span>en ${esc(w.name || short(w.slug))}</span></span>${objLine(w, o)}</div>`).join('')}</div>` : '');
+  document.querySelectorAll('.tdone').forEach((d) => (d.ontoggle = () => { if (d.open) doneOpen.add(d.dataset.key); else doneOpen.delete(d.dataset.key); }));
+  const nb = document.querySelector('[data-new]'); if (nb) nb.onclick = () => $('#newTeam').onclick();
+  // el selector del formulario se rehace cada 4 s: sin esto perdía lo que la persona había elegido
+  const ws = $('#nWs'), cur = ws.value;
+  ws.innerHTML = data.map((w) => `<option value="${esc(w.slug)}">${esc(w.name || short(w.slug))} — ${esc(w.path)}</option>`).join('');
+  if (cur) ws.value = cur;
 }
 
 // ---------- + equipo ----------

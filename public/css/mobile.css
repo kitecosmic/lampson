@@ -26,7 +26,7 @@
   aside.right h2, aside:not(.right) > .sec:first-of-type h2 { padding-right:16px; }
   aside .sec .body { padding:0 12px 12px 16px; font-size:15px; }
   aside .sec .body > * { min-height:34px; }
-  .mnew { flex:none; margin:12px 14px 4px; padding:12px; font:600 11.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; color:var(--accent); background:var(--accent-bg); border:1px solid var(--accent); border-radius:var(--r); cursor:pointer; }
+  .mnew { flex:none; margin:12px 14px 4px; padding:12px; font:600 12px/1 var(--mono); color:var(--accent); background:var(--accent-bg); border:1px solid var(--accent); border-radius:var(--r); cursor:pointer; }
 
   /* chat: todo el ancho, nada más ancho que la pantalla */
   #log { padding:14px 16px 18px; max-width:none; }
@@ -74,7 +74,7 @@
   .msheet .mgit { color:var(--ink-2); margin-bottom:2px; }
   .msheet button { text-align:left; padding:14px 8px; background:none; border:0; border-radius:var(--r); color:var(--ink); font:400 16px/1 var(--serif); text-transform:none; letter-spacing:0; cursor:pointer; }
   .msheet button:active { background:var(--paper-2); }
-  .msheet .mcancel { text-align:center; color:var(--ink-3); font:400 12px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; margin-top:4px; border-top:1px solid var(--rule); border-radius:0; }
+  .msheet .mcancel { text-align:center; color:var(--ink-3); font:400 12px/1 var(--mono); margin-top:4px; border-top:1px solid var(--rule); border-radius:0; }
 
   /* modales (configuración, sesiones, plugins…): pantalla completa; en «browse» la lista arriba y el detalle abajo */
   .modal { align-items:stretch; justify-content:stretch; }

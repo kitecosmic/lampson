@@ -1,4 +1,4 @@
-/* tokens: fuentes, paleta (dark/light), base y botones — lo que todo lo demás asume */
+/* tokens: fuentes, paleta (dark/light), superficies, radios, base y botones — lo que todo lo demás asume */
 /* Misma dirección que synsema.dev: tinta sobre papel, una superfamilia (IBM Plex) en dos
    voces — la SERIF para lo que se lee (mensajes, hero), la MONO para estructura y maquinaria
    (header, sidebar, pasos, código, controles). El color se raciona: azul = link / dónde estás,
@@ -15,20 +15,23 @@
 @font-face{font-family:"Plex Mono";font-style:normal;font-weight:600;font-display:swap;src:url(/fonts/plex-mono-600-latin-ext.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
 
 :root, :root[data-theme=dark] {
-  --paper:#131412; --paper-2:#1b1c19; --paper-3:#212320;
-  --ink:#e9e8df; --ink-2:#9b9c90; --ink-3:#848678;
-  --rule:#2b2c27; --rule-2:#3c3d36;
+  --paper:#131412; --paper-2:#1d1e1b; --paper-3:#262723;
+  --surface:#1a1b18; --surface-2:#21221f;
+  --ink:#e9e8df; --ink-2:#a8a99d; --ink-3:#8e9083;
+  --rule:#30312b; --rule-2:#4a4b43;
   --accent:#8fb4dc; --accent-bg:#1b2836;
   --rubric:#d98670; --str:#a8bd84; --amber:#d9b26f; --ok:#8fc28f;
   --sel:#33465b; --term-blue:#4f86d1;
   --serif:"Plex Serif",Georgia,"Times New Roman",serif;
   --mono:"Plex Mono",ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
-  --r:3px; --side:280px;
+  /* radios por jerarquía: chico (chips, items de lista), control (botones, campos), tarjeta y panel, pastilla */
+  --r-sm:6px; --r:8px; --r-lg:12px; --r-pill:999px; --side:280px;
 }
 :root[data-theme=light] {
-  --paper:#fcfcfa; --paper-2:#f4f3ee; --paper-3:#ecebe3;
-  --ink:#1a1b18; --ink-2:#56584f; --ink-3:#6a6c61;
-  --rule:#e4e3da; --rule-2:#cfcec2;
+  --paper:#f6f5f0; --paper-2:#ecebe4; --paper-3:#e3e2da;
+  --surface:#ffffff; --surface-2:#faf9f5;
+  --ink:#1a1b18; --ink-2:#4e5049; --ink-3:#63655b;
+  --rule:#dfddd3; --rule-2:#c4c2b5;
   --accent:#21578c; --accent-bg:#e9eef4;
   --rubric:#99372a; --str:#4a6b3f; --amber:#8a6a1f; --ok:#3d7a3d;
   --sel:#cfe0f0; --term-blue:#21578c;
@@ -38,13 +41,13 @@
 html, body { height:100%; }
 body { margin:0; background:var(--paper); color:var(--ink); font:400 14.5px/1.6 var(--serif); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
 ::selection { background:var(--sel); }
-:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:1px; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 button, select, textarea { font-family:inherit; }
 .spacer { flex:1; }
 
-/* botones: el primario es tinta sobre papel, el secundario solo borde */
-button { font:600 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; color:var(--ink-2); background:none; border:1px solid var(--rule-2); border-radius:2px; padding:7px 12px; cursor:pointer; }
-button:hover { color:var(--ink); border-color:var(--ink-3); }
+/* botones: el primario es tinta sobre papel, el secundario solo borde. En minúscula: se leen como lo que hacen */
+button { font:600 12.5px/1 var(--mono); color:var(--ink-2); background:none; border:1px solid var(--rule-2); border-radius:var(--r); padding:8px 14px; cursor:pointer; transition:border-color .12s, background-color .12s, color .12s; }
+button:hover { color:var(--ink); border-color:var(--ink-3); background:var(--paper-2); }
 button.primary { color:var(--paper); background:var(--ink); border-color:var(--ink); }
 button.primary:hover { opacity:.85; color:var(--paper); }
 button:disabled { opacity:.45; cursor:default; }
@@ -59,14 +62,14 @@ button:disabled { opacity:.45; cursor:default; }
 /* pestañas del hub: Proyectos · Equipos son las dos mitades del producto (public/hub.html y public/teams-home.html) */
 .navtabs { display:flex; align-items:center; gap:2px; margin-left:6px; min-width:0; overflow-x:auto; scrollbar-width:none; }
 .navtabs::-webkit-scrollbar { display:none; }
-.navtabs a { font:400 12px/1 var(--mono); color:var(--ink-3); text-decoration:none; padding:7px 10px; border-radius:2px; display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.navtabs a { font:400 13px/1 var(--mono); color:var(--ink-2); text-decoration:none; padding:8px 12px; border-radius:var(--r-pill); display:flex; align-items:center; gap:6px; white-space:nowrap; }
 .navtabs a:hover { color:var(--ink); background:var(--paper-2); }
 .navtabs a.on { color:var(--ink); background:var(--paper-3); }
-.navtabs .badge { font:600 10px/1 var(--mono); color:var(--paper); background:var(--rubric); border-radius:8px; padding:2px 6px; }
+.navtabs .badge { font:600 10.5px/1 var(--mono); color:var(--paper); background:var(--rubric); border-radius:var(--r-pill); padding:3px 7px; }
 /* en un celular las pestañas son la navegación: la marca y las etiquetas secundarias ceden el lugar */
 @media (max-width: 520px) {
   .navtabs { margin-left:0; }
-  .navtabs a { padding:7px 7px; }
+  .navtabs a { padding:7px 9px; }
   header .brand, .tbar .brand { display:none; }
-  .tbar .live { font-size:0; letter-spacing:0; }
+  .tbar .live { display:none; }
 }

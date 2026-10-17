@@ -64,11 +64,11 @@ function render() {
         <span class="spacer"></span><span class="dot${w.alive ? ' on' : ''}" title="${w.alive ? 'activo' : 'apagado'}"></span><a class="open" href="/w/${esc(w.slug)}#tareas=nueva">+ tarea</a><a class="open" href="/w/${esc(w.slug)}#tareas">abrir →</a></div>
       ${w.tasks.slice().sort((a, b) => order(a) - order(b) || (a.next_run || 9e12) - (b.next_run || 9e12)).map((t) => `
       <div class="taskrow${t.enabled ? '' : ' off'}">
-        <label class="sw" title="${t.enabled ? 'apagar' : 'encender'}"><input type="checkbox" data-toggle="${esc(w.slug)}|${esc(t.id)}" ${t.enabled ? 'checked' : ''}></label>
+        <label class="sw" title="${t.enabled ? 'apagarla' : 'encenderla'}"><input type="checkbox" role="switch" data-toggle="${esc(w.slug)}|${esc(t.id)}" ${t.enabled ? 'checked' : ''}><span class="swt" aria-hidden="true"></span><span class="swl">${t.enabled ? 'encendida' : 'apagada'}</span></label>
         <a class="tmain" href="/w/${esc(w.slug)}#tareas=${encodeURIComponent(t.id)}"><b>${esc(t.name)}</b><span class="tplan">${esc(describePlan(t.plan, t.when))}</span><span class="tact">${esc(describeAction(t.action))}</span></a>
         <div class="tstate">
           ${t.running ? '<span class="st active">corriendo</span>' : failed(t) ? '<span class="st waiting">falló</span>' : t.last_status === 'ok' ? '<span class="st done">ok</span>' : ''}
-          <span class="twhen">${t.enabled && t.next_run ? 'próxima ' + esc(fmtTs(t.next_run)) : t.enabled ? '' : 'apagada'}${t.last_run ? `<br>última ${esc(fmtTs(t.last_run))}` : ''}</span>
+          <span class="twhen">${t.enabled && t.next_run ? 'próxima ' + esc(fmtTs(t.next_run)) : ''}${t.enabled && t.next_run && t.last_run ? '<br>' : ''}${t.last_run ? 'última ' + esc(fmtTs(t.last_run)) : ''}</span>
           ${failed(t) && t.last_summary ? `<span class="terr" title="${esc(t.last_summary)}">${esc(t.last_summary)}</span>` : ''}
         </div>
         <button data-run="${esc(w.slug)}|${esc(t.id)}" title="correrla ahora"${t.running ? ' disabled' : ''}>▶ correr</button>

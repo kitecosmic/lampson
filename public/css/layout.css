@@ -10,7 +10,7 @@ header { grid-area:top; border-bottom:1px solid var(--rule); background:var(--pa
 .hrow.sub { height:32px; border-top:1px solid var(--rule); gap:12px; }
 .brand { font:600 14px/1 var(--mono); color:var(--ink); letter-spacing:-.01em; white-space:nowrap; }
 .brand .proj { color:var(--ink-3); font-weight:400; margin-left:.6em; }
-.hbtn { display:flex; align-items:center; gap:6px; font:600 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.09em; color:var(--ink-2); background:none; border:1px solid var(--rule-2); border-radius:2px; padding:7px 12px; cursor:pointer; }
+.hbtn { display:flex; align-items:center; gap:6px; font:600 12px/1 var(--mono); color:var(--ink-2); background:none; border:1px solid var(--rule-2); border-radius:var(--r-sm); padding:7px 12px; cursor:pointer; }
 .hbtn:hover { color:var(--ink); border-color:var(--ink-3); }
 .hbtn.upd { color:var(--amber); border-color:var(--amber); }
 .hbtn.upd:hover { color:var(--ink); border-color:var(--ink); }
@@ -68,7 +68,7 @@ main { grid-area:main; display:grid; grid-template-rows:1fr auto; min-height:0; 
 #termpane .vh #tmeta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* pestañas: en cuál estás se ve de lejos (la activa lleva el acento del tema, clara y oscura) */
 .vh .ttabs { display:flex; align-items:center; gap:5px; }
-.vh .ttab { cursor:pointer; min-width:20px; text-align:center; padding:2px 7px; border-radius:2px; border:1px solid var(--rule-2); color:var(--ink-3); background:transparent; }
+.vh .ttab { cursor:pointer; min-width:20px; text-align:center; padding:2px 7px; border-radius:var(--r-sm); border:1px solid var(--rule-2); color:var(--ink-3); background:transparent; }
 .vh .ttab:hover { color:var(--ink); border-color:var(--ink-3); }
 .vh .ttab.on { color:var(--accent); border-color:var(--accent); background:var(--accent-bg); font-weight:600; }
 .vh .ttab.dead { text-decoration:line-through; opacity:.75; }
@@ -78,7 +78,7 @@ main { grid-area:main; display:grid; grid-template-rows:1fr auto; min-height:0; 
 .vh .hbtn.new:hover { background:var(--accent-bg); color:var(--accent); border-color:var(--accent); }
 .vh .hbtn.new:disabled { color:var(--ink-3); border-color:var(--rule-2); background:transparent; }
 /* minimizar · pantalla completa · cerrar, a la derecha como en cualquier ventana */
-.vh .wbtn { cursor:pointer; width:22px; height:20px; display:inline-flex; align-items:center; justify-content:center; border-radius:2px; color:var(--ink-3); font-size:12px; line-height:1; }
+.vh .wbtn { cursor:pointer; width:22px; height:20px; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--r-sm); color:var(--ink-3); font-size:12px; line-height:1; }
 .vh .wbtn:hover { color:var(--ink); background:var(--paper); }
 .vh .wbtn.cl:hover { color:var(--rubric); }
 /* El aire alrededor de cada terminal va como MARGEN, nunca como padding: el FitAddon mide el alto/ancho
@@ -96,7 +96,7 @@ main { grid-area:main; display:grid; grid-template-rows:1fr auto; min-height:0; 
 /* ---- composer ---- */
 form { padding:12px 40px 12px; border-top:1px solid var(--rule); background:var(--paper); box-sizing:border-box; width:100%; max-width:100%; min-width:0; }
 main > div { min-width:0; }
-.composer { background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:10px 10px 8px 14px; transition:border-color .12s, box-shadow .12s; }
+.composer { background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--r-lg); padding:10px 10px 8px 14px; transition:border-color .12s, box-shadow .12s; }
 .composer:focus-within { border-color:var(--rule-2); box-shadow:0 0 0 3px var(--accent-bg); }
 textarea { display:block; width:100%; resize:none; min-height:40px; max-height:220px; background:transparent; color:var(--ink); border:0; padding:2px 0; font:400 15px/1.55 var(--serif); }
 textarea::placeholder { color:var(--ink-3); }

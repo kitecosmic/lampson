@@ -592,18 +592,8 @@ write_file(ADIR + "/rt-team-b.agent.json", json_encode({"id": "rt-team-b", "syst
 write_file(teams.DIR + "/rt-team.team.json", json_encode({"id": "rt-team", "members": [{"agent": "rt-team-a", "role": "Líder"}, {"agent": "rt-team-b", "role": "Dev", "reports_to": "rt-team-a"}, {"agent": "rt-team-c", "role": "Otro"}]}))
 let ta be post("/messages", {"to": "rt-team-a", "thread": "api:equipo", "text": "avisa-equipo"}, kb)
 check(ta["status"] == 200 and contains(ta["json"]["text"], "sent to rt-team-b"), "A usó send: " + ta["raw"])
--- B pide aprobación para el push (desde su copia de git): la persona lo deniega desde la cola
-let denied_push be false
-let wq be 0
-while not denied_push and wq < 40
-    sleep(1)
-    set wq to wq + 1
-    let aq be json_decode(text(http_get("http://127.0.0.1:47990/w/test/api/approvals", {}, nothing, 10)["body"]))
-    each ap in aq["approvals"]
-        when ap["status"] == "pending" and contains(text(ap["message"]), "git push") and contains(text(ap["why"]), "agent rt-team-b")
-            http_post("http://127.0.0.1:47990/w/test/api/approve", json_encode({"id": ap["id"], "decision": false}), {"Content-Type": "application/json"}, 10)
-            set denied_push to true
-check(denied_push, "el push de B (historia compartida) esperó la aprobación de la persona, con su nombre (" + text(wq) + " s)")
+-- B quiere hacer push desde su copia de git: no es el líder, así que no le abre una aprobación a la persona (cadena
+-- de mando, lib/loop.syn): el push no corre y B tiene que pedírselo a su jefe
 let bdoc_t be nothing
 let waited be 0
 while bdoc_t == nothing and waited < 30
@@ -620,7 +610,9 @@ when bdoc_t != nothing
     check(starts_with(first_user, "[message from rt-team-a (Líder)]\nhola B, ¿tomás el login?") and contains(first_user, "[team rt-team] Since your last turn:"), "con el mensaje, quién lo manda y las novedades del equipo: " + slice(first_user, 0, 120))
     check(contains(text(bdoc_t["messages"][0]["content"]), "# Team rt-team") and contains(text(bdoc_t["messages"][0]["content"]), "You report to rt-team-a"), "su rol en el prompt")
     let fin be where(bdoc_t["messages"], (m) => m["role"] == "assistant" and contains(text(m["content"]), "final equipo-b"))[0]["content"]
-    check(contains(fin, "branch: team/rt-team/rt-team-b") and contains(fin, "push: DENIED by the user"), "bash corre en su copia (su rama) y el push denegado no pasó: " + fin)
+    check(contains(fin, "branch: team/rt-team/rt-team-b") and contains(fin, "push: NOT RUN: this needs approval"), "bash corre en su copia (su rama) y el push no corrió: sube a su jefe, no a la persona: " + fin)
+    let aq be json_decode(text(http_get("http://127.0.0.1:47990/w/test/api/approvals", {}, nothing, 10)["body"]))
+    check(length(where(aq["approvals"], (ap) => contains(text(ap["why"]), "agent rt-team-b"))) == 0, "y la cola de la persona no tiene ninguna aprobación de B")
     set created to append(created, runtime.thread_session("rt-team-b", "team:rt-team"))
 let lg be teams.ledger("team:rt-team", 0, 20)
 check(length(where(lg, (r) => r["kind"] == "message" and r["actor"] == "rt-team-a")) == 1 and length(where(lg, (r) => r["actor"] == "rt-team-c")) == 0, "en el registro el mensaje es de rt-team-a: el _agent que mandó el modelo no cuenta")

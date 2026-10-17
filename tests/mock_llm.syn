@@ -114,7 +114,7 @@ serve on 8765
         when starts_with(q, "[message from rt-team-a")
             when tools_seen == 0
                 give reply_tools([tool_call("board", {"action": "add", "title": "login de B", "owner": "rt-team-b"})])
-            -- en su copia de git (lib/worktree.syn): su rama; y un push, que espera aprobación de la persona
+            -- en su copia de git (lib/worktree.syn): su rama; y un push, que no es suyo: no es el líder (sube a su jefe)
             when tools_seen == 1
                 give reply_tools([tool_call("bash", {"command": "git rev-parse --abbrev-ref HEAD"})])
             when tools_seen == 2

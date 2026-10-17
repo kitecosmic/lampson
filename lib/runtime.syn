@@ -509,6 +509,11 @@ export task open(sobre, hooks)
         -- en un equipo con git, cada agente en su copia (lib/worktree.syn); "worktrees": false en el equipo lo apaga
         when starts_with(thread, "team:")
             let tm be teams.get(slice(thread, 5, length(thread)))
+            -- un asiento que no es el líder no le abre aprobaciones a la persona: van a su jefe (lib/loop.syn)
+            when tm != nothing
+                let mine be teams.member(tm, ctx["agent"])
+                when mine != nothing and ctx["agent"] != teams.lead_of(tm) and mine["reports_to"] != ""
+                    set copts["escalate_to"] to mine["reports_to"]
             when tm != nothing and tm["worktrees"]
                 let me be teams.member(tm, ctx["agent"])
                 let wt be worktree.ensure(tm["id"], ctx["agent"], {"name": (when me != nothing and me["role"] != ctx["agent"] then me["role"] + " · " + ctx["agent"] otherwise ctx["agent"]) + " (Lampson)", "email": ctx["agent"] + "@lampson.local"})

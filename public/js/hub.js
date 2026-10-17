@@ -89,8 +89,8 @@ function paintTiles(q) {
     const wait = teamsData.reduce((n, w) => n + w.objectives.filter(o => o.status === 'waiting').length + (w.approvals || []).length, 0);
     const solo = teamsData.reduce((n, w) => n + w.objectives.filter(o => !o.team && (o.status === 'active' || o.status === 'waiting')).length, 0);
     out.push(nT || solo
-      ? tile('◇', 'equipos', nT ? `${nT} equipo${nT === 1 ? '' : 's'}` : `${solo} agente${solo === 1 ? '' : 's'} con objetivo`, wait ? `<b class="warn">⚑ ${wait} te espera${wait === 1 ? '' : 'n'}</b>${act ? ' · ' + act + ' trabajando' : ''}` : act ? `${act} trabajando` : 'nada pendiente', '/equipos', 'ver equipos')
-      : tile('◇', 'equipos', 'Agentes que trabajan solos', 'Armá un equipo con roles, dale un objetivo y avanza mientras hacés otra cosa.', '/equipos?new=1', 'armar un equipo', 'invite'));
+      ? tile('◇', 'Equipos', nT ? `${nT} equipo${nT === 1 ? '' : 's'}` : `${solo} agente${solo === 1 ? '' : 's'} con objetivo`, wait ? `<b class="warn">⚑ ${wait} te espera${wait === 1 ? '' : 'n'}</b>${act ? ' · ' + act + ' trabajando' : ''}` : act ? `${act} trabajando` : 'nada pendiente', '/equipos', 'ver equipos')
+      : tile('◇', 'Equipos', 'Agentes que trabajan solos', 'Armá un equipo con roles, dale un objetivo y avanza mientras hacés otra cosa.', '/equipos?new=1', 'armar un equipo', 'invite'));
   }
   // tareas programadas
   if (tasksData) {
@@ -99,19 +99,19 @@ function paintTiles(q) {
     const next = on.filter(t => t.next_run).sort((a, b) => a.next_run - b.next_run)[0];
     const off = all.length - on.length, pl = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
     out.push(!all.length
-      ? tile('◷', 'tareas', 'El agente trabaja a su hora', '«Todos los días a las 9, corré los tests y avisame si algo se rompió.»', '/tareas', 'ver cómo', 'invite')
+      ? tile('◷', 'Tareas', 'El agente trabaja a su hora', '«Todos los días a las 9, corré los tests y avisame si algo se rompió.»', '/tareas', 'ver cómo', 'invite')
       : !on.length
-        ? tile('◷', 'tareas', `${pl(all.length, 'tarea')}, ${all.length === 1 ? 'apagada' : 'apagadas'}`, 'ninguna va a correr hasta que la enciendas', '/tareas', 'ver tareas')
-        : tile('◷', 'tareas', `${pl(on.length, 'programada')}${off ? ` <span class="dim">· ${pl(off, 'apagada')}</span>` : ''}`, failed.length ? `<b class="warn">✕ ${failed.length} falló en la última corrida</b>` : next ? `próxima: ${esc(fmtNext(next.next_run))} · ${esc(next.ws.name)}` : 'ninguna por correr', '/tareas', 'ver tareas'));
+        ? tile('◷', 'Tareas', `${pl(all.length, 'tarea')}, ${all.length === 1 ? 'apagada' : 'apagadas'}`, 'ninguna va a correr hasta que la enciendas', '/tareas', 'ver tareas')
+        : tile('◷', 'Tareas', `${pl(on.length, 'programada')}${off ? ` <span class="dim">· ${pl(off, 'apagada')}</span>` : ''}`, failed.length ? `<b class="warn">✕ ${failed.length} falló en la última corrida</b>` : next ? `próxima: ${esc(fmtNext(next.next_run))} · ${esc(next.ws.name)}` : 'ninguna por correr', '/tareas', 'ver tareas'));
   }
   // plugins: lo instalado y dónde se usa (encender es por proyecto, dentro del proyecto)
   if (pluginsData) {
-    const names = new Set(pluginsData.global.map(p => p.name)); pluginsData.workspaces.forEach(w => w.local.forEach(p => names.add(p.name)));
+    const names = new Set(pluginsData.global.filter(p => !p.example).map(p => p.name)); pluginsData.workspaces.forEach(w => w.local.filter(p => !p.example).forEach(p => names.add(p.name)));
     const used = pluginsData.workspaces.filter(w => w.enabled.some(n => names.has(n))).length;
-    const shown = [...names].filter(n => !n.startsWith('example')), list = shown.slice(0, 3).join(', ') + (shown.length > 3 ? ` y ${shown.length - 3} más` : '');
+    const shown = [...names], list = shown.slice(0, 3).join(', ') + (shown.length > 3 ? ` y ${shown.length - 3} más` : '');
     out.push(used
-      ? tile('⧉', 'plugins', `${names.size} instalado${names.size === 1 ? '' : 's'}`, `encendidos en ${used} de ${pluginsData.workspaces.length} proyectos`, '/plugins', 'ver plugins')
-      : tile('⧉', 'plugins', 'Sumale cosas a tus agentes', shown.length ? `Conectá ${esc(list)} a un proyecto.` : 'Canales, herramientas y datos para tus agentes.', '/plugins', 'ver plugins', 'invite'));
+      ? tile('⧉', 'Plugins', `${names.size} instalado${names.size === 1 ? '' : 's'}`, `encendidos en ${used} de ${pluginsData.workspaces.length} proyectos`, '/plugins', 'ver plugins')
+      : tile('⧉', 'Plugins', 'Sumale cosas a tus agentes', shown.length ? `Conectá ${esc(list)} a un proyecto.` : 'Canales, herramientas y datos para tus agentes.', '/plugins', 'ver plugins', 'invite'));
   }
   box.innerHTML = out.join('');
 }
@@ -121,7 +121,7 @@ function paintHome() {
   const all = (wsData.workspaces || []).slice().sort((a, b) => (b.last_used || 0) - (a.last_used || 0));
   // lo que te espera, de todos los proyectos (la búsqueda no lo esconde); el total va también en la pestaña equipos
   const waiting = all.map(w => ({ w, n: waitingIn(w) })).filter(x => x.n);
-  attn.innerHTML = waiting.length ? `<p class="ghead warn">necesita tu atención</p>` + waiting.map(({ w, n }) => `<a class="attn" href="/equipos"><span class="ic">⚑</span><span class="tx"><b>${esc(w.name)}</b> · ${n === 1 ? 'una cosa te espera' : n + ' cosas te esperan'}</span><span class="go">responder →</span></a>`).join('') : '';
+  attn.innerHTML = waiting.length ? `<p class="ghead warn">Necesita tu atención</p>` + waiting.map(({ w, n }) => `<a class="attn" href="/equipos"><span class="ic">⚑</span><span class="tx"><b>${esc(w.name)}</b> · ${n === 1 ? 'una cosa te espera' : n + ' cosas te esperan'}</span><span class="go">responder →</span></a>`).join('') : '';
   const q = ($('#wsSearch').value || '').trim().toLowerCase();
   paintTiles(q);
   const list = q ? all.filter(w => (w.name + ' ' + w.path).toLowerCase().includes(q)) : all;
@@ -129,11 +129,11 @@ function paintHome() {
   if (!list.length) { box.innerHTML = q ? `<p class="none">ningún proyecto coincide con «${esc(q)}»</p>` : '<p class="none">Todavía no hay proyectos: creá uno con «+ nuevo proyecto».</p>'; return; }
   const cut = Date.now() / 1000 - OLD_DAYS * 86400;
   const active = list.filter(w => w.alive), recent = list.filter(w => !w.alive && (w.last_used || 0) >= cut), old = list.filter(w => !w.alive && (w.last_used || 0) < cut);
-  if (active.length) box.appendChild(wsGroup('activos', active));
-  if (recent.length) box.appendChild(wsGroup('recientes', recent));
+  if (active.length) box.appendChild(wsGroup('Activos', active));
+  if (recent.length) box.appendChild(wsGroup('Recientes', recent));
   if (old.length) {
     const det = document.createElement('details'); det.className = 'wsgroup old'; det.open = oldOpen || !!q;
-    det.innerHTML = `<summary class="ghead">más antiguos <span class="n">${old.length}</span></summary><div class="wsgrid"></div>`;
+    det.innerHTML = `<summary class="ghead">Más antiguos <span class="n">${old.length}</span></summary><div class="wsgrid"></div>`;
     const grid = det.querySelector('.wsgrid'); for (const w of old) grid.appendChild(wsCard(w));
     det.ontoggle = () => { if (!q) oldOpen = det.open; };
     box.appendChild(det);

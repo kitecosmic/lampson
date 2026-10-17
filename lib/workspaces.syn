@@ -819,7 +819,7 @@ task plugin_card(dir, name, scope)
     try
         let m be json_decode(read_file(dir + "/" + name + "/plugin.json"))
         let tools be field(m, "tools")
-        give {"name": name, "scope": scope, "description": text(field_or(m, "description", "")), "kind": text(field_or(m, "kind", "")), "channel": field(m, "channel") != nothing, "tools": when tools == nothing then [] otherwise apply(tools, (t) => t["name"]), "config": field_or(m, "config", [])}
+        give {"name": name, "scope": scope, "description": text(field_or(m, "description", "")), "kind": text(field_or(m, "kind", "")), "channel": field(m, "channel") != nothing, "tools": when tools == nothing then [] otherwise apply(tools, (t) => t["name"]), "config": field_or(m, "config", []), "example": field(m, "example") == true}
     recover err
         give nothing
 

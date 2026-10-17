@@ -324,6 +324,12 @@ task execute(tc, opts, on_event)
     when verdict["decision"] == "deny"
         emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]}, tag)
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."
+    -- equipos: un asiento que no es el líder no le pregunta a la persona (lib/runtime.syn → escalate_to = su jefe). Lo
+    -- que necesita aprobación sube por la cadena: su jefe lo resuelve, o lo lleva hasta el líder, que es quien pregunta
+    let boss be when contains(opts, "escalate_to") and opts["escalate_to"] != nothing then text(opts["escalate_to"]) otherwise ""
+    when boss != "" and verdict["decision"] == "ask"
+        emit(on_event, "tool_denied", {"call": tc, "reason": "needs approval — goes up to " + boss + " (" + verdict["reason"] + ")"}, tag)
+        give "NOT RUN: this needs approval (" + verdict["reason"] + "), and in a team approvals go up the chain of command — you don't ask the person. Ask your boss " + boss + " with `send`: say exactly what you want to run and why. They will do it, find another way, or take it up to the lead, who is the only one who asks the person."
     when verdict["decision"] == "ask"
         let approved be false
         let expired be false

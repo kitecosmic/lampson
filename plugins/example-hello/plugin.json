@@ -1,5 +1,6 @@
 {
   "name": "example-hello",
+  "example": true,
   "description": "Example plugin: a Synsema program run under a capability ceiling. Copy this folder to make your own.",
   "kind": "syn",
   "entry": "plugin.syn",

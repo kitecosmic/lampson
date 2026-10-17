@@ -14,8 +14,10 @@
 --                  "instructions": "INSTRUCTIONS.md" (opcional: cómo usar sus tools — texto, o un .md de su carpeta;
 --                                                     sin el campo, INSTRUCTIONS.md si existe. Va al prompt de cada
 --                                                     agente que tenga alguna de sus tools: el plugin trae su proceso)
---                  "channel": {"agent": "tienda"}}   (opcional: un CANAL — lib/channels.syn. Sus acciones `receive` y
+--                  "channel": {"agent": "tienda"},   (opcional: un CANAL — lib/channels.syn. Sus acciones `receive` y
 --                                                     `send` no son tools del modelo, así que un canal puede no tener tools)
+--                  "example": true}                  (opcional: una plantilla para copiar — plugins/example-hello. Funciona
+--                                                     igual, pero las UIs no la muestran entre los plugins para usar)
 --
 -- Cómo corre (patrón "safe runner" de la doc 22-sandbox): cada llamada es UN proceso hijo que termina.
 --   kind=syn  → `synsema run --cap-set stdout,time,env=PLUGIN_*[,caps] <entry>`: el techo lo fija el
@@ -116,7 +118,7 @@ task read_manifest(dir, name, scope, legacy)
         set instr to trim(ifile)
     when length(instr) > MAX_INSTRUCTIONS
         set instr to slice(instr, 0, MAX_INSTRUCTIONS)
-    give {"ok": true, "name": name, "scope": scope, "legacy": is_legacy, "plugin": {"instructions": instr,"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "legacy": is_legacy, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools, "channel": channel, "config": config}}
+    give {"ok": true, "name": name, "scope": scope, "legacy": is_legacy, "plugin": {"instructions": instr,"name": name, "scope": scope, "dir": dir + "/" + name, "kind": kind, "legacy": is_legacy, "description": when contains(doc, "description") then text(doc["description"]) otherwise "", "entry": when contains(doc, "entry") then text(doc["entry"]) otherwise "", "command": when contains(doc, "command") then text(doc["command"]) otherwise "", "caps": when contains(doc, "caps") then text(doc["caps"]) otherwise "", "timeout": when contains(doc, "timeout") then floor(number(doc["timeout"])) otherwise DEFAULT_TIMEOUT, "tools": tools, "channel": channel, "config": config, "example": contains(doc, "example") and doc["example"] == true}}
 
 task scan(dir, scope, legacy)
     let out be []
@@ -168,7 +170,7 @@ export task all()
             set l["error"] to nothing
             set out to append(out, l)
         otherwise
-            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "legacy": r["legacy"], "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "channel": nothing, "config": [], "instructions": "", "enabled": false, "error": r["error"]})
+            set out to append(out, {"name": n, "scope": r["scope"], "dir": "", "kind": "?", "legacy": r["legacy"], "description": "", "entry": "", "command": "", "caps": "", "timeout": 0, "tools": [], "channel": nothing, "config": [], "instructions": "", "enabled": false, "error": r["error"], "example": false})
     give out
 
 export task enabled()
@@ -491,5 +493,5 @@ export task summary()
     require env("LAMPSON_*")
     let out be []
     each l in all()
-        set out to append(out, {"name": l["name"], "scope": l["scope"], "kind": l["kind"], "legacy": l["legacy"], "description": l["description"], "enabled": l["enabled"], "error": l["error"], "caps": when l["kind"] == "syn" and l["error"] == nothing then ceiling_of(l) otherwise "", "command": when l["kind"] == "exec" then l["command"] otherwise "", "tools": apply(l["tools"], (t) => t["name"]), "tool_specs": l["tools"], "dir": l["dir"], "channel": l["channel"] != nothing})
+        set out to append(out, {"name": l["name"], "scope": l["scope"], "kind": l["kind"], "legacy": l["legacy"], "description": l["description"], "enabled": l["enabled"], "error": l["error"], "caps": when l["kind"] == "syn" and l["error"] == nothing then ceiling_of(l) otherwise "", "command": when l["kind"] == "exec" then l["command"] otherwise "", "tools": apply(l["tools"], (t) => t["name"]), "tool_specs": l["tools"], "dir": l["dir"], "channel": l["channel"] != nothing, "example": l["example"]})
     give out

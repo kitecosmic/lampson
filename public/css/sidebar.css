@@ -2,7 +2,7 @@
 /* secciones colapsables; el activo es una muesca en la regla, no una caja */
 .sec { display:flex; flex-direction:column; min-height:0; flex:none; overflow:hidden; }
 .sec + .sec { border-top:1px solid var(--rule); }
-.sec h2 { font:400 10.5px/1.35 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
+.sec h2 { font:600 13.5px/1.35 var(--serif); color:var(--ink-2); margin:0; padding:12px 16px 8px; display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; flex:none; }
 .sec h2:hover { color:var(--ink); }
 .sec .caret { width:9px; font-size:9px; color:var(--ink-3); }
 .sec h2 .h2act { margin-left:auto; border:0; background:none; color:var(--ink-3); font:inherit; font-size:12px; cursor:pointer; padding:0 2px; line-height:1; opacity:.6; }

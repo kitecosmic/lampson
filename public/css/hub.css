@@ -1,20 +1,20 @@
 /* hub: la pantalla de workspaces (public/hub.html) — solo cabecera y zona central, sin paneles laterales */
 body.hub { grid-template-columns:minmax(0, 1fr); grid-template-areas:"top" "main"; }
 body.hub main { grid-template-rows:1fr; }
-body.hub #stage { display:flex; align-items:flex-start; padding:40px 40px 28px; }
-.wsgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:14px; margin-top:8px; }
+body.hub #stage { display:flex; align-items:flex-start; padding:44px 40px 32px; }
+.wsgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px; }
 .card.ws { display:block; text-decoration:none; color:inherit; cursor:pointer; transition:border-color .12s; }
 .card.ws:hover { border-color:var(--ink-3); }
 /* estado a un vistazo: verde activo · gris apagado (apagado es normal, no un error) · ámbar mientras arranca */
-.card.ws h3 { display:flex; align-items:center; gap:8px; }
+.card.ws h3 { display:flex; align-items:center; gap:8px; font:400 12px/1 var(--mono); }
 .card.ws.on h3 { color:var(--ok); }
 .card.ws.off h3 { color:var(--ink-3); }
 .card.ws.busy h3 { color:var(--amber); }
-.card.ws .more { margin-left:auto; font:600 15px/1 var(--mono); letter-spacing:0; color:var(--ink-3); padding:2px 6px; margin-top:-4px; border-radius:2px; }
+.card.ws .more { margin-left:auto; font:600 15px/1 var(--mono); letter-spacing:0; color:var(--ink-3); padding:2px 6px; margin-top:-4px; border-radius:var(--r-sm); }
 .card.ws .more:hover { color:var(--ink); background:var(--paper-2); }
 .card.ws .nm { font:600 16px/1.3 var(--serif); color:var(--ink); margin:0 0 4px; }
-.card.ws .pth { font:400 11px/1.4 var(--mono); color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:0 0 6px; }
-.card.ws .meta { font:400 11px/1.4 var(--mono); color:var(--ink-3); margin:0; }
+.card.ws .pth { font:400 12px/1.4 var(--mono); color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:0 0 6px; }
+.card.ws .meta { font:400 12px/1.4 var(--mono); color:var(--ink-3); margin:0; }
 /* dispositivos: QR de emparejamiento */
 .pairqr { display:flex; gap:16px; align-items:flex-start; margin-top:16px; flex-wrap:wrap; }
 .pairqr .qr { width:220px; height:220px; background:#fff; border-radius:var(--r); padding:6px; }
@@ -26,23 +26,23 @@ body.hub #stage { display:flex; align-items:flex-start; padding:40px 40px 28px; 
 }
 
 /* equipos y objetivos: la línea de cada proyecto y la tarjeta de /equipos */
-.card.ws .tm { font:400 11px/1.4 var(--mono); color:var(--accent); margin:6px 0 0; padding-top:6px; border-top:1px dashed var(--rule); }
+.card.ws .tm { font:400 12px/1.4 var(--mono); color:var(--accent); margin:10px 0 0; padding-top:10px; border-top:1px solid var(--rule); }
 .card.ws .tm:hover { text-decoration:underline; }
 .card.ws .tm b { color:var(--rubric); font-weight:600; }
 
 /* cabecera: título, búsqueda y la acción principal a la derecha */
 .hubhome .hhead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 6px; }
 .hubhome .hhead h1 { margin:0; }
-.hubhome .hhead input { font:400 12px/1.4 var(--mono); color:var(--ink); background:transparent; border:1px solid var(--rule-2); border-radius:2px; padding:6px 10px; width:220px; }
+.hubhome .hhead input { font:400 13px/1.4 var(--mono); color:var(--ink); background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--r); padding:7px 12px; width:240px; }
 .hubhome .hhead input:focus { outline:none; border-color:var(--ink-3); box-shadow:0 0 0 3px var(--accent-bg); }
 .hubhome > .lead { margin:0 0 8px; }
 .hubhome details.how { display:inline; }
-.hubhome details.how summary { display:inline; cursor:pointer; font:400 11.5px/1 var(--mono); color:var(--accent); list-style:none; }
+.hubhome details.how summary { display:inline; cursor:pointer; font:400 12.5px/1 var(--mono); color:var(--accent); list-style:none; }
 .hubhome details.how summary::-webkit-details-marker { display:none; }
 .hubhome details.how p { font-size:.95rem; color:var(--ink-2); margin:8px 0 0; }
 /* grupos */
-.hubhome .ghead { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--ink-3); margin:26px 0 10px; }
-.hubhome .ghead .n { color:var(--ink-3); opacity:.7; margin-left:4px; }
+.hubhome .ghead { font:600 16px/1.2 var(--serif); color:var(--ink); margin:34px 0 12px; }
+.hubhome .ghead .n { font:400 12.5px/1 var(--mono); color:var(--ink-3); margin-left:6px; }
 .hubhome .ghead.warn { color:var(--rubric); }
 .hubhome details.old > summary { cursor:pointer; list-style:none; }
 .hubhome details.old > summary::-webkit-details-marker { display:none; }
@@ -51,28 +51,28 @@ body.hub #stage { display:flex; align-items:flex-start; padding:40px 40px 28px; 
 .hubhome details.old > summary:hover { color:var(--ink); }
 .hubhome .none { color:var(--ink-3); margin:26px 0 0; }
 /* necesita tu atención: una fila por proyecto con equipos que te esperan */
-.hubhome .attn { display:flex; align-items:center; gap:12px; padding:10px 14px; margin:0 0 8px; border:1px solid var(--rubric); border-radius:var(--r); color:var(--ink); text-decoration:none; }
+.hubhome .attn { display:flex; align-items:center; gap:12px; padding:12px 16px; margin:0 0 8px; background:var(--surface); border:1px solid var(--rubric); border-radius:var(--r-lg); color:var(--ink); text-decoration:none; }
 .hubhome .attn:hover { background:var(--paper-2); }
 .hubhome .attn .ic { color:var(--rubric); }
 .hubhome .attn .tx { flex:1; min-width:0; }
-.hubhome .attn .go { font:400 11.5px/1 var(--mono); color:var(--accent); }
+.hubhome .attn .go { font:400 12.5px/1 var(--mono); color:var(--accent); }
 /* productos en el inicio: un mosaico de alto fijo por producto (no crece con los datos); .invite = todavía sin uso */
-.hubhome .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:14px; margin:26px 0 0; }
+.hubhome .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:16px; margin:30px 0 0; }
 .hubhome .tiles:empty { display:none; }
-.hubhome .tile { display:flex; flex-direction:column; padding:14px 16px 12px; border:1px solid var(--rule); border-radius:var(--r); color:var(--ink); text-decoration:none; min-width:0; transition:border-color .12s; }
+.hubhome .tile { display:flex; flex-direction:column; padding:16px 18px 14px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); color:var(--ink); text-decoration:none; min-width:0; transition:border-color .12s; }
 .hubhome .tile:hover { border-color:var(--ink-3); }
-.hubhome .tile.invite { background:var(--paper-2); border-style:dashed; border-color:var(--rule-2); }
-.hubhome .tile .th { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0 0 12px; }
+.hubhome .tile.invite { background:transparent; border-style:dashed; border-color:var(--rule-2); }
+.hubhome .tile .th { font:400 12.5px/1 var(--mono); color:var(--ink-2); margin:0 0 12px; }
 .hubhome .tile .th .ic { color:var(--accent); margin-right:6px; }
 .hubhome .tile .tm1 { font:600 16px/1.3 var(--serif); margin:0 0 4px; }
 .hubhome .tile .tm1 .dim { font:400 12px/1 var(--mono); color:var(--ink-3); }
-.hubhome .tile .tm2 { font-size:13px; line-height:1.45; color:var(--ink-2); margin:0 0 10px; flex:1; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.hubhome .tile .tm2 { font-size:13.5px; line-height:1.45; color:var(--ink-2); margin:0 0 10px; flex:1; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .hubhome .tile .tm2 .warn { color:var(--rubric); font-weight:600; }
-.hubhome .tile .go { font:400 11.5px/1 var(--mono); color:var(--accent); margin:0; }
+.hubhome .tile .go { font:400 12.5px/1 var(--mono); color:var(--accent); margin:0; }
 .hubhome .tile:hover .go { text-decoration:underline; }
 /* ayuda de terminal: secundaria */
-.hubhome .cli { font:400 11.5px/1.8 var(--mono); color:var(--ink-3); margin:34px 0 0; }
-.hubhome .cli code { font-size:11.5px; }
+.hubhome .cli { font:400 12px/1.8 var(--mono); color:var(--ink-3); margin:40px 0 0; }
+.hubhome .cli code { font-size:12px; }
 .hubhome .cli .copy { color:var(--accent); cursor:pointer; margin-left:2px; }
 .hubhome .cli .copy:hover { text-decoration:underline; }
 @media (max-width: 640px) {
