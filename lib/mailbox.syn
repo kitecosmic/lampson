@@ -22,6 +22,7 @@
 -- resultados, entrega los callbacks (uno por lote y por URL) y se va cuando la fila queda vacía. Tomar la fila y
 -- soltar el worker ocurren bajo el mismo lock: un mensaje que llega en ese instante nunca queda huérfano.
 
+use "./teams.syn" as teams
 use "./runtime.syn" as runtime
 use "./loop.syn" as loop
 use "./agents.syn" as agents
@@ -96,6 +97,13 @@ export task post(k, item)
         state_set("mb:w:" + k, true)
     unlock(k)
     give claim
+
+-- ¿hay un worker atendiendo la conversación (agente, thread)? (la pantalla de equipos lo muestra en vivo)
+export task working(agent, thread)
+    try
+        give state_get("mb:w:" + runtime.thread_key(agent, thread), false) == true
+    recover err
+        give false
 
 -- saca todo lo encolado
 task take(k)
@@ -189,8 +197,10 @@ export task approve_queue(name, args, why)
     require env("LAMPSON_*")
     require file.read(".lampson")
     require file.read(".lampson/*")
-    let id be approvals.open("api", permission.describe_call(name, args), why, APPROVAL_TIMEOUT)
-    give approvals.wait(id, APPROVAL_TIMEOUT)
+    -- tocar la historia compartida (merge a main desde la copia de un agente): la persona tiene 30 min, no 3
+    let tmo be when contains(text(why), "shared history") then 1800 otherwise APPROVAL_TIMEOUT
+    let id be approvals.open("api", permission.describe_call(name, args), why, tmo)
+    give approvals.wait_detail(id, tmo)
 
 -- ---------- el worker ----------
 
@@ -209,6 +219,7 @@ task user_msg(it)
 
 -- un lote: un turno con todos los mensajes (y los que lleguen mientras), resultados, callbacks, jobs
 task run_batch(k, spec, items)
+    require db(".lampson/teams.db")
     require net
     require exec
     require time
@@ -287,6 +298,13 @@ task run_batch(k, spec, items)
         set result to {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": o["session"], "text": r["text"], "steps": r["steps"], "usage": r["usage"], "stopped": r["stopped"]}
     recover err
         set result to {"agent": lead["to"], "thread": lead["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+    -- equipos y objetivos: un turno que falló (proveedor caído, error del runtime) queda en el registro del equipo —
+    -- lo ven el líder en su próximo turno y la pantalla; si no, el equipo esperaría en silencio
+    when starts_with(text(result["stopped"]), "error") and (starts_with(text(lead["thread"]), "team:") or starts_with(text(lead["thread"]), "objective:"))
+        try
+            teams.log(lead["thread"], result["agent"], "error", "", "turn failed: " + slice(text(result["stopped"]), 0, 300))
+        recover err
+            set err to err
     let ids be apply((it) => it["id"], all)
     set result["batch"] to ids
     set result["lead"] to lead["id"]
@@ -339,6 +357,7 @@ task run_batch(k, spec, items)
     give result
 
 export task work(spec_json)
+    require db(".lampson/teams.db")
     require net
     require exec
     require time
@@ -374,6 +393,7 @@ export task work(spec_json)
 -- MIGA runtime (igual que agents.Child): un `agent` solo ve sus parámetros, las builtins y las tasks TOP-LEVEL del
 -- entry. web.syn define `task lampson_mailbox_worker(spec_json) give mailbox.work(spec_json)`.
 agent MailboxWorker
+    require db(".lampson/teams.db")
     require net
     require exec
     require time
@@ -413,6 +433,8 @@ export task submit(sobre, opts)
         set sent to sobre["meta"]["sent_at"]
     let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true, "reply_channel": when contains(opts, "reply_channel") then opts["reply_channel"] otherwise "", "reply_thread": when contains(opts, "reply_thread") then opts["reply_thread"] otherwise ""}
     when post(k, item)
-        let buf be opts["buffer"]
+        -- el worker espera {quiet_s, max_s}: false/nothing (sin espera) se normaliza acá — con `false` el worker
+        -- moría al primer settle y la conversación quedaba trabada (visto 2026-10-16)
+        let buf be when contains(opts, "buffer") and type_of(opts["buffer"]) == "map" then opts["buffer"] otherwise buffer_of(nothing, false)
         spawn MailboxWorker with spec_json = json_encode({"key": k, "mode": opts["mode"], "buffer": buf})
     give {"id": id, "key": k}

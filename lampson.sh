@@ -12,12 +12,15 @@
 #   lampson key add [--agent ID[,ID]] [--name NOMBRE] [--rate N] [--callback URL] · key list · key remove <id>   # API keys /v1
 #   lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]     # Lampson como servidor MCP (stdio) para otros agentes
 #   lampson channel list · channel on|off <canal> · channel setup <canal>   # canales (Telegram, Chatwoot…)
+#   lampson objective add "…" --agent ID | --team ID [--budget N] [--round S] · objective list · show <id> · reply <id> "…" [--approve|--deny] · cancel <id>   # objetivos
+#   lampson team list                                         # equipos de agentes y quién reporta a quién
 set -euo pipefail
 # se lo llama por el symlink `lampson` (~/.local/bin): la carpeta es donde vive el script de verdad
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 caller="$(pwd)"
 ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
 run=0; msg=""; perm_flag=""; key=""; key_name=""; key_id=""; mcp_serve=""; ch_cmd=""; ch_name=""
+obj_cmd=""; obj_id=""; obj_team=""; obj_budget=""; obj_round=""; obj_decision=""; team_cmd=""
 # `lampson run …`: subcomando sin interfaz (run.syn); las palabras sueltas son el mensaje, no el workspace
 if [ "${1:-}" = run ]; then run=1; shift; fi
 # `lampson key add|list|remove …`: API keys (también corre run.syn, con LAMPSON_KEY_CMD)
@@ -26,6 +29,9 @@ if [ "${1:-}" = mcp ] && [ "${2:-}" = serve ]; then run=1; mcp_serve=1; shift 2;
 # `lampson channel list|on|off|setup <canal>` (run.syn con LAMPSON_CHANNEL_CMD)
 if [ "${1:-}" = channel ]; then run=1; ch_cmd="${2:-list}"; shift; [ $# -gt 0 ] && shift; fi
 if [ "${1:-}" = key ]; then run=1; key="${2:-help}"; shift; [ $# -gt 0 ] && shift; fi
+# `lampson objective add|list|show|reply|cancel` y `lampson team list` (run.syn con LAMPSON_OBJ_CMD / LAMPSON_TEAM_CMD)
+if [ "${1:-}" = objective ]; then run=1; obj_cmd="${2:-list}"; shift; [ $# -gt 0 ] && shift; fi
+if [ "${1:-}" = team ]; then run=1; team_cmd=list; shift; [ $# -gt 0 ] && shift; fi
 while [ $# -gt 0 ]; do
     case "$1" in
         --web) web=1 ;;
@@ -47,9 +53,14 @@ while [ $# -gt 0 ]; do
         --name) shift; key_name="$1" ;;
         --rate) shift; export LAMPSON_KEY_RATE="$1" ;;
         --callback) shift; export LAMPSON_KEY_CALLBACKS="${LAMPSON_KEY_CALLBACKS:+$LAMPSON_KEY_CALLBACKS,}$1" ;;
+        --team) shift; obj_team="$1" ;;
+        --budget) shift; obj_budget="$1" ;;
+        --round) shift; obj_round="$1" ;;
+        --approve) obj_decision=approve ;;
+        --deny) obj_decision=deny ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
         -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
-        *) if [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
+        *) if [ -n "$obj_cmd" ] && [ -z "$obj_id" ] && { [ "$obj_cmd" = show ] || [ "$obj_cmd" = reply ] || [ "$obj_cmd" = cancel ]; }; then obj_id="$1"; elif [ -n "$obj_cmd" ]; then msg="${msg:+$msg }$1"; elif [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
     esac
     shift
 done
@@ -173,6 +184,8 @@ if [ "$run" = 1 ]; then
     entry=run.syn; export LAMPSON_MESSAGE="$msg" LAMPSON_RUN_PERMISSION="$perm_flag"
     export LAMPSON_KEY_CMD="$key" LAMPSON_KEY_NAME="$key_name" LAMPSON_KEY_ID="$key_id" LAMPSON_KEY_AGENTS="${LAMPSON_AGENT:-}"
     export LAMPSON_CHANNEL_CMD="$ch_cmd" LAMPSON_CHANNEL_NAME="$ch_name"
+    export LAMPSON_OBJ_CMD="$obj_cmd" LAMPSON_OBJ_ID="$obj_id" LAMPSON_OBJ_AGENT="$([ -n "$obj_cmd" ] && echo "${LAMPSON_AGENT:-}")" LAMPSON_OBJ_TEAM="$obj_team"
+    export LAMPSON_OBJ_BUDGET="$obj_budget" LAMPSON_OBJ_ROUND="$obj_round" LAMPSON_OBJ_DECISION="$obj_decision" LAMPSON_TEAM_CMD="$team_cmd"
     export LAMPSON_MCP_SERVE="$mcp_serve" LAMPSON_MCP_AGENTS="$([ -n "$mcp_serve" ] && echo "${LAMPSON_AGENT:-}")"
 fi
 if [ -f "$here/.env" ]; then exec synsema run --env-file "$here/.env" "$entry"; else exec synsema run "$entry"; fi

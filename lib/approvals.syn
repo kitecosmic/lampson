@@ -131,6 +131,13 @@ export task wait(id, timeout_s)
     share nothing as "approval:token:" + id
     give ok
 
+-- lo mismo, diciendo si nadie respondió (para que el agente sepa que no fue un «no»)
+export task wait_detail(id, timeout_s)
+    require time
+    let ok be wait(id, timeout_s)
+    let meta be meta_of(id)
+    give {"approved": ok, "expired": meta != nothing and meta["status"] == "expired", "minutes": floor(timeout_s / 60)}
+
 -- responder desde la UI (loopback, ya autenticado) o desde la terminal: sin token
 export task answer(id, decision)
     let meta be meta_of(id)

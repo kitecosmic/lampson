@@ -750,6 +750,9 @@ export task should_live(w, hc)
     -- plataforma recibiría un 502 del hub (que no enciende workspaces por un webhook)
     when channels_on_disk(w) > 0
         give true
+    -- con un equipo que hace rondas (lib/teams.syn: round_minutes > 0): las rondas corren en el proceso del workspace
+    when teams_on_disk(w) > 0
+        give true
     let ih be idle_hours()
     when ih == 0
         give true
@@ -776,6 +779,23 @@ export task channels_on_disk(w)
                             set found to found
                 when found
                     set n to n + 1
+    recover err
+        give 0
+    give n
+
+-- equipos con rondas en el proyecto (leídos por el link workspace/ del ws: el hub no tiene permiso sobre el proyecto)
+export task teams_on_disk(w)
+    let n be 0
+    try
+        let d be dir_of(w["slug"]) + "/workspace/.lampson/teams"
+        each e in list_dir(d)
+            when ends_with(e["name"], ".team.json")
+                try
+                    let t be json_decode(read_file(d + "/" + e["name"]))
+                    when contains(t, "round_minutes") and t["round_minutes"] != nothing and number(t["round_minutes"]) > 0
+                        set n to n + 1
+                recover err
+                    set n to n
     recover err
         give 0
     give n

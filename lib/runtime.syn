@@ -42,6 +42,8 @@ use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
 use "./tools/proc.syn" as proc
 use "./scope.syn" as scope
+use "./teams.syn" as teams
+use "./worktree.syn" as worktree
 
 export let PROJECT_DIR be "workspace/.lampson/agents"
 export let GLOBAL_DIR be "agents"
@@ -239,6 +241,14 @@ task builtin_tool_names(spec)
     require file.read(".lampson/*")
     give agents.tool_names({"tools": where(spec["tools"], (n) => not ends_with(n, "*"))})
 
+-- ¿tiene send y board? los miembros de un equipo siempre; un integrado nunca (el de programación no coordina equipos)
+task team_tools(spec)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    when spec["builtin"]
+        give false
+    give contains(spec["tools"], "send") or contains(spec["tools"], "board") or length(teams.teams_of(spec["id"])) > 0
+
 export task registry_of(spec)
     require exec
     require time
@@ -264,6 +274,10 @@ export task registry_of(spec)
     each m in plugins.names(false)
         when allowed(spec["tools"], m)
             set reg[m] to "plugin"
+    -- equipos (lib/teams.syn): un miembro coordina con send y board; fuera de un equipo, solo si los lista
+    when team_tools(spec)
+        set reg["send"] to teams.send_tool
+        set reg["board"] to teams.board_tool
     give reg
 
 export task catalog_of(spec)
@@ -286,6 +300,8 @@ export task catalog_of(spec)
     when contains(names, "delegate")
         set cat to append(cat, agents.DELEGATE_SPEC)
     let extra be where(mcp.catalog(false) + plugins.catalog(false), (s) => allowed(spec["tools"], s["name"]))
+    when team_tools(spec)
+        set extra to extra + [teams.SEND_SPEC, teams.BOARD_SPEC]
     give cat + extra
 
 -- ---------- boot: cfg + system + opts de un agente ----------
@@ -327,6 +343,7 @@ export task opts_for(id, mode, ask_fn)
     require secret("LAMPSON_*")
     let spec be spec_or_raise(id)
     let opts be loop.default_opts(registry_of(spec), catalog_of(spec), ask_fn)
+    set opts["agent_id"] to spec["id"]
     -- pasos: los integrados como siempre (LAMPSON_MAX_STEPS o el del perfil); uno del proyecto, el suyo si lo fija
     set opts to loop.with_steps(opts, when spec["builtin"] or spec["steps"] == 0 then agents.steps_for(when spec["builtin"] then id otherwise "build") otherwise spec["steps"])
     when spec["budget_tokens"] > 0
@@ -366,6 +383,9 @@ export task system_for(id, cfg)
     let spec be spec_or_raise(id)
     -- los plugins traen su proceso: las instrucciones de los que tienen tools en el catálogo de este agente
     let extra be plugins.instructions(apply(catalog_of(spec), (s) => s["name"]))
+    -- su equipo: rol, a quién reporta, a quién le puede escribir, cómo se usa el tablero (lib/teams.syn)
+    when not spec["builtin"]
+        set extra to extra + teams.instructions(spec["id"])
     when spec["base"] == "lampson"
         give {"role": "system", "content": prompt.build(agents.env_info(cfg), spec["system"]) + extra}
     give {"role": "system", "content": spec["system"] + extra + "\n\n# Environment\n- Date: " + format_time(now(), "%Y-%m-%d")}
@@ -439,6 +459,7 @@ task remember_thread(agent, thread, sid)
 -- abre la conversación sin correr el turno: {ctx, session, thread, messages, mode}. La usan las puertas que a
 -- veces hacen otra cosa con la sesión (el `!comando` de la web); el resto llama a deliver.
 export task open(sobre, hooks)
+    require db(".lampson/teams.db")
     require exec
     require time
     require random
@@ -480,6 +501,31 @@ export task open(sobre, hooks)
                 set messages to append(messages, {"role": "user", "content": note})
     otherwise
         set sid to fresh_session()
+    -- equipos y objetivos (lib/teams.syn): la conversación dice en qué trabaja; send/board/objective lo reciben como
+    -- _scope (lib/loop.syn). En un objetivo el agente tiene su tablero y la tool objective aunque no esté en un equipo.
+    when starts_with(thread, "team:") or starts_with(thread, "objective:")
+        let copts be ctx["opts"]
+        set copts["scope"] to thread
+        -- en un equipo con git, cada agente en su copia (lib/worktree.syn); "worktrees": false en el equipo lo apaga
+        when starts_with(thread, "team:")
+            let tm be teams.get(slice(thread, 5, length(thread)))
+            when tm != nothing and tm["worktrees"]
+                let me be teams.member(tm, ctx["agent"])
+                let wt be worktree.ensure(tm["id"], ctx["agent"], {"name": (when me != nothing and me["role"] != ctx["agent"] then me["role"] + " · " + ctx["agent"] otherwise ctx["agent"]) + " (Lampson)", "email": ctx["agent"] + "@lampson.local"})
+                when wt["ok"]
+                    set copts["root"] to wt["root"]
+            when tm != nothing and teams.team_objective(tm["id"], ctx["agent"]) != nothing
+                let treg be copts["registry"]
+                set treg["objective"] to teams.objective_tool
+                set copts["registry"] to treg
+                set copts["catalog"] to where(copts["catalog"], (s) => s["name"] != "objective") + [teams.OBJECTIVE_SPEC]
+        when starts_with(thread, "objective:")
+            let reg be copts["registry"]
+            set reg["board"] to teams.board_tool
+            set reg["objective"] to teams.objective_tool
+            set copts["registry"] to reg
+            set copts["catalog"] to where(copts["catalog"], (s) => s["name"] != "board" and s["name"] != "objective") + [teams.BOARD_SPEC, teams.OBJECTIVE_SPEC]
+        set ctx["opts"] to copts
     -- sesión actual (blackboard): la tool todo guarda su lista por sesión (lib/tools/todo.syn)
     share {"id": sid} as "lampson:session"
     give {"ctx": ctx, "session": sid, "thread": thread, "messages": messages, "mode": ctx["opts"]["permission_mode"], "note": note}
@@ -497,6 +543,7 @@ export task save(o, messages)
 -- o: {ctx: {cfg, opts, agent}, session, thread} — lo que devuelve open(), o lo que arma la terminal.
 -- label: lo que se anota como turno del usuario en la traza ("" = el último mensaje de usuario).
 export task turn(o, messages, label, hooks)
+    require db(".lampson/teams.db")
     require net
     require exec
     require time
@@ -531,10 +578,19 @@ export task turn(o, messages, label, hooks)
     trace.user(sid, said, o["ctx"]["agent"], o["ctx"]["opts"]["permission_mode"], cfg["model"])
     let result be loop.run_turn(cfg, messages, o["ctx"]["opts"], on_event)
     trace.turn_end(sid, result)
+    -- presupuesto de equipos: lo que gastó este turno (los cacheados pesan 10%, como en el loop)
+    let cost be result["usage"]["input"] - result["usage"]["cached"] + floor(result["usage"]["cached"] / 10) + result["usage"]["output"]
+    let th be text(field(o, "thread", ""))
+    when starts_with(th, "team:")
+        teams.record_spend(o["ctx"]["agent"], cost)
+        teams.team_turn_end(slice(th, 5, length(th)), o["ctx"]["agent"], cost)
+    when starts_with(th, "objective:")
+        teams.obj_turn_end(floor(number(slice(th, 10, length(th)))), cost)
     save(o, result["messages"])
     give result
 
 export task deliver(sobre, hooks)
+    require db(".lampson/teams.db")
     require net
     require exec
     require time

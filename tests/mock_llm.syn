@@ -105,6 +105,36 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("ls", {"path": "."})])
             give reply_text("final espera · msgs=" + text(length(msgs)))
+        -- equipos (lib/teams.syn): A le escribe a B con send (y trata de hacerse pasar por otro con _agent: el loop lo pisa);
+        -- B, al recibirlo, agrega una tarea al tablero
+        when starts_with(q, "avisa-equipo")
+            when tools_seen == 0
+                give reply_tools([tool_call("send", {"recipient": "rt-team-b", "message": "hola B, ¿tomás el login?", "_agent": "rt-team-c"})])
+            give reply_text("final avisa · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        when starts_with(q, "[message from rt-team-a")
+            when tools_seen == 0
+                give reply_tools([tool_call("board", {"action": "add", "title": "login de B", "owner": "rt-team-b"})])
+            -- en su copia de git (lib/worktree.syn): su rama; y un push, que espera aprobación de la persona
+            when tools_seen == 1
+                give reply_tools([tool_call("bash", {"command": "git rev-parse --abbrev-ref HEAD"})])
+            when tools_seen == 2
+                give reply_tools([tool_call("bash", {"command": "git push origin team/rt-team/rt-team-b"})])
+            give reply_text("final equipo-b · branch: " + replace(slice(msgs[length(msgs) - 3]["content"], 0, 40), "\n", " ") + " · push: " + slice(msgs[length(msgs) - 1]["content"], 0, 40))
+        -- objetivos (lib/teams.syn): el primer turno planifica (board), informa y pide aprobación; aprobado, termina
+        when starts_with(q, "[objective o-")
+            when tools_seen == 0
+                give reply_tools([tool_call("board", {"action": "add", "title": "paso 1: preparar el cambio"})])
+            when tools_seen == 1
+                give reply_tools([tool_call("objective", {"action": "report", "message": "plan listo, cambio preparado"})])
+            when tools_seen == 2
+                give reply_tools([tool_call("objective", {"action": "request_approval", "message": "mergear la rama al main"})])
+            give reply_text("final objetivo · esperando aprobación")
+        when starts_with(q, "[approved by")
+            when msgs[length(msgs) - 1]["role"] == "user"
+                give reply_tools([tool_call("objective", {"action": "done", "message": "mergeado; correr npm test para verificar"})])
+            give reply_text("final objetivo · hecho")
+        when starts_with(q, "[round] keep working on o-")
+            give reply_text("final ronda · nada nuevo")
         -- "piensa": el modelo tarda 3 s y contesta sin tools (lo que llega mientras escribe tiene que rehacer la respuesta)
         when starts_with(q, "piensa")
             sleep(3)

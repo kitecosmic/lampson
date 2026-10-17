@@ -30,6 +30,7 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+require db(".lampson/teams.db")
 require judge
 require file("workspace")
 require file("workspace/*")
@@ -75,6 +76,8 @@ use "./lib/runtime.syn" as runtime
 use "./lib/api.syn" as api
 use "./lib/apikeys.syn" as apikeys
 use "./lib/mailbox.syn" as mailbox
+use "./lib/teamrun.syn" as teamrun
+use "./lib/teams.syn" as teams
 use "./lib/channels.syn" as channels
 use "./lib/mcp_server.syn" as mcp_server
 
@@ -127,6 +130,11 @@ task channel_poll_tick()
     give channels.poll_tick()
 cron_every(5, channel_poll_tick)
 
+-- EQUIPOS (lib/teamrun.syn): entrega los mensajes entre agentes (tool send) por el buzón y lanza las rondas
+task team_tick()
+    give teamrun.tick()
+cron_every(teamrun.TICK_SECONDS, team_tick)
+
 -- TAREAS PROGRAMADAS (lib/schedule.syn): este proceso es el residente de lampson — con `lampson --daemon start`
 -- (synsema daemon) queda en background y ejecuta lo programado aunque no haya ninguna UI abierta. Un tick cada
 -- 30 s (cron_every de Synsema: intervalo puro; la hora de reloj la resuelve schedule.syn) corre lo vencido:
@@ -156,7 +164,7 @@ serve on 8080
     describe
         about: "Lampson API — agents of this workspace for your apps, channels and other agents"
         version: "1.0.0"
-        api: ["POST /w/:slug/v1/messages -- send a message to an agent and get its answer (JSON); with \"callback\", 202 now and the answer POSTed later. Body: {to, thread, text, images?, from?, meta?, sent_at?, session?, callback?}", "POST /w/:slug/v1/messages/stream -- the same, as Server-Sent Events: session, the agent's steps, done", "GET /w/:slug/v1/agents -- the agents this API key can use", "GET /w/:slug/v1/jobs/:id -- status and result of a message sent with a callback", "POST /w/:slug/v1/mcp -- Model Context Protocol (Streamable HTTP, JSON responses): tools ask, agents and history, for other AI agents", "POST /w/:slug/v1/mcp/stream -- the same MCP server answering with Server-Sent Events: with params._meta.progressToken, each step of the agent arrives as notifications/progress before the result", "GET /w/:slug/v1/mcp -- 405: this MCP server opens no server-to-client stream"]
+        api: ["POST /w/:slug/v1/messages -- send a message to an agent and get its answer (JSON); with \"callback\", 202 now and the answer POSTed later. Body: {to, thread, text, images?, from?, meta?, sent_at?, session?, callback?}", "POST /w/:slug/v1/messages/stream -- the same, as Server-Sent Events: session, the agent's steps, done", "GET /w/:slug/v1/agents -- the agents this API key can use", "GET /w/:slug/v1/jobs/:id -- status and result of a message sent with a callback", "POST /w/:slug/v1/mcp -- Model Context Protocol (Streamable HTTP, JSON responses): tools ask, agents and history, for other AI agents", "POST /w/:slug/v1/mcp/stream -- the same MCP server answering with Server-Sent Events: with params._meta.progressToken, each step of the agent arrives as notifications/progress before the result", "GET /w/:slug/v1/mcp -- 405: this MCP server opens no server-to-client stream", "POST /w/:slug/v1/objectives -- give an agent (or a team) an objective to work on by itself until done; it plans on a board, works in rounds and asks before anything irreversible. Body: {text, agent? | team?, budget_tokens?, round_seconds?}", "GET /w/:slug/v1/objectives -- the objectives this API key can see", "GET /w/:slug/v1/objectives/:id -- one objective: status, last report, question or approval it waits for, result, board and record", "POST /w/:slug/v1/objectives/:id/reply -- answer its question, or approve/deny what it asked: {text?, approved?}", "POST /w/:slug/v1/objectives/:id/cancel -- stop it"]
 
     -- la UI vive bajo /w/<slug> (BASE en js/core.js); si alguien entra por el puerto del proceso, es lo mismo
     -- Acceso DIRECTO por el puerto del proceso (sin X-Forwarded-Host, que solo agrega el hub al proxyear): la UI se
@@ -882,6 +890,59 @@ serve on 8080
         give fail(405, "this MCP server does not open a server-to-client stream; POST JSON-RPC messages")
 
     -- ---------- panel de la UI: API keys y canales (privadas: son de la UI, autenticadas por el hub/local) ----------
+    -- ---------- EQUIPOS Y OBJETIVOS: su pantalla propia (public/teams.html) y la API privada que la alimenta ----------
+    route "GET /w/:slug/equipos"
+        private
+        let h be headers of request
+        when env("LAMPSON_WS", "") != "" and not contains(h, "x-forwarded-host")
+            give redirect("http://127.0.0.1:8080/w/" + params.slug + "/equipos")
+        give html(read_file("public/teams.html"))
+
+    route "GET /w/:slug/api/objectives" requires auth
+        private
+        let rows be apply(teams.obj_list(), (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "updated_at": o["updated_at"], "working": mailbox.working(o["agent"], teams.obj_scope(o))})
+        give {"objectives": rows, "teams": apply(teams.all(), (t) => {"id": t["id"], "lead": teams.lead_of(t), "description": t["description"]}), "agents": apply(where(runtime.names(), (n) => not runtime.get(n)["builtin"]), (n) => {"id": n, "description": runtime.get(n)["description"]})}
+
+    route "GET /w/:slug/api/objectives/:id" requires auth
+        private
+        let o be teams.obj_get(floor(number(params.id)))
+        when o == nothing
+            give fail(404, "no such objective")
+        let v be api.objective_view(o)
+        set v["working"] to mailbox.working(o["agent"], teams.obj_scope(o))
+        give v
+
+    route "POST /w/:slug/api/objectives/add" requires auth
+        private
+        expect body {text: text}
+        let c be api.create_objective(json of request, {"name": "person", "agents": ["*"]})
+        when not c["ok"]
+            give fail(c["status"], c["error"])
+        give api.objective_view(teams.obj_get(c["id"]))
+
+    route "POST /w/:slug/api/objectives/:id/reply" requires auth
+        private
+        let b be json of request
+        try
+            give api.objective_view(teams.obj_reply(floor(number(params.id)), when contains(b, "text") and b["text"] != nothing then text(b["text"]) otherwise "", contains(b, "approved") and b["approved"] == true, "person"))
+        recover err
+            give fail(409, regex_replace(text(err), "^.*?:\\d+:\\d+: ", ""))
+
+    route "POST /w/:slug/api/objectives/:id/cancel" requires auth
+        private
+        give api.objective_view(teams.obj_cancel(floor(number(params.id)), "person"))
+
+    route "GET /w/:slug/api/teams" requires auth
+        private
+        give api.teams_view()
+
+    route "POST /w/:slug/api/teams/save" requires auth
+        private
+        let r be api.save_team(json of request)
+        when not r["ok"]
+            give fail(400, r["error"])
+        give api.teams_view()
+
     route "GET /w/:slug/api/keys" requires auth
         private
         let pub be approvals.public_url()
@@ -937,6 +998,58 @@ serve on 8080
         private
         let r be channels.handle(params.name, {"method": "GET", "path": request.path, "query": query, "headers": headers of request, "body": ""})
         give respond(r["body"], r["ctype"], r["status"])
+
+    -- OBJETIVOS (lib/teams.syn): lo que le pedís a un agente para que trabaje solo hasta terminarlo
+    route "POST /w/:slug/v1/objectives" requires auth
+        expect body {text: text}
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let c be api.create_objective(json of request, a["key"])
+        when not c["ok"]
+            give fail(c["status"], c["error"])
+        state_set("lampson:last_used", now())
+        give respond(json_encode(api.objective_view(teams.obj_get(c["id"]))), "application/json", 201)
+
+    route "GET /w/:slug/v1/objectives" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let mine be where(teams.obj_list(), (o) => apikeys.allows(a["key"], o["agent"]))
+        give {"objectives": apply(mine, (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "turns": o["turns"], "spent": o["spent"], "updated_at": o["updated_at"]})}
+
+    route "GET /w/:slug/v1/objectives/:id" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let o be api.objective_for(params.id, a["key"])
+        when o == nothing
+            give fail(404, "no such objective")
+        give api.objective_view(o)
+
+    route "POST /w/:slug/v1/objectives/:id/reply" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let o be api.objective_for(params.id, a["key"])
+        when o == nothing
+            give fail(404, "no such objective")
+        let b be json of request
+        let txt be when contains(b, "text") and b["text"] != nothing then text(b["text"]) otherwise ""
+        let ok be contains(b, "approved") and b["approved"] == true
+        try
+            give api.objective_view(teams.obj_reply(o["id"], txt, ok, "api:" + a["key"]["name"]))
+        recover err
+            give fail(409, regex_replace(text(err), "^.*?:\\d+:\\d+: ", ""))
+
+    route "POST /w/:slug/v1/objectives/:id/cancel" requires auth
+        let a be api.authorize(headers of request)
+        when not a["ok"]
+            give api.refuse(a)
+        let o be api.objective_for(params.id, a["key"])
+        when o == nothing
+            give fail(404, "no such objective")
+        give api.objective_view(teams.obj_cancel(o["id"], "api:" + a["key"]["name"]))
 
     route "GET /w/:slug/v1/jobs/:id" requires auth
         let a be api.authorize(headers of request)

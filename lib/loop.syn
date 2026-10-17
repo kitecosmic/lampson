@@ -26,6 +26,7 @@ use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
 use "./tools/todo.syn" as todo
 use "./scope.syn" as scope
+use "./worktree.syn" as worktree
 
 let MAX_ERRORS_PER_TURN be 8
 -- capturas de computer_use (lib/computer.syn): el driver las deja en el blackboard "computer:screenshot" y acá van al
@@ -313,17 +314,39 @@ task execute(tc, opts, on_event)
     let verdict be permission.evaluate(name, args, when forced == "auto" then "yolo" otherwise opts["permission_mode"])
     when forced == "ask" and verdict["decision"] == "allow"
         set verdict to {"decision": "ask", "reason": "this agent asks before every " + name + " call"}
+    -- equipos (lib/worktree.syn): el agente trabaja en SU copia; tocar la historia compartida (merge a main, push…)
+    -- lo aprueba siempre la persona, en cualquier modo (salvo lo prohibido, que sigue prohibido)
+    let wroot be when contains(opts, "root") and opts["root"] != nothing then text(opts["root"]) otherwise ""
+    when wroot != "" and name == "bash" and verdict["decision"] != "deny"
+        let shared be worktree.touches_shared(when contains(args, "command") then args["command"] otherwise "")
+        when shared != ""
+            set verdict to {"decision": "ask", "reason": "touches the shared history (" + shared + ") — the person approves · agent " + (when contains(opts, "agent_id") then text(opts["agent_id"]) otherwise "?")}
     when verdict["decision"] == "deny"
         emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]}, tag)
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."
     when verdict["decision"] == "ask"
         let approved be false
+        let expired be false
+        let waited_min be 0
         when opts["ask_fn"] != nothing
-            set approved to call(opts["ask_fn"], {"name": name, "args": args, "why": verdict["reason"]})
+            let ans be call(opts["ask_fn"], {"name": name, "args": args, "why": verdict["reason"]})
+            -- la cola de aprobaciones (lib/mailbox.syn) dice además si nadie respondió; la terminal y el chat dan un bool
+            when type_of(ans) == "map"
+                set approved to ans["approved"] == true
+                set expired to ans["expired"] == true
+                set waited_min to ans["minutes"]
+            otherwise
+                set approved to ans == true
+        when not approved and expired
+            emit(on_event, "tool_denied", {"call": tc, "reason": "no answer to the approval request (" + verdict["reason"] + ")"}, tag)
+            give "NOT RUN: nobody answered the approval request in " + text(waited_min) + " min (" + verdict["reason"] + "). The action did not happen. Don't retry it right away: tell whoever is waiting on it (your lead with `send`, or the person with `objective` ask), keep working on what doesn't depend on it, and try again later."
         when not approved
             emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
     emit(on_event, "busy", {"label": permission.describe_call(name, args), "kind": "tool", "name": name}, tag)
+    -- su copia: las tools de archivos y bash operan ahí; los paths que ve el modelo son relativos a ella
+    when wroot != "" and (name == "bash" or contains(worktree.FILE_TOOLS, name))
+        set args to worktree.rooted(name, args, wroot)
     let out be ""
     try
         -- tools MCP: no son tasks Synsema (args libres); el registry las marca con "mcp"
@@ -332,11 +355,19 @@ task execute(tc, opts, on_event)
         -- tools de plugins: un proceso hijo por llamada (lib/plugins.syn)
         otherwise when registry[name] == "plugin"
             set out to text(plugins.call(name, args))
+        -- equipos: send/board saben quién llama por opts.agent_id (el modelo no lo elige: se pisa lo que mande)
+        otherwise when name == "send" or name == "board" or name == "objective"
+            let targs be args
+            set targs["_agent"] to when contains(opts, "agent_id") then opts["agent_id"] otherwise ""
+            set targs["_scope"] to when contains(opts, "scope") then opts["scope"] otherwise ""
+            set out to text(call_tool(registry[name], targs))
         otherwise
             set out to text(call_tool(registry[name], args))
     recover err
         set out to "ERROR: " + err
     emit(on_event, "idle", nothing, tag)
+    when wroot != ""
+        set out to replace(out, wroot + "/", "")
     give out
 
 export task run_turn(cfg, messages, opts, on_event)

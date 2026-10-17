@@ -356,13 +356,86 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
       → hecho: protocolo 2, un agente por ask; misma conversación en fila, distintas en paralelo (6 s en vez de 12).
 - [ ] Otros lenguajes: generar clientes desde `/v1/openapi.json` (5a); PHP a mano si hay demanda.
 
-### Fase 6 — Orquestación (rama propia, después del motor)
-- [ ] Tool `send(to, text)` entre agentes → `deliver` (generaliza `delegate`)
-- [ ] Tablero compartido de tareas (estado, dueño, dependencias) — blackboard de Synsema
-- [ ] Despertadores por agente: mensaje, cron (`lib/schedule.syn`), evento; sin trabajo → no corre
-- [ ] Repaso periódico barato con `judge` ("¿hay algo para mí?") antes de gastar un turno completo
-- [ ] Equipos: carpeta de agentes con roles; estilos coordinador (un jefe reparte) y tablero (cada uno toma lo suyo)
-- [ ] Presupuesto diario por agente y por equipo
+### Fase 6 — Equipos de agentes (rama `feat/teams`, desde `main` @ cdcd54d)
+
+Vocabulario fijado por Joel (2026-10-16) — vale para archivos, API, interfaz y documentación:
+
+| concepto | nombre | |
+|---|---|---|
+| un agente (`*.agent.json`) | **agente** | el mismo término de cara al usuario; nada de «asistentes» ni «empleados» |
+| el grupo que coordina | **equipo** (`team`) | `.lampson/teams/<id>.team.json` |
+| lo que hace cada uno en el equipo | **rol** | texto libre: ventas, soporte, CEO… |
+| la lista compartida de trabajo | **tablero** (`board`) con **tareas** | dueño, estado, dependencias |
+| cuándo un agente trabaja solo | **ronda** | mira si hay algo para él; sin trabajo, no gasta |
+| de un agente a otro | **mensaje** (tool `send`) | entra por el buzón, como un cliente |
+| lo que le pedís a un agente o a un equipo | **objetivo** | «reservame…», «buscá el precio más barato…», «agregá tal feature» |
+
+**Dos superficies, un motor** (decidido con Joel, 2026-10-16):
+
+- **Objetivos** — le pedís algo a un agente y trabaja solo hasta terminarlo: arma su plan como tareas en el tablero,
+  avanza en rondas, cuenta en qué está, deja el resultado, y pide aprobación (celular) antes de cualquier acción hacia
+  afuera (reservar, comprar, mandar, mergear). Un objetivo es un equipo de un agente.
+- **Equipos** — un lienzo (grafo) en la web: nodos = agentes con puesto, personalidad, modelo, tools y permisos;
+  flechas = a quién reporta / a quién puede escribir. Al lado, el tablero y la actividad en vivo. Sirve para algo chico
+  (ventas + soporte) y para una empresa (CEO, CTO, CPO, CMO, dev) sobre un repo: cada agente en su rama (worktree) y con
+  su nombre de autor; la persona aprueba lo que llega a `main`.
+- Web: una sección nueva con dos pestañas, **Objetivos** y **Equipos**.
+
+**Orden** (Joel): primero el motor común, después **Objetivos**, después **Equipos**. **Escenario de prueba real:**
+una empresa sobre un repo de prueba — primero el objetivo de un solo agente (el CTO recibe «agregá tal feature»,
+planifica, trabaja en su rama en rondas y pide aprobación para mergear); después el equipo completo sobre el mismo
+repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anuncio).
+
+#### 6a — Motor común
+- [x] Tool `send(recipient, message)` entre agentes → base → `lib/teamrun.syn` (tick cada 3 s) → buzón del destinatario, thread `team:<id>`; el grafo del equipo decide quién le escribe a quién (jefe ↔ reporte + `talks`), lo demás se rechaza
+- [x] Tablero: tareas {id, título, dueño, estado, depende de, notas} en SQLite (`.lampson/teams.db`), tool `board`
+      (list/add/claim/update/show/log); tomar es atómico; mueve el dueño, quien la creó o un jefe del dueño
+- [x] Registro (ledger) de todo; cada turno de equipo arranca con «desde tu último turno» + sus tareas + las sin dueño
+- [ ] Eventos por el bus para la web (con la pantalla)
+- [x] Rondas por agente (`round_minutes` del equipo): solo con trabajo (novedades de otros o tareas suyas abiertas),
+      una por intervalo; el hub mantiene vivo un workspace con equipos que hacen rondas
+- [ ] Repaso barato con `judge` antes de un turno completo (si las rondas resultan caras en la prueba real)
+- [x] Presupuesto diario por agente dentro del equipo (`budget_daily_tokens`); al llegar no recibe turnos y queda una
+      entrada en el registro por día
+- [x] Aprobaciones: las del buzón de siempre (cola de aprobación → UI / celular), con el permiso del archivo del agente
+
+#### 6b — Objetivos
+- [x] Objetivo = {id, texto, agente, estado, informe, pregunta, resultado, turnos, gasto, presupuesto} en la tabla
+      `objectives`; conversación y tablero propios (`objective:<id>`); tool `objective` (report, ask, request_approval,
+      done, fail); el pulso da un turno al terminar el anterior + `round_seconds`; esperando no gasta; sin presupuesto
+      se pausa y «seguir» da otro tramo. API `/v1/objectives` (crear, listar, ver, responder/aprobar, cancelar) y
+      la privada de la pantalla. CLI: pendiente
+- [x] Pantalla propia `/w/<slug>/equipos` (public/teams.html, css/teams.css, js/teams.js), a pantalla completa, con
+      enlace «equipos» desde la cabecera: pestaña **Objetivos** (lista, nuevo, detalle con tablero kanban, informe,
+      resultado, cancelar; registro en vivo) y franja fija de lo que espera a la persona (aprobar / denegar /
+      responder); pestaña **Equipos** con el grafo (quién reporta a quién, quién también se habla, quién trabaja
+      ahora, flechas que se encienden con cada mensaje), tablero y registro. Se actualiza cada 2,5 s
+- [x] Repo de prueba `Desktop/proyectos/empresa-demo` (API de tareas en Node, `npm test`). Corrida real con
+      glm-5.3-flash: el CTO planificó 4 tareas, creó `cto/filtro-estado`, implementó `?done=true|false` con 2 tests,
+      commiteó como «CTO (Lampson)» y pidió aprobación (1 turno, 12 pasos); aprobado por la API, mergeó a main con
+      `--no-ff` y terminó con el resultado (2.º turno, 3 pasos). 25,6k tokens de costo. 5/5 tests en main.
+      Pendiente de 6c: el commit de merge quedó con el autor del repo, no el del agente
+- [ ] Documentación (en/es/pt) con la corrida real
+
+#### 6c — Equipos
+- [x] `.lampson/teams/<id>.team.json`: agentes, roles, quién reporta a quién, `talks`, `round_minutes`,
+      `budget_daily_tokens`, `worktrees`; la personalidad es el archivo de cada agente
+- [x] Ramas por agente: `lib/worktree.syn` crea `.lampson/worktrees/<agente>` en `team/<equipo>/<agente>` con su autor
+      (config por worktree; `.lampson/` en `.git/info/exclude`); el loop traduce rutas y bash a esa copia; un merge,
+      rebase, reset o push que sale de su copia pide aprobación SIEMPRE (cola de aprobaciones, 30 min, con el nombre
+      del agente). Los merges a main quedan con el autor de la copia principal (la persona que aprobó)
+- [x] Pestaña **Equipos**: grafo en vivo + editor (crear equipo, agregar/quitar agentes, rol, a quién reporta, con
+      quién más habla, personalidad, herramientas, permiso; guarda el equipo y los archivos de agentes). Objetivos
+      para un equipo desde el mismo formulario. Las aprobaciones de la cola también en la franja
+- [x] Escenario real (glm-5.3-flash, 8 minutos, 3 turnos del CEO, 367k tokens de costo entre los cinco): O-2 «lanzar
+      la v0.2: prioridad alta/media/baja, sort=priority, 400 si inválida, requisitos, tests, changelog y anuncio». El
+      CEO repartió; el CPO escribió 12 requisitos con criterios de aceptación; el CTO le pasó al Dev un brief
+      concreto; el Dev implementó con 5 tests nuevos (10/10); el CTO revisó contra los requisitos y pidió tres merges
+      (requisitos, código, docs) — los tres esperaron mi aprobación en la cola y los aprobé después de revisar cada
+      rama; el CMO escribió CHANGELOG.md y docs/anuncio-v0.2.md; el CEO verificó y cerró. Commits con el nombre de
+      cada agente. Encontrado: el objetivo nuevo despertó a todos en la misma ronda y se armaron 6 tareas duplicadas
+      (el equipo las limpió solo) → las rondas ahora despiertan solo por lo que es para el agente
+- [ ] Documentación (en/es/pt) con la corrida real
 
 ## Estado
 
@@ -392,6 +465,35 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — 6c (Equipos) andando con la empresa completa sobre empresa-demo (ver 6c). Decisiones: cada agente
+  en su `git worktree` y el loop traduce sus rutas (el agente ve su copia como raíz) en lugar de tocar cada tool; la
+  aprobación de lo que toca la historia compartida es del MOTOR (loop + cola de aprobaciones), no del prompt; el
+  objetivo de un equipo lo lidera el primero sin jefe, vive en el tablero del equipo y suma el gasto de todos; una ronda
+  solo despierta a un agente por lo que es para él (tareas suyas, mensajes y asignaciones a él; al líder, la persona).
+  Cerrada el mismo día: CLI (`lampson objective …`, `lampson team list`), los agentes saben cuando una aprobación
+  venció (no es un «no»), un mensaje que nadie leería se rechaza, un turno fallido queda en el registro;
+  documentación en lampson-site (objectives, teams, API, comandos, interfaz, portada; en/es/pt) y merge a main.
+
+- **2026-10-16** — 6b (Objetivos) andando de punta a punta con un modelo real (ver la fase 6b). Decisiones: un
+  objetivo es un equipo de un agente — misma base, mismo registro y mismo tablero, con scope `objective:<id>`; el
+  agente lo trabaja en su propia conversación y la tool `objective` es su único canal con la persona (informar,
+  preguntar, pedir aprobación, terminar). Aprobar algo irreversible es una REGLA del texto del objetivo y de la tool
+  (la aplicación dura de «no mergear sin aprobación» llega con las ramas por agente de 6c). Bug encontrado: el buzón
+  recibía `buffer: false` y su worker moría en silencio, dejando la conversación trabada para siempre; ahora
+  `mailbox.submit` normaliza el valor. La pantalla es una página aparte (no un panel), como pidió Joel.
+
+- **2026-10-16** — 6a (motor común de equipos) hecho. `lib/teams.syn` (archivo de equipo, grafo, SQLite con tareas,
+  registro, mensajes, cursores, rondas, gasto; tools `send` y `board`) + `lib/teamrun.syn` (el pulso: entrega y
+  rondas por el buzón). Decisiones: una conversación por agente y equipo (`team:<id>`) en lugar de una por par —
+  el agente tiene todo su trabajo en un solo hilo; su respuesta final no la ve nadie (para hablar, `send`; para
+  avanzar, el tablero). Los miembros de un equipo reciben `send`/`board` solos y su rol va al prompt. Quién llama lo
+  pone el loop (`opts.agent_id` → `_agent`), el modelo no puede elegirlo (probado: un `_agent` falso se pisa).
+  `call_tool` pasa los args como parámetros con nombre: `to` es palabra reservada y `text` un builtin, por eso los
+  parámetros son `recipient`/`message`.
+
+- **2026-10-16** — Arranca la fase 6 en `feat/teams`. Nombres: agente, equipo, rol, tablero/tareas, ronda, mensaje
+  (tabla en la fase 6). «Agente» también de cara al usuario: un solo término en archivos, API, interfaz y docs.
 
 - **2026-10-16** — **Pedidos por chat de punta a punta, probado con una conversación real** (modelo `glm-5.3-flash`,
   cliente escribiendo en ráfagas con pausas de 2 a 6 s, por `/v1/messages` a través del hub — el mismo buzón que

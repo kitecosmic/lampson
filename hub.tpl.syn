@@ -178,6 +178,17 @@ serve on 8080
             ws.summary()
         give html(read_file("public/index.html"))
 
+    -- la pantalla de equipos y objetivos de un workspace (public/teams.html): página propia, a pantalla completa
+    route "GET /w/:slug/equipos"
+        when not page_allowed(request)
+            give redirect("/login", 302)
+        let w be ws.get(params.slug)
+        when w != nothing and ws.health(w) == nothing
+            ws.start_ws(w)
+            ws.wait_ready(w, 8)
+            ws.summary()
+        give html(read_file("public/teams.html"))
+
     route "GET /api/hub" requires auth
         give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home(), "local": request.user["local"]}
 

@@ -21,6 +21,8 @@ require file("memory")
 require file("memory/*")
 require file(".lampson")
 require file(".lampson/*")
+require db(".lampson/teams.db")
+use "./lib/teams.syn" as teams
 use "./lib/runtime.syn" as runtime
 use "./lib/agents.syn" as agents
 use "./lib/session.syn" as session
@@ -290,6 +292,24 @@ check(contains(rpc(9, "tools/call", {"name": "history", "arguments": {"thread": 
 set created to append(created, sc1["session"])
 set threads to append(threads, ["rt-shop", text(sc1["thread"])])
 proc_close(mp)
+
+print("lampson objective / team (CLI): crear, listar, ver, responder, cancelar — directo a la base del workspace")
+write_file(teams.DIR + "/rt-cli.team.json", json_encode({"id": "rt-cli", "members": [{"agent": "rt-shop", "role": "Jefe"}, {"agent": "rt-mute", "role": "Otro", "reports_to": "rt-shop"}]}))
+let tl be run_cli({"LAMPSON_TEAM_CMD": "list"})
+check(tl["code"] == 0 and contains(tl["out"], "rt-cli") and contains(tl["out"], "rt-mute  Otro  → reporta a rt-shop"), "team list: " + slice(tl["out"], 0, 160))
+let oa be run_cli({"LAMPSON_OBJ_CMD": "add", "LAMPSON_MESSAGE": "probar el cli", "LAMPSON_OBJ_TEAM": "rt-cli", "LAMPSON_OBJ_BUDGET": "1000"})
+check(oa["code"] == 0 and contains(oa["out"], "creado para el equipo rt-cli (lo lidera rt-shop)"), "objective add --team: " + oa["out"])
+let new_id be regex_replace(regex_capture(oa["out"], "objetivo O-([0-9]+)")[0], "[^0-9]", "")
+let ol be run_cli({"LAMPSON_OBJ_CMD": "list"})
+check(contains(ol["out"], "O-" + new_id + "  active  equipo rt-cli (rt-shop)"), "objective list")
+check(contains(run_cli({"LAMPSON_OBJ_CMD": "show", "LAMPSON_OBJ_ID": new_id})["out"], "gastado 0 de 1000 tokens"), "objective show")
+teams.obj_set(floor(number(new_id)), {"status": "waiting", "question": "¿mergeo?", "question_kind": "approval"})
+check(run_cli({"LAMPSON_OBJ_CMD": "reply", "LAMPSON_OBJ_ID": new_id, "LAMPSON_MESSAGE": "dale"})["code"] == 2, "una aprobación pide --approve o --deny")
+let rp be run_cli({"LAMPSON_OBJ_CMD": "reply", "LAMPSON_OBJ_ID": new_id, "LAMPSON_OBJ_DECISION": "approve", "LAMPSON_MESSAGE": "dale"})
+check(rp["code"] == 0 and starts_with(teams.obj_get(floor(number(new_id)))["reply"], "[approved by person] ¿mergeo?"), "objective reply --approve")
+check(contains(run_cli({"LAMPSON_OBJ_CMD": "cancel", "LAMPSON_OBJ_ID": "O-" + new_id})["out"], "cancelado") and teams.obj_get(floor(number(new_id)))["status"] == "cancelled", "objective cancel (acepta O-<id>)")
+check(run_cli({"LAMPSON_OBJ_CMD": "add", "LAMPSON_MESSAGE": "x", "LAMPSON_OBJ_TEAM": "no-existe"})["code"] == 2, "equipo inexistente → error")
+rm_file(teams.DIR + "/rt-cli.team.json")
 
 -- limpieza
 -- por thread también: si un check falló a mitad, la sesión del thread igual se borra
