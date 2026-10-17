@@ -380,17 +380,41 @@ export task over_budget(team, agent)
     give team["budget_daily_tokens"] > 0 and spent_today(agent) >= team["budget_daily_tokens"]
 
 -- ---------- rondas ----------
--- ¿tiene `agent` algo que hacer en el equipo? novedades de otros en el registro, o tareas suyas abiertas
+-- ¿tiene `agent` algo que hacer en el equipo? tareas suyas abiertas, o novedades que son PARA él: una tarea que le
+-- asignaron, una de las suyas que otro movió, y (si lidera) lo que dijo la persona. El resto del movimiento del equipo
+-- lo ve cuando le toca un turno por otra cosa. (Visto 2026-10-16: con «cualquier novedad», el objetivo nuevo despertó
+-- a los cinco a la vez y cada uno se armó sus propias tareas: seis duplicados que el equipo tuvo que limpiar.)
 export task has_work(scope, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
     require file(".lampson/*")
     open()
+    let mine be sql("SELECT COUNT(*) AS n FROM tasks WHERE scope = ? AND owner = ? AND status IN ('todo', 'doing')", [scope, agent])
+    when mine[0]["n"] > 0
+        give true
     let cur be sql("SELECT last FROM cursors WHERE agent = ? AND scope = ?", [agent, scope])
     let after be when length(cur) == 0 then 0 otherwise cur[0]["last"]
-    let news be sql("SELECT COUNT(*) AS n FROM ledger WHERE scope = ? AND id > ? AND actor != ?", [scope, after, agent])
-    let mine be sql("SELECT COUNT(*) AS n FROM tasks WHERE scope = ? AND owner = ? AND status IN ('todo', 'doing')", [scope, agent])
-    give news[0]["n"] > 0 or mine[0]["n"] > 0
+    let leads be false
+    when starts_with(scope, "team:")
+        let tm be get(slice(scope, 5, length(scope)))
+        set leads to tm != nothing and lead_of(tm) == agent
+    each r in sql("SELECT * FROM ledger WHERE scope = ? AND id > ? AND actor != ?", [scope, after, agent])
+        when r["kind"] == "message" and r["ref"] == "→ " + agent
+            give true
+        when r["kind"] == "added" and ends_with(r["text"], "→ " + agent)
+            give true
+        when r["kind"] == "updated" and (contains(r["text"], "owner " + agent) or owner_of(scope, r["ref"]) == agent)
+            give true
+        when leads and contains(["objective", "approved", "denied", "answered"], r["kind"])
+            give true
+    give false
+
+-- el dueño de una tarea por su ref ("#12")
+task owner_of(scope, ref)
+    when not starts_with(text(ref), "#")
+        give ""
+    let t be task_get(scope, floor(number(slice(text(ref), 1, length(text(ref))))))
+    give when t == nothing then "" otherwise t["owner"]
 
 -- marca la ronda si toca: true = toca ahora (y queda registrada), false = todavía no
 export task round_due(team, agent)

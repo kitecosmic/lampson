@@ -418,10 +418,23 @@ repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anunci
 - [ ] Documentación (en/es/pt) con la corrida real
 
 #### 6c — Equipos
-- [ ] `.lampson/teams/<id>.team.json`: agentes, roles, personalidad, quién reporta a quién, quién escribe a quién
-- [ ] Ramas por agente (git worktree) y autor por agente en los commits; merge a `main` con aprobación
-- [ ] Pestaña **Equipos**: lienzo para crear y editar (nodos y flechas), tablero y actividad en vivo
-- [ ] Escenario real: la empresa completa sobre el repo de prueba
+- [x] `.lampson/teams/<id>.team.json`: agentes, roles, quién reporta a quién, `talks`, `round_minutes`,
+      `budget_daily_tokens`, `worktrees`; la personalidad es el archivo de cada agente
+- [x] Ramas por agente: `lib/worktree.syn` crea `.lampson/worktrees/<agente>` en `team/<equipo>/<agente>` con su autor
+      (config por worktree; `.lampson/` en `.git/info/exclude`); el loop traduce rutas y bash a esa copia; un merge,
+      rebase, reset o push que sale de su copia pide aprobación SIEMPRE (cola de aprobaciones, 30 min, con el nombre
+      del agente). Los merges a main quedan con el autor de la copia principal (la persona que aprobó)
+- [x] Pestaña **Equipos**: grafo en vivo + editor (crear equipo, agregar/quitar agentes, rol, a quién reporta, con
+      quién más habla, personalidad, herramientas, permiso; guarda el equipo y los archivos de agentes). Objetivos
+      para un equipo desde el mismo formulario. Las aprobaciones de la cola también en la franja
+- [x] Escenario real (glm-5.3-flash, 8 minutos, 3 turnos del CEO, 367k tokens de costo entre los cinco): O-2 «lanzar
+      la v0.2: prioridad alta/media/baja, sort=priority, 400 si inválida, requisitos, tests, changelog y anuncio». El
+      CEO repartió; el CPO escribió 12 requisitos con criterios de aceptación; el CTO le pasó al Dev un brief
+      concreto; el Dev implementó con 5 tests nuevos (10/10); el CTO revisó contra los requisitos y pidió tres merges
+      (requisitos, código, docs) — los tres esperaron mi aprobación en la cola y los aprobé después de revisar cada
+      rama; el CMO escribió CHANGELOG.md y docs/anuncio-v0.2.md; el CEO verificó y cerró. Commits con el nombre de
+      cada agente. Encontrado: el objetivo nuevo despertó a todos en la misma ronda y se armaron 6 tareas duplicadas
+      (el equipo las limpió solo) → las rondas ahora despiertan solo por lo que es para el agente
 - [ ] Documentación (en/es/pt) con la corrida real
 
 ## Estado
@@ -452,6 +465,13 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-16** — 6c (Equipos) andando con la empresa completa sobre empresa-demo (ver 6c). Decisiones: cada agente
+  en su `git worktree` y el loop traduce sus rutas (el agente ve su copia como raíz) en lugar de tocar cada tool; la
+  aprobación de lo que toca la historia compartida es del MOTOR (loop + cola de aprobaciones), no del prompt; el
+  objetivo de un equipo lo lidera el primero sin jefe, vive en el tablero del equipo y suma el gasto de todos; una ronda
+  solo despierta a un agente por lo que es para él (tareas suyas, mensajes y asignaciones a él; al líder, la persona).
+  Pendiente para cerrar la fase: CLI de objetivos, documentación (en/es/pt) y merge a main.
 
 - **2026-10-16** — 6b (Objetivos) andando de punta a punta con un modelo real (ver la fase 6b). Decisiones: un
   objetivo es un equipo de un agente — misma base, mismo registro y mismo tablero, con scope `objective:<id>`; el
