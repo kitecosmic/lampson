@@ -54,7 +54,7 @@ function renderProjects() {
   const withStuff = data.filter((w) => w.teams.length || w.objectives.length);
   const rest = data.filter((w) => !w.teams.length && !w.objectives.length);
   $('#projects').innerHTML = (withStuff.length ? withStuff.map((w) => `
-    <section class="proj">
+    <section class="pblock">
       <div class="projhead"><a href="/w/${esc(w.slug)}/equipos" class="pname">${esc(short(w.slug))}</a><span class="ppath">${esc(w.path)}</span>
         <span class="spacer"></span>${w.alive ? '<span class="dot on"></span>' : '<span class="dot"></span>'}<a class="open" href="/w/${esc(w.slug)}/equipos">abrir →</a></div>
       <div class="pcols">

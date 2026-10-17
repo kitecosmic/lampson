@@ -168,7 +168,7 @@ body.home .homegrid { flex:1; overflow:auto; padding:22px 28px 60px; }
 .newteam .opt { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:14px; }
 .newteam input:not([type]), .newteam select { font:400 13.5px/1.4 var(--serif); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule-2); border-radius:2px; padding:6px 8px; min-width:220px; }
 .newteam .row2 { max-width:420px; }
-.proj { border:1px solid var(--rule); border-radius:3px; margin:0 0 18px; }
+.pblock { border:1px solid var(--rule); border-radius:3px; margin:0 0 18px; }
 .projhead { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--rule); background:var(--paper-2); }
 .pname { font:600 15px/1 var(--mono); color:var(--ink); text-decoration:none; }
 .ppath { font:400 11px/1 var(--mono); color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
