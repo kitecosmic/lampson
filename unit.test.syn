@@ -1703,6 +1703,9 @@ test "equipos: el grafo es una regla — a quién le puede escribir cada uno"
     assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "nadie", "message": "x"}), "not in team"))
     assert(contains(teams.send_with({"recipient": "ttcto", "message": "x"}), "who is sending"), "sin _agent no hay send")
     assert(contains(teams.send_with({"_agent": "rt-ajeno", "recipient": "ttcto", "message": "x"}), "not in any team"))
+    rm_file(runtime.PROJECT_DIR + "/ttcmo.agent.json")
+    assert(contains(teams.send_with({"_agent": "ttceo", "recipient": "ttcmo", "message": "x"}), "has no agent file"), "un mensaje que nadie leería se rechaza en el momento")
+    write_file(runtime.PROJECT_DIR + "/ttcmo.agent.json", json_encode({"id": "ttcmo", "system": "Eres ttcmo.", "tools": ["read"], "permission": "strict"}))
     let p be where(teams.pending(), (m) => m["scope"] == "team:t-test")
     assert(length(p) == 1 and p[0]["sender"] == "ttdev" and p[0]["recipient"] == "ttcto")
 

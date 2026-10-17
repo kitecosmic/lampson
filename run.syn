@@ -39,6 +39,7 @@ require file("memory/*")
 require file(".lampson")
 require file(".lampson/*")
 
+use "./lib/teams.syn" as teams
 use "./lib/runtime.syn" as runtime
 use "./lib/agents.syn" as agents
 use "./lib/mcp.syn" as mcp
@@ -103,6 +104,103 @@ when key_cmd != ""
     otherwise
         print("uso: lampson key add [--agent ID[,ID]] [--name NOMBRE] · lampson key list · lampson key remove <id>")
         exit(2)
+    exit(0)
+
+-- `lampson objective add|list|show|reply|cancel` y `lampson team list` (lib/teams.syn): sin servidor, directo a la base
+-- del workspace; el pulso del proceso del workspace (lib/teamrun.syn) los hace avanzar
+--   LAMPSON_OBJ_CMD=add  LAMPSON_MESSAGE=<texto> [LAMPSON_OBJ_AGENT | LAMPSON_OBJ_TEAM] [LAMPSON_OBJ_BUDGET] [LAMPSON_OBJ_ROUND]
+--   list · show/cancel LAMPSON_OBJ_ID · reply LAMPSON_OBJ_ID LAMPSON_MESSAGE [LAMPSON_OBJ_DECISION=approve|deny]
+let obj_cmd be env("LAMPSON_OBJ_CMD", "")
+task obj_line(o)
+    give "  " + "O-" + text(o["id"]) + "  " + o["status"] + "  " + (when o["team"] != "" then "equipo " + o["team"] + " (" + o["agent"] + ")" otherwise o["agent"]) + "  · " + slice(o["text"], 0, 70) + (when length(o["text"]) > 70 then "…" otherwise "")
+when obj_cmd != ""
+    let oid be floor(number(when matches(env("LAMPSON_OBJ_ID", ""), "[Oo]?-?[0-9]+") then regex_replace(env("LAMPSON_OBJ_ID", ""), "[^0-9]", "") otherwise "0"))
+    when obj_cmd == "add"
+        let txt be trim(env("LAMPSON_MESSAGE", ""))
+        let tid be lower(trim(env("LAMPSON_OBJ_TEAM", "")))
+        let ag be lower(trim(env("LAMPSON_OBJ_AGENT", "")))
+        when txt == ""
+            print("uso: lampson objective add \"qué tiene que lograr\" --agent ID | --team ID [--budget TOKENS] [--round SEGUNDOS]")
+            exit(2)
+        when tid != ""
+            let tm be teams.get(tid)
+            when tm == nothing
+                print("lampson objective: no hay un equipo '" + tid + "' · equipos: " + join(apply(teams.all(), (t) => t["id"]), ", "))
+                exit(2)
+            when ag == ""
+                set ag to teams.lead_of(tm)
+            when teams.member(tm, ag) == nothing
+                print("lampson objective: " + ag + " no está en el equipo " + tid)
+                exit(2)
+        when ag == "" or runtime.get(ag) == nothing
+            print("lampson objective: decí qué agente (--agent ID) o qué equipo (--team ID) · agentes: " + join(runtime.names(), ", "))
+            exit(2)
+        let oopts be {"created_by": "cli", "team": tid}
+        when env("LAMPSON_OBJ_BUDGET", "") != ""
+            set oopts["budget_tokens"] to int(env("LAMPSON_OBJ_BUDGET", "0"))
+        when env("LAMPSON_OBJ_ROUND", "") != ""
+            set oopts["round_seconds"] to int(env("LAMPSON_OBJ_ROUND", "20"))
+        let nid be teams.obj_create(ag, txt, oopts)
+        print("objetivo O-" + text(nid) + " creado para " + (when tid != "" then "el equipo " + tid + " (lo lidera " + ag + ")" otherwise ag) + ". Arranca en segundos si el workspace está prendido (el hub lo mantiene) · lampson objective show " + text(nid) + " · pantalla: http://127.0.0.1:8080/w/" + env("LAMPSON_WS", "<slug>") + "/equipos?o=" + text(nid))
+        exit(0)
+    when obj_cmd == "list"
+        let all_o be teams.obj_list()
+        when length(all_o) == 0
+            print("sin objetivos en este workspace (lampson objective add \"…\" --agent ID | --team ID)")
+        each o in all_o
+            print(obj_line(o))
+        exit(0)
+    let o be teams.obj_get(oid)
+    when o == nothing
+        print("lampson objective: no existe O-" + text(oid) + " (lampson objective list)")
+        exit(2)
+    when obj_cmd == "show"
+        print(obj_line(o))
+        print("  turnos " + text(o["turns"]) + " · gastado " + text(o["spent"]) + (when o["budget_tokens"] > 0 then " de " + text(o["budget_tokens"]) otherwise "") + " tokens")
+        when o["question"] != ""
+            print("  " + (when o["question_kind"] == "approval" then "PIDE APROBACIÓN: " otherwise "PREGUNTA: ") + o["question"] + "\n  → lampson objective reply " + text(oid) + (when o["question_kind"] == "approval" then " --approve | --deny [\"nota\"]" otherwise " \"tu respuesta\""))
+        when o["progress"] != ""
+            print("  último informe: " + o["progress"])
+        when o["result"] != ""
+            print("  resultado: " + o["result"])
+        let ts be teams.tasks(teams.obj_scope(o))
+        when length(ts) > 0
+            print("  tablero:")
+            each t in ts
+                print("    #" + text(t["id"]) + " [" + t["status"] + "] " + t["title"] + (when t["owner"] != "" then " — " + t["owner"] otherwise ""))
+        exit(0)
+    when obj_cmd == "reply"
+        let dec be lower(env("LAMPSON_OBJ_DECISION", ""))
+        when o["question_kind"] == "approval" and dec == ""
+            print("lampson objective: O-" + text(oid) + " pide aprobación — respondé con --approve o --deny (y una nota opcional)")
+            exit(2)
+        when o["question_kind"] != "approval" and trim(env("LAMPSON_MESSAGE", "")) == "" and dec == ""
+            print("lampson objective: escribí la respuesta: lampson objective reply " + text(oid) + " \"…\"")
+            exit(2)
+        try
+            teams.obj_reply(oid, env("LAMPSON_MESSAGE", ""), dec == "approve", "person")
+            print("respondido: O-" + text(oid) + " sigue trabajando")
+        recover err
+            print("lampson objective: " + regex_replace(text(err), "^.*?:\\d+:\\d+: ", ""))
+            exit(2)
+        exit(0)
+    when obj_cmd == "cancel"
+        teams.obj_cancel(oid, "person")
+        print("O-" + text(oid) + " cancelado")
+        exit(0)
+    print("uso: lampson objective add \"…\" --agent ID|--team ID · objective list · objective show <id> · objective reply <id> \"…\" [--approve|--deny] · objective cancel <id>")
+    exit(2)
+
+when env("LAMPSON_TEAM_CMD", "") != ""
+    let sc be teams.scan()
+    when length(sc["teams"]) == 0
+        print("sin equipos en este workspace: un equipo es .lampson/teams/<id>.team.json (o creálo en la pantalla: lampson --web → equipos)")
+    each t in sc["teams"]
+        print("  " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "  · rondas " + (when t["round_minutes"] > 0 then "cada " + text(floor(t["round_minutes"])) + " min" otherwise "no") + " · tope " + (when t["budget_daily_tokens"] > 0 then text(t["budget_daily_tokens"]) + "/agente/día" otherwise "sin tope"))
+        each m in t["members"]
+            print("      " + m["agent"] + "  " + m["role"] + (when m["reports_to"] != "" then "  → reporta a " + m["reports_to"] otherwise "  (lidera)") + (when runtime.get(m["agent"]) == nothing then "  ⚠ sin archivo de agente" otherwise ""))
+    each e in sc["errors"]
+        print("  ✗ " + e)
     exit(0)
 
 -- `lampson channel list|on|off|setup [canal]`: los canales (plugins con "channel", lib/channels.syn)

@@ -128,6 +128,23 @@ const r = await lampson.ask({ agent: "shop", thread: "customer-42", text: "do yo
 
 Docs: **[lampson.org/docs/engine](https://lampson.org/docs/engine)**. Design and status: [spec/engine.md](spec/engine.md).
 
+## Objectives and teams
+
+Give an agent an **objective** and it works on it by itself until it's done: it plans on its board, works in
+rounds, reports, and asks you before anything irreversible (merge, push, buy, send). Or give it to a **team**: agents
+with roles (CEO, CTO, Dev…), each in its own git worktree with its own branch and author, coordinating through
+messages and a shared board — and nothing reaches `main` without your approval.
+
+```sh
+lampson objective add "Add task priorities with tests; ask me before merging" --team company
+lampson objective list · objective show 2 · objective reply 2 --approve · objective cancel 2
+lampson team list
+```
+
+A full-screen view at `http://127.0.0.1:8080/w/<workspace>/equipos` (button **equipos** in the web UI) shows the
+objectives, what waits for you, the team as a live graph, its board and its record — and lets you build the team.
+→ **[lampson.org/docs/teams](https://lampson.org/docs/teams)**
+
 ## Also in the box
 
 Sub-agents that work in parallel · skills (`SKILL.md` procedures, anything on [skills.sh](https://skills.sh)

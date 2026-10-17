@@ -319,6 +319,10 @@ export task send(team, sender, dest, txt)
     require file(".lampson")
     require file(".lampson/*")
     require time
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require file.read("agents")
+    require file.read("agents/*")
     open()
     let d be lower(trim(text(dest)))
     when member(team, d) == nothing
@@ -328,6 +332,8 @@ export task send(team, sender, dest, txt)
         raise("you can't message " + d + " in team " + team["id"] + " — you can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")))
     when trim(text(txt)) == ""
         raise("empty message")
+    when not file_exists("workspace/.lampson/agents/" + d + ".agent.json") and not file_exists("agents/" + d + ".agent.json")
+        raise(d + " is in the team but has no agent file, so nobody would read it — tell the person (the team needs .lampson/agents/" + d + ".agent.json)")
     let scope be "team:" + team["id"]
     let id be sql_exec("INSERT INTO messages (scope, sender, recipient, text, at) VALUES (?, ?, ?, ?, ?)", [scope, sender, d, text(txt), now()])["last_id"]
     log(scope, sender, "message", "→ " + d, text(txt))
@@ -482,6 +488,8 @@ export let BOARD_SPEC be {
 -- call_tool pasa los args del modelo como parámetros CON NOMBRE (y `to`/`text` no sirven de nombre: palabra
 -- reservada y builtin). Las versiones *_with reciben el mapa (los tests las usan directo).
 export task send_tool(recipient, message, team, _agent, _scope)
+    require file.read("agents")
+    require file.read("agents/*")
     require db(".lampson/teams.db")
     require file(".lampson")
     require file(".lampson/*")
@@ -504,6 +512,8 @@ export task board_tool(action, id, title, notes, owner, status, depends, mine, t
     give board_with(a)
 
 export task send_with(args)
+    require file.read("agents")
+    require file.read("agents/*")
     require db(".lampson/teams.db")
     require file(".lampson")
     require file(".lampson/*")

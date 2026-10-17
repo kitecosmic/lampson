@@ -22,6 +22,7 @@
 -- resultados, entrega los callbacks (uno por lote y por URL) y se va cuando la fila queda vacía. Tomar la fila y
 -- soltar el worker ocurren bajo el mismo lock: un mensaje que llega en ese instante nunca queda huérfano.
 
+use "./teams.syn" as teams
 use "./runtime.syn" as runtime
 use "./loop.syn" as loop
 use "./agents.syn" as agents
@@ -199,7 +200,7 @@ export task approve_queue(name, args, why)
     -- tocar la historia compartida (merge a main desde la copia de un agente): la persona tiene 30 min, no 3
     let tmo be when contains(text(why), "shared history") then 1800 otherwise APPROVAL_TIMEOUT
     let id be approvals.open("api", permission.describe_call(name, args), why, tmo)
-    give approvals.wait(id, tmo)
+    give approvals.wait_detail(id, tmo)
 
 -- ---------- el worker ----------
 
@@ -297,6 +298,13 @@ task run_batch(k, spec, items)
         set result to {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": o["session"], "text": r["text"], "steps": r["steps"], "usage": r["usage"], "stopped": r["stopped"]}
     recover err
         set result to {"agent": lead["to"], "thread": lead["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+    -- equipos y objetivos: un turno que falló (proveedor caído, error del runtime) queda en el registro del equipo —
+    -- lo ven el líder en su próximo turno y la pantalla; si no, el equipo esperaría en silencio
+    when starts_with(text(result["stopped"]), "error") and (starts_with(text(lead["thread"]), "team:") or starts_with(text(lead["thread"]), "objective:"))
+        try
+            teams.log(lead["thread"], result["agent"], "error", "", "turn failed: " + slice(text(result["stopped"]), 0, 300))
+        recover err
+            set err to err
     let ids be apply((it) => it["id"], all)
     set result["batch"] to ids
     set result["lead"] to lead["id"]

@@ -326,8 +326,20 @@ task execute(tc, opts, on_event)
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."
     when verdict["decision"] == "ask"
         let approved be false
+        let expired be false
+        let waited_min be 0
         when opts["ask_fn"] != nothing
-            set approved to call(opts["ask_fn"], {"name": name, "args": args, "why": verdict["reason"]})
+            let ans be call(opts["ask_fn"], {"name": name, "args": args, "why": verdict["reason"]})
+            -- la cola de aprobaciones (lib/mailbox.syn) dice además si nadie respondió; la terminal y el chat dan un bool
+            when type_of(ans) == "map"
+                set approved to ans["approved"] == true
+                set expired to ans["expired"] == true
+                set waited_min to ans["minutes"]
+            otherwise
+                set approved to ans == true
+        when not approved and expired
+            emit(on_event, "tool_denied", {"call": tc, "reason": "no answer to the approval request (" + verdict["reason"] + ")"}, tag)
+            give "NOT RUN: nobody answered the approval request in " + text(waited_min) + " min (" + verdict["reason"] + "). The action did not happen. Don't retry it right away: tell whoever is waiting on it (your lead with `send`, or the person with `objective` ask), keep working on what doesn't depend on it, and try again later."
         when not approved
             emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
