@@ -1,0 +1,36 @@
+name: publish to PyPI
+# Publishes the Python SDK (sdk/python) when a version tag is pushed, like publish.yml does for npm. No PyPI token:
+# PyPI "trusted publishing" accepts this workflow through GitHub's OIDC identity. Configure once on pypi.org →
+# project lampson → Settings → Publishing → Add a new publisher → GitHub:
+#   owner kitecosmic · repository lampson · workflow publish-pypi.yml · environment pypi
+# The tag must match sdk/python/pyproject.toml ("version") — the job refuses otherwise. workflow_dispatch publishes
+# the version in pyproject.toml of the chosen branch (to publish a tag that was pushed before this was set up).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: tag must match pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(python -c "import tomllib;print(tomllib.load(open('sdk/python/pyproject.toml','rb'))['project']['version'])")
+          [ "refs/tags/v$v" = "$GITHUB_REF" ] || { echo "tag $GITHUB_REF ≠ pyproject v$v"; exit 1; }
+      - name: build
+        run: |
+          python -m pip install --upgrade build
+          python -m build sdk/python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist
