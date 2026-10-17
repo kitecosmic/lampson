@@ -88,6 +88,7 @@ function empty() {
       <div class="card"><h3>Cómo lo ve el modelo</h3>
         <p>Cada tool y su resultado — errores y rechazos incluidos — queda en el historial y se le reenvía en cada turno.</p>
         <p>Hacé clic en un archivo del panel de archivos para verlo. Un mensaje que empieza con <code>!</code> lo corrés vos, sin el modelo.</p></div>
-    </div></div>`;
+    </div><p class="plughint" id="plugHint" hidden></p></div>`;
   log.querySelectorAll('.try').forEach(el => el.onclick = () => { $('#in').value = el.textContent; $('#in').focus(); });
+  if (typeof paintPlugHint === 'function') paintPlugHint();
 }

@@ -147,6 +147,10 @@ view at `/w/<project>/equipos` with the objectives, the team as a live graph, it
 editor to build the team.
 → **[lampson.org/docs/teams](https://lampson.org/docs/teams)**
 
+The home page has a tab per product: **proyectos · equipos · tareas · plugins**. `/tareas` lists the scheduled tasks
+of every project (switch them on or off, run one now) and `/plugins` shows what's installed and where it's on —
+turning a plugin on is still decided project by project, inside the project.
+
 ## Also in the box
 
 Sub-agents that work in parallel · skills (`SKILL.md` procedures, anything on [skills.sh](https://skills.sh)

@@ -21,9 +21,7 @@ $('#theme').onclick = () => { const r = document.documentElement; r.setAttribute
 paintTheme();
 // tarjetas: «necesita tu atención» arriba, después activos, recientes y los más antiguos plegados
 const OLD_DAYS = 14;
-let wsData = null, teamsData = null, oldOpen = false;
-const TSTATUS = { active: 'trabajando', waiting: 'te espera', done: 'hecho', failed: 'falló', cancelled: 'cancelado', paused: 'sin presupuesto' };
-const TRANK = { waiting: 0, active: 1, paused: 2 };
+let wsData = null, teamsData = null, tasksData = null, pluginsData = null, oldOpen = false;
 function escA(s) { return esc(s).replace(/"/g, '&quot;'); }
 // «hace 3 h» se lee de un vistazo; la fecha exacta queda en el title
 function fmtAgo(ts) {
@@ -68,42 +66,64 @@ function waitingIn(w) {
   if (tw) return tw.objectives.filter(o => o.status === 'waiting').length + (tw.approvals || []).length;
   return (w.teams || {}).waiting || 0;
 }
-// equipos en el inicio: una fila por equipo (con su objetivo más urgente) y por agente solo con un objetivo en curso;
-// sin ninguno, la invitación a armar el primero
-const TEAM_ROWS = 5;
-function paintTeams(q) {
-  const box = $('#wsTeams');
-  if (!teamsData || q) { box.innerHTML = ''; return; }
-  const rows = [];
-  for (const w of teamsData) {
-    const byUrgency = (list) => list.slice().sort((a, b) => ((TRANK[a.status] ?? 9) - (TRANK[b.status] ?? 9)) || ((b.updated_at || 0) - (a.updated_at || 0)));
-    for (const t of w.teams) {
-      const o = byUrgency(w.objectives.filter(x => x.team === t.id))[0];
-      rows.push({ w, name: t.id, sub: `${t.members} agente${t.members === 1 ? '' : 's'} · lo lidera ${t.lead}`, o, href: o ? `/w/${w.slug}/equipos?o=${o.id}` : `/w/${w.slug}/equipos?tab=teams` });
-    }
-    for (const o of w.objectives.filter(x => !x.team && (x.status === 'active' || x.status === 'waiting')))
-      rows.push({ w, name: o.agent, sub: 'agente solo', o, href: `/w/${w.slug}/equipos?o=${o.id}` });
+// los productos de lampson en el inicio: un mosaico de alto fijo por producto (equipos, tareas, plugins) que lleva a
+// su pestaña. No crece con la cantidad de equipos o tareas, así los proyectos siguen a la vista; sin uso todavía,
+// el mosaico es la invitación.
+function fmtNext(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000), now = new Date(), hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(), diff = Math.round((day(d) - day(now)) / 86400000);
+  return diff === 0 ? 'hoy ' + hm : diff === 1 ? 'mañana ' + hm : d.toLocaleDateString(undefined, { weekday: 'short' }) + ' ' + hm;
+}
+function tile(ic, title, main, sub, href, cta, cls) {
+  return `<a class="tile${cls ? ' ' + cls : ''}" href="${escA(href)}"><p class="th"><span class="ic">${ic}</span>${esc(title)}</p><p class="tm1">${main}</p><p class="tm2">${sub}</p><p class="go">${esc(cta)} →</p></a>`;
+}
+function paintTiles(q) {
+  const box = $('#wsTiles');
+  if (q) { box.innerHTML = ''; return; }
+  const out = [];
+  // equipos
+  if (teamsData) {
+    const nT = teamsData.reduce((n, w) => n + w.teams.length, 0);
+    const act = teamsData.reduce((n, w) => n + w.objectives.filter(o => o.status === 'active').length, 0);
+    const wait = teamsData.reduce((n, w) => n + w.objectives.filter(o => o.status === 'waiting').length + (w.approvals || []).length, 0);
+    const solo = teamsData.reduce((n, w) => n + w.objectives.filter(o => !o.team && (o.status === 'active' || o.status === 'waiting')).length, 0);
+    out.push(nT || solo
+      ? tile('◇', 'equipos', nT ? `${nT} equipo${nT === 1 ? '' : 's'}` : `${solo} agente${solo === 1 ? '' : 's'} con objetivo`, wait ? `<b class="warn">⚑ ${wait} te espera${wait === 1 ? '' : 'n'}</b>${act ? ' · ' + act + ' trabajando' : ''}` : act ? `${act} trabajando` : 'nada pendiente', '/equipos', 'ver equipos')
+      : tile('◇', 'equipos', 'Agentes que trabajan solos', 'Armá un equipo con roles, dale un objetivo y avanza mientras hacés otra cosa.', '/equipos?new=1', 'armar un equipo', 'invite'));
   }
-  if (!rows.length) {
-    box.innerHTML = `<div class="tinvite"><span class="ic">◇</span><div class="tx"><b>Equipos de agentes que trabajan solos</b><p>Armá un equipo con roles —por ejemplo un CEO, un CTO y un CMO—, dale un objetivo y avanza mientras hacés otra cosa. Te consulta cuando hace falta una decisión tuya.</p></div><a class="go" href="/equipos?new=1">armar un equipo →</a></div>`;
-    return;
+  // tareas programadas
+  if (tasksData) {
+    const all = tasksData.flatMap(w => w.tasks.map(t => ({ ...t, ws: w })));
+    const on = all.filter(t => t.enabled), failed = on.filter(t => String(t.last_status || '').startsWith('error'));
+    const next = on.filter(t => t.next_run).sort((a, b) => a.next_run - b.next_run)[0];
+    const off = all.length - on.length, pl = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    out.push(!all.length
+      ? tile('◷', 'tareas', 'El agente trabaja a su hora', '«Todos los días a las 9, corré los tests y avisame si algo se rompió.»', '/tareas', 'ver cómo', 'invite')
+      : !on.length
+        ? tile('◷', 'tareas', `${pl(all.length, 'tarea')}, ${all.length === 1 ? 'apagada' : 'apagadas'}`, 'ninguna va a correr hasta que la enciendas', '/tareas', 'ver tareas')
+        : tile('◷', 'tareas', `${pl(on.length, 'programada')}${off ? ` <span class="dim">· ${pl(off, 'apagada')}</span>` : ''}`, failed.length ? `<b class="warn">✕ ${failed.length} falló en la última corrida</b>` : next ? `próxima: ${esc(fmtNext(next.next_run))} · ${esc(next.ws.name)}` : 'ninguna por correr', '/tareas', 'ver tareas'));
   }
-  rows.sort((a, b) => ((TRANK[a.o && a.o.status] ?? 9) - (TRANK[b.o && b.o.status] ?? 9)) || (((b.o && b.o.updated_at) || 0) - ((a.o && a.o.updated_at) || 0)));
-  const nTeams = teamsData.reduce((n, w) => n + w.teams.length, 0);
-  box.innerHTML = `<div class="ghead gbar"><span>equipos <span class="n">${nTeams}</span></span><span class="spacer"></span><a href="/equipos?new=1">+ equipo</a><a href="/equipos">${rows.length > TEAM_ROWS ? 'ver los ' + rows.length + ' →' : 'ver todos →'}</a></div>` +
-    rows.slice(0, TEAM_ROWS).map(r => `<a class="trow" href="${escA(r.href)}"><span class="ic">◇</span><span class="tx"><b>${esc(r.name)}</b><span class="where">${esc(r.w.name)} · ${esc(r.sub)}</span></span><span class="obj">${r.o ? `<span class="tst tst-${escA(r.o.status)}">${esc(TSTATUS[r.o.status] || r.o.status)}</span> <span class="ref">${esc(r.o.ref)}</span> ${esc(r.o.text)}` : '<span class="tst">sin objetivo</span> dale uno'}</span></a>`).join('');
+  // plugins: lo instalado y dónde se usa (encender es por proyecto, dentro del proyecto)
+  if (pluginsData) {
+    const names = new Set(pluginsData.global.map(p => p.name)); pluginsData.workspaces.forEach(w => w.local.forEach(p => names.add(p.name)));
+    const used = pluginsData.workspaces.filter(w => w.enabled.some(n => names.has(n))).length;
+    const shown = [...names].filter(n => !n.startsWith('example')), list = shown.slice(0, 3).join(', ') + (shown.length > 3 ? ` y ${shown.length - 3} más` : '');
+    out.push(used
+      ? tile('⧉', 'plugins', `${names.size} instalado${names.size === 1 ? '' : 's'}`, `encendidos en ${used} de ${pluginsData.workspaces.length} proyectos`, '/plugins', 'ver plugins')
+      : tile('⧉', 'plugins', 'Sumale cosas a tus agentes', shown.length ? `Conectá ${esc(list)} a un proyecto.` : 'Canales, herramientas y datos para tus agentes.', '/plugins', 'ver plugins', 'invite'));
+  }
+  box.innerHTML = out.join('');
 }
 function paintHome() {
   const attn = $('#wsAttn'), box = $('#wsGroups');
-  if (!wsData) { attn.innerHTML = ''; $('#wsTeams').innerHTML = ''; box.innerHTML = '<p class="none">el hub no responde</p>'; return; }
+  if (!wsData) { attn.innerHTML = ''; $('#wsTiles').innerHTML = ''; box.innerHTML = '<p class="none">el hub no responde</p>'; return; }
   const all = (wsData.workspaces || []).slice().sort((a, b) => (b.last_used || 0) - (a.last_used || 0));
-  // lo que te espera, de todos los proyectos (la búsqueda no lo esconde); el total va también en la pestaña Equipos
+  // lo que te espera, de todos los proyectos (la búsqueda no lo esconde); el total va también en la pestaña equipos
   const waiting = all.map(w => ({ w, n: waitingIn(w) })).filter(x => x.n);
   attn.innerHTML = waiting.length ? `<p class="ghead warn">necesita tu atención</p>` + waiting.map(({ w, n }) => `<a class="attn" href="/equipos"><span class="ic">⚑</span><span class="tx"><b>${esc(w.name)}</b> · ${n === 1 ? 'una cosa te espera' : n + ' cosas te esperan'}</span><span class="go">responder →</span></a>`).join('') : '';
-  const total = waiting.reduce((s, x) => s + x.n, 0), badge = $('#teamsBadge');
-  badge.hidden = !total; badge.textContent = total ? '⚑ ' + total : '';
   const q = ($('#wsSearch').value || '').trim().toLowerCase();
-  paintTeams(q);
+  paintTiles(q);
   const list = q ? all.filter(w => (w.name + ' ' + w.path).toLowerCase().includes(q)) : all;
   box.innerHTML = '';
   if (!list.length) { box.innerHTML = q ? `<p class="none">ningún proyecto coincide con «${esc(q)}»</p>` : '<p class="none">Todavía no hay proyectos: creá uno con «+ nuevo proyecto».</p>'; return; }
@@ -120,10 +140,9 @@ function paintHome() {
   }
 }
 async function paintGrid() {
-  const [ws, th] = await Promise.all([
-    fetch(BASE + '/api/workspaces').then(r => r.json()).catch(() => null),
-    fetch(BASE + '/api/teams-home').then(r => r.ok ? r.json() : null).catch(() => null)]);
-  wsData = ws; teamsData = th ? (th.workspaces || []) : null;
+  const get = (u) => fetch(BASE + u).then(r => r.ok ? r.json() : null).catch(() => null);
+  const [ws, th, ta, pl] = await Promise.all([get('/api/workspaces'), get('/api/teams-home'), get('/api/tasks-home'), get('/api/plugins-home')]);
+  wsData = ws; teamsData = th ? (th.workspaces || []) : null; tasksData = ta ? (ta.workspaces || []) : null; pluginsData = pl && pl.global ? pl : null;
   paintHome();
 }
 $('#wsSearch').oninput = paintHome;

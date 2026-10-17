@@ -6,6 +6,7 @@
 --   GET  /w/<slug>            la UI de ese workspace (public/index.html; los assets /css /js los sirve el hub)
 --   *    /w/<slug>/api/…      proxy al proceso del workspace (127.0.0.1:808N) — SSE y WebSocket pasan (Synsema ≥ 0.6.12)
 --   GET  /w/<slug>/approve/…  links de aprobación de ese workspace
+--   GET  /equipos · /tareas · /plugins   vistas de todos los proyectos (pestañas del inicio)
 --   /api/workspaces…          registro, crear (diálogo nativo o explorador), start/stop/quitar, política
 -- Supervisor: cada 15 s arranca los workspaces que deben vivir y apaga los inactivos (política en ⚙ → idle_hours).
 -- Acceso: esta PC entra sin nada; lo remoto — túnel, LAN, VPS — necesita la sesión de un dispositivo emparejado con
@@ -35,6 +36,9 @@ require file.read("public/*")
 -- equipos que no programan: su carpeta vive en la instalación (equipos/<nombre>/), creada desde /equipos
 require file("equipos")
 require file("equipos/*")
+-- /plugins: el catálogo de plugins de la instalación (solo lectura: encender es dentro de cada proyecto)
+require file.read("plugins")
+require file.read("plugins/*")
 require random
 
 use "./lib/workspaces.syn" as ws
@@ -237,6 +241,33 @@ serve on 8080
         ws.wait_ready(w, 8)
         ws.summary()
         give {"ok": true, "slug": w["slug"], "url": "/w/" + w["slug"] + "/equipos?new=1"}
+
+    -- TAREAS PROGRAMADAS de todos los workspaces (public/tasks-home.html): leídas del json de cada uno, así se ven
+    -- también las de un proyecto apagado. Correr y encender/apagar van al workspace por el proxy (/w/<slug>/api/…).
+    route "GET /tareas"
+        when not page_allowed(request)
+            give redirect("/login", 302)
+        give html(read_file("public/tasks-home.html"))
+
+    route "GET /api/tasks-home" requires auth
+        let out be []
+        each w in ws.summary_cached(20)
+            set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "alive": w["alive"], "tasks": ws.tasks_summary(w)})
+        give {"workspaces": out}
+
+    -- PLUGINS (public/plugins-home.html): qué hay instalado y en qué proyectos está encendido cada uno. Es un
+    -- escaparate: encender sigue siendo una decisión por proyecto, dentro del proyecto (/w/<slug>#plugins=<nombre>).
+    route "GET /plugins"
+        when not page_allowed(request)
+            give redirect("/login", 302)
+        give html(read_file("public/plugins-home.html"))
+
+    route "GET /api/plugins-home" requires auth
+        let out be []
+        each w in ws.summary_cached(20)
+            let p be ws.plugins_of(w)
+            set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "alive": w["alive"], "enabled": p["enabled"], "local": p["local"]})
+        give {"global": ws.plugins_global(), "workspaces": out}
 
     route "GET /api/hub" requires auth
         give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home(), "local": request.user["local"]}

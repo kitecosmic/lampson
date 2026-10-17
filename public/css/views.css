@@ -1,0 +1,54 @@
+/* views.css — /tareas y /plugins del hub (public/tasks-home.html, public/plugins-home.html). La base es teams.css
+   (barra, .homegrid, .pblock, .projhead, .st): esto suma la cabecera de la vista, las filas de tareas y las tarjetas
+   del escaparate de plugins. */
+body.home .homegrid { max-width:1180px; width:100%; margin:0 auto; }
+.vhead { margin:4px 0 22px; }
+.vhead h1 { font:600 1.7rem/1.15 var(--serif); letter-spacing:-.02em; margin:0 0 6px; }
+.vlead { margin:0; max-width:760px; color:var(--ink-2); }
+.vfoot { margin:26px 0 0; color:var(--ink-3); font-size:13.5px; max-width:760px; }
+.vempty { border:1px dashed var(--rule-2); border-radius:3px; padding:20px 22px; color:var(--ink-2); max-width:760px; }
+.vempty p { margin:0 0 8px; }
+.vpick { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.vpick a { font:400 12px/1 var(--mono); color:var(--accent); text-decoration:none; border:1px solid var(--rule-2); border-radius:2px; padding:7px 10px; }
+.vpick a:hover { border-color:var(--accent); }
+.projhead .open + .open { margin-left:4px; }
+
+/* tareas: interruptor · qué y cuándo · estado · correr */
+.taskrow { display:grid; grid-template-columns:auto minmax(0, 1fr) minmax(150px, 230px) auto; align-items:center; gap:14px; padding:10px 16px; border-top:1px solid var(--rule); }
+.taskrow:first-of-type { border-top:none; }
+.taskrow.off .tmain { opacity:.6; }
+.taskrow .sw input { width:16px; height:16px; margin:0; accent-color:var(--accent); cursor:pointer; }
+.tmain { display:flex; flex-direction:column; min-width:0; color:var(--ink); text-decoration:none; }
+.tmain b { font-weight:600; }
+.tmain:hover b { text-decoration:underline; text-underline-offset:.18em; }
+.tplan { font:400 11.5px/1.5 var(--mono); color:var(--ink-2); }
+.tact { font-size:12.5px; color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tstate { display:flex; flex-direction:column; align-items:flex-start; gap:4px; min-width:0; }
+.twhen { font:400 11px/1.5 var(--mono); color:var(--ink-3); }
+.terr { font-size:12px; color:var(--rubric); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+
+/* plugins: escaparate */
+.pgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
+.pcard { display:flex; flex-direction:column; border:1px solid var(--rule); border-radius:3px; padding:16px 18px 14px; min-width:0; }
+.pcard.used { border-color:var(--rule-2); }
+.pcard .pn { font:600 17px/1.2 var(--serif); margin:0 0 8px; }
+.ptags { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
+.ptags span { font:400 10px/1 var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--ink-3); border:1px solid var(--rule-2); border-radius:2px; padding:3px 6px; }
+.pdesc { margin:0 0 10px; font-size:14px; line-height:1.5; color:var(--ink); flex:1; }
+.pcfg { margin:0 0 10px; font:400 11px/1.6 var(--mono); color:var(--ink-3); }
+.pcfg code { color:var(--ink-2); }
+.pwhere { margin:0 0 12px; font:400 11.5px/1.5 var(--mono); color:var(--ink-3); }
+.pwhere a { color:var(--ok); text-decoration:none; }
+.pwhere a:hover { text-decoration:underline; }
+.pcard > button { align-self:flex-start; }
+.ppick { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font:400 11.5px/1 var(--mono); color:var(--ink-3); }
+.ppick a { color:var(--accent); text-decoration:none; border:1px solid var(--rule-2); border-radius:2px; padding:6px 9px; }
+.ppick a:hover { border-color:var(--accent); }
+.ppick .pcancel { cursor:pointer; padding:6px 4px; }
+.ppick .pcancel:hover { color:var(--ink); }
+
+@media (max-width: 720px) {
+  .taskrow { grid-template-columns:auto minmax(0, 1fr); }
+  .taskrow .tstate, .taskrow > button { grid-column:2; }
+  .projhead .ppath { display:none; }
+}

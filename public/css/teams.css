@@ -185,3 +185,9 @@ body.home .homegrid { flex:1; overflow:auto; padding:22px 28px 60px; }
 .others a { color:var(--ink-2); }
 body.home .empty { margin:8vh auto; }
 @media (max-width: 720px) { .pcols { grid-template-columns:1fr; } .pcols > div + div { border-left:none; border-top:1px solid var(--rule); } body.home .homegrid { padding:16px; } }
+@media (max-width: 520px) {
+  .tbar { gap:8px; padding:0 10px; }
+  .tbar button { white-space:nowrap; }
+  body.home #newTeam { font-size:0; padding:6px 10px; }
+  body.home #newTeam::before { content:'+'; font-size:14px; }
+}

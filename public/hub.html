@@ -22,7 +22,7 @@
 <header>
   <div class="hrow">
     <span class="brand">lampson</span>
-    <nav class="navtabs"><a href="/" class="on" aria-current="page">proyectos</a><a href="/equipos" title="equipos y objetivos de todos tus proyectos">equipos<span class="badge" id="teamsBadge" hidden></span></a></nav>
+    <nav class="navtabs" data-on="proyectos"></nav>
     <span class="spacer"></span>
     <span class="pill" id="devicesBtn" role="button" tabindex="0">dispositivos</span>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
@@ -40,13 +40,14 @@
       </div>
       <div class="lead">Cada proyecto es una carpeta de tu disco con su propio agente. <details class="how"><summary>¿cómo funciona?</summary><p>Cada uno tiene sus sesiones, tareas programadas, plugins y MCP, y corre en su propio proceso: podés tener varios abiertos a la vez. Los que tienen tareas encendidas siguen activos aunque cierres todo; al abrir uno apagado se enciende solo.</p></details></div>
       <div id="wsAttn"></div>
-      <div id="wsTeams"></div>
+      <div class="tiles" id="wsTiles"></div>
       <div id="wsGroups"></div>
       <p class="cli">desde una terminal: <code>cd mi-proyecto &amp;&amp; lampson</code> <span class="copy" data-copy="cd mi-proyecto &amp;&amp; lampson" role="button" tabindex="0">copiar</span> · <code>lampson --web</code> abre esta web en ese proyecto <span class="copy" data-copy="lampson --web" role="button" tabindex="0">copiar</span></p>
     </div>
   </div>
 </main>
 <script src="/js/panel.js"></script>
+<script src="/js/navtabs.js"></script>
 <script src="/js/hub.js"></script>
 <script src="/js/workspaces.js"></script>
 <script src="/vendor/qrcode.js"></script>
