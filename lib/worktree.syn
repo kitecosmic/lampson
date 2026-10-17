@@ -1,0 +1,105 @@
+-- lib/worktree.syn — la copia de trabajo de cada agente de un equipo (git worktree)
+--
+-- En un proyecto con git, cada miembro de un equipo trabaja en SU copia: workspace/.lampson/worktrees/<agente>, en
+-- su rama team/<equipo>/<agente> (sale de la rama actual del proyecto), con SU nombre de autor (config de git por
+-- worktree: extensions.worktreeConfig). Así dos agentes no se pisan archivos ni ramas, y el registro de git dice
+-- quién hizo cada commit. La copia principal (la de la persona, con main) no se toca.
+--   * .lampson/ queda en .git/info/exclude (exclusión local: no cambia ningún archivo del repo)
+--   * lib/loop.syn traduce: las tools de archivos y bash del agente operan en su copia; para él es la raíz
+--   * un merge/push que sale de su copia (toca la historia compartida) pide aprobación a la persona (lib/loop.syn)
+use "./tools/common.syn" as c
+
+export let DIR be ".lampson/worktrees"
+let G be "git"
+
+task git(args, cwd)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    try
+        let r be run(G, args, 30, {"cwd": cwd})
+        give {"ok": r["exit_code"] == 0, "out": trim(r["stdout"] + "\n" + r["stderr"])}
+    recover err
+        give {"ok": false, "out": text(err)}
+
+-- ¿el proyecto es un repo de git (con al menos un commit)?
+export task is_repo()
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    give git(["rev-parse", "--verify", "HEAD"], c.ROOT)["ok"]
+
+-- la copia de `agent` (la crea si falta). → {ok, root, branch, error}; root es relativa al workspace
+export task ensure(team_id, agent, author)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let rel be DIR + "/" + agent
+    let branch be "team/" + team_id + "/" + agent
+    when not is_repo()
+        give {"ok": false, "root": "", "branch": "", "error": "not a git repository (or no commits yet)"}
+    when not file_exists(c.ROOT + "/" + rel + "/.git")
+        -- .lampson/ fuera de git sin tocar el .gitignore del repo
+        let ex be c.ROOT + "/.git/info/exclude"
+        let cur be ""
+        try
+            set cur to read_file(ex)
+        recover err
+            set cur to ""
+        when not contains(cur, "/.lampson/")
+            write_file(ex, cur + (when cur == "" or ends_with(cur, "\n") then "" otherwise "\n") + "/.lampson/\n")
+        let exists be git(["rev-parse", "--verify", "refs/heads/" + branch], c.ROOT)["ok"]
+        let add be git(when exists then ["worktree", "add", rel, branch] otherwise ["worktree", "add", "-b", branch, rel], c.ROOT)
+        when not add["ok"]
+            give {"ok": false, "root": "", "branch": branch, "error": "git worktree add failed: " + add["out"]}
+    -- autor del agente, solo en su copia
+    git(["config", "extensions.worktreeConfig", "true"], c.ROOT)
+    git(["config", "--worktree", "user.name", author["name"]], c.ROOT + "/" + rel)
+    git(["config", "--worktree", "user.email", author["email"]], c.ROOT + "/" + rel)
+    give {"ok": true, "root": rel, "branch": branch, "error": ""}
+
+-- la rama principal del proyecto (la de la copia de la persona)
+export task main_branch()
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let r be git(["rev-parse", "--abbrev-ref", "HEAD"], c.ROOT)
+    give when r["ok"] then r["out"] otherwise "main"
+
+-- las tools que operan en la copia del agente, y cómo se traducen sus args
+export let FILE_TOOLS be ["read", "write", "edit", "ls", "find", "grep"]
+
+export task rooted(name, args, root)
+    let a be args
+    when name == "bash"
+        set a["command"] to "cd \"" + root + "\" && " + text(args["command"])
+        give a
+    let p be when contains(args, "path") and args["path"] != nothing then replace(text(args["path"]), "\\", "/") otherwise "."
+    while starts_with(p, "./")
+        set p to slice(p, 2, length(p))
+    when p == "." or p == ""
+        set a["path"] to root
+    otherwise when starts_with(p, root + "/") or p == root or starts_with(p, ".lampson/spill/")
+        set a["path"] to p
+    otherwise
+        set a["path"] to root + "/" + p
+    give a
+
+-- ¿este comando toca la historia compartida desde una copia de agente? push siempre; merge/rebase/update-ref/branch -f
+-- cuando sale de su copia (-C, cd o ../): adentro de su copia puede traer main a su rama sin pedir nada
+export task touches_shared(command)
+    let cmd be " " + lower(replace(text(command), "\n", " ")) + " "
+    when not contains(cmd, "git")
+        give ""
+    when matches(cmd, ".*\\bgit\\b.*\\bpush\\b.*")
+        give "git push"
+    let leaves be contains(cmd, " -c ") or contains(cmd, "../") or contains(cmd, "..\\") or matches(cmd, ".*\\bcd\\b.*")
+    when leaves and matches(cmd, ".*\\bgit\\b.*\\b(merge|rebase|update-ref|cherry-pick|reset)\\b.*")
+        give "git merge/rebase/reset outside your working copy"
+    when matches(cmd, ".*\\bgit\\b.*\\bbranch\\b.*\\s-(f|d|D)\\b.*") or matches(cmd, ".*\\bgit\\b.*\\bupdate-ref\\b.*")
+        give "git branch -f/-d or update-ref"
+    give ""

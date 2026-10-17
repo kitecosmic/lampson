@@ -59,6 +59,15 @@ export task deliver_objective(o)
     when spec == nothing
         teams.obj_set(o["id"], {"status": "failed", "result": "no agent file for '" + o["agent"] + "'"})
         give false
+    -- objetivo de equipo: el turno es del líder, en la conversación del equipo (con sus novedades y el tablero del equipo)
+    when o["team"] != ""
+        let tm be teams.get(o["team"])
+        when tm == nothing
+            teams.obj_set(o["id"], {"status": "failed", "result": "team '" + o["team"] + "' no longer exists"})
+            give false
+        let head be teams.obj_head(o)
+        teams.obj_set(o["id"], {"last_start": now(), "turns": o["turns"] + 1, "reply": ""})
+        give deliver_to(tm, o["agent"], "lampson", head)
     let txt be teams.obj_turn_text(o)
     teams.obj_set(o["id"], {"last_start": now(), "turns": o["turns"] + 1, "reply": ""})
     let sobre be {"to": o["agent"], "thread": "objective:" + text(o["id"]), "session": "", "from": "lampson", "text": txt, "images": [], "channel": "objective", "meta": {"objective": o["id"]}}
@@ -68,6 +77,9 @@ export task deliver_objective(o)
 -- ¿le toca un turno? activo, el anterior terminó y pasaron round_seconds (el primero, enseguida; una respuesta de la
 -- persona, enseguida también)
 export task objective_due(o)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
     require time
     when o["status"] != "active"
         give false
@@ -78,7 +90,12 @@ export task objective_due(o)
         give false
     when o["reply"] != ""
         give true
-    give now() - o["last_end"] >= o["round_seconds"]
+    when now() - o["last_end"] < o["round_seconds"]
+        give false
+    -- en un equipo, el líder solo hace ronda si algo cambió o tiene tareas propias (si no, está esperando a los demás)
+    when o["team"] != ""
+        give teams.has_work("team:" + o["team"], o["agent"])
+    give true
 
 export task tick()
     require db(".lampson/teams.db")

@@ -43,6 +43,7 @@ use "./plugins.syn" as plugins
 use "./tools/proc.syn" as proc
 use "./scope.syn" as scope
 use "./teams.syn" as teams
+use "./worktree.syn" as worktree
 
 export let PROJECT_DIR be "workspace/.lampson/agents"
 export let GLOBAL_DIR be "agents"
@@ -458,6 +459,7 @@ task remember_thread(agent, thread, sid)
 -- abre la conversación sin correr el turno: {ctx, session, thread, messages, mode}. La usan las puertas que a
 -- veces hacen otra cosa con la sesión (el `!comando` de la web); el resto llama a deliver.
 export task open(sobre, hooks)
+    require db(".lampson/teams.db")
     require exec
     require time
     require random
@@ -504,6 +506,19 @@ export task open(sobre, hooks)
     when starts_with(thread, "team:") or starts_with(thread, "objective:")
         let copts be ctx["opts"]
         set copts["scope"] to thread
+        -- en un equipo con git, cada agente en su copia (lib/worktree.syn); "worktrees": false en el equipo lo apaga
+        when starts_with(thread, "team:")
+            let tm be teams.get(slice(thread, 5, length(thread)))
+            when tm != nothing and tm["worktrees"]
+                let me be teams.member(tm, ctx["agent"])
+                let wt be worktree.ensure(tm["id"], ctx["agent"], {"name": (when me != nothing and me["role"] != ctx["agent"] then me["role"] + " · " + ctx["agent"] otherwise ctx["agent"]) + " (Lampson)", "email": ctx["agent"] + "@lampson.local"})
+                when wt["ok"]
+                    set copts["root"] to wt["root"]
+            when tm != nothing and teams.team_objective(tm["id"], ctx["agent"]) != nothing
+                let treg be copts["registry"]
+                set treg["objective"] to teams.objective_tool
+                set copts["registry"] to treg
+                set copts["catalog"] to where(copts["catalog"], (s) => s["name"] != "objective") + [teams.OBJECTIVE_SPEC]
         when starts_with(thread, "objective:")
             let reg be copts["registry"]
             set reg["board"] to teams.board_tool
@@ -568,6 +583,7 @@ export task turn(o, messages, label, hooks)
     let th be text(field(o, "thread", ""))
     when starts_with(th, "team:")
         teams.record_spend(o["ctx"]["agent"], cost)
+        teams.team_turn_end(slice(th, 5, length(th)), o["ctx"]["agent"], cost)
     when starts_with(th, "objective:")
         teams.obj_turn_end(floor(number(slice(th, 10, length(th)))), cost)
     save(o, result["messages"])

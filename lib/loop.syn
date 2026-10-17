@@ -26,6 +26,7 @@ use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
 use "./tools/todo.syn" as todo
 use "./scope.syn" as scope
+use "./worktree.syn" as worktree
 
 let MAX_ERRORS_PER_TURN be 8
 -- capturas de computer_use (lib/computer.syn): el driver las deja en el blackboard "computer:screenshot" y acá van al
@@ -313,6 +314,13 @@ task execute(tc, opts, on_event)
     let verdict be permission.evaluate(name, args, when forced == "auto" then "yolo" otherwise opts["permission_mode"])
     when forced == "ask" and verdict["decision"] == "allow"
         set verdict to {"decision": "ask", "reason": "this agent asks before every " + name + " call"}
+    -- equipos (lib/worktree.syn): el agente trabaja en SU copia; tocar la historia compartida (merge a main, push…)
+    -- lo aprueba siempre la persona, en cualquier modo (salvo lo prohibido, que sigue prohibido)
+    let wroot be when contains(opts, "root") and opts["root"] != nothing then text(opts["root"]) otherwise ""
+    when wroot != "" and name == "bash" and verdict["decision"] != "deny"
+        let shared be worktree.touches_shared(when contains(args, "command") then args["command"] otherwise "")
+        when shared != ""
+            set verdict to {"decision": "ask", "reason": "touches the shared history (" + shared + ") — the person approves · agent " + (when contains(opts, "agent_id") then text(opts["agent_id"]) otherwise "?")}
     when verdict["decision"] == "deny"
         emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]}, tag)
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."
@@ -324,6 +332,9 @@ task execute(tc, opts, on_event)
             emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
     emit(on_event, "busy", {"label": permission.describe_call(name, args), "kind": "tool", "name": name}, tag)
+    -- su copia: las tools de archivos y bash operan ahí; los paths que ve el modelo son relativos a ella
+    when wroot != "" and (name == "bash" or contains(worktree.FILE_TOOLS, name))
+        set args to worktree.rooted(name, args, wroot)
     let out be ""
     try
         -- tools MCP: no son tasks Synsema (args libres); el registry las marca con "mcp"
@@ -343,6 +354,8 @@ task execute(tc, opts, on_event)
     recover err
         set out to "ERROR: " + err
     emit(on_event, "idle", nothing, tag)
+    when wroot != ""
+        set out to replace(out, wroot + "/", "")
     give out
 
 export task run_turn(cfg, messages, opts, on_event)

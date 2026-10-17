@@ -900,8 +900,8 @@ serve on 8080
 
     route "GET /w/:slug/api/objectives" requires auth
         private
-        let rows be apply(teams.obj_list(), (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "updated_at": o["updated_at"], "working": mailbox.working(o["agent"], "objective:" + text(o["id"]))})
-        give {"objectives": rows, "agents": apply(where(runtime.names(), (n) => not runtime.get(n)["builtin"]), (n) => {"id": n, "description": runtime.get(n)["description"]})}
+        let rows be apply(teams.obj_list(), (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "updated_at": o["updated_at"], "working": mailbox.working(o["agent"], teams.obj_scope(o))})
+        give {"objectives": rows, "teams": apply(teams.all(), (t) => {"id": t["id"], "lead": teams.lead_of(t), "description": t["description"]}), "agents": apply(where(runtime.names(), (n) => not runtime.get(n)["builtin"]), (n) => {"id": n, "description": runtime.get(n)["description"]})}
 
     route "GET /w/:slug/api/objectives/:id" requires auth
         private
@@ -909,18 +909,16 @@ serve on 8080
         when o == nothing
             give fail(404, "no such objective")
         let v be api.objective_view(o)
-        set v["working"] to mailbox.working(o["agent"], "objective:" + text(o["id"]))
+        set v["working"] to mailbox.working(o["agent"], teams.obj_scope(o))
         give v
 
     route "POST /w/:slug/api/objectives/add" requires auth
         private
-        expect body {agent: text, text: text}
-        let b be json of request
-        let agent be lower(text(b["agent"]))
-        when runtime.get(agent) == nothing
-            give fail(404, "no agent named '" + agent + "'")
-        let id be teams.obj_create(agent, b["text"], {"round_seconds": when contains(b, "round_seconds") and b["round_seconds"] != nothing then b["round_seconds"] otherwise 20, "budget_tokens": when contains(b, "budget_tokens") and b["budget_tokens"] != nothing then b["budget_tokens"] otherwise 500000, "created_by": "person"})
-        give api.objective_view(teams.obj_get(id))
+        expect body {text: text}
+        let c be api.create_objective(json of request, {"name": "person", "agents": ["*"]})
+        when not c["ok"]
+            give fail(c["status"], c["error"])
+        give api.objective_view(teams.obj_get(c["id"]))
 
     route "POST /w/:slug/api/objectives/:id/reply" requires auth
         private
@@ -936,6 +934,13 @@ serve on 8080
 
     route "GET /w/:slug/api/teams" requires auth
         private
+        give api.teams_view()
+
+    route "POST /w/:slug/api/teams/save" requires auth
+        private
+        let r be api.save_team(json of request)
+        when not r["ok"]
+            give fail(400, r["error"])
         give api.teams_view()
 
     route "GET /w/:slug/api/keys" requires auth
@@ -996,7 +1001,7 @@ serve on 8080
 
     -- OBJETIVOS (lib/teams.syn): lo que le pedís a un agente para que trabaje solo hasta terminarlo
     route "POST /w/:slug/v1/objectives" requires auth
-        expect body {agent: text, text: text}
+        expect body {text: text}
         let a be api.authorize(headers of request)
         when not a["ok"]
             give api.refuse(a)

@@ -196,8 +196,10 @@ export task approve_queue(name, args, why)
     require env("LAMPSON_*")
     require file.read(".lampson")
     require file.read(".lampson/*")
-    let id be approvals.open("api", permission.describe_call(name, args), why, APPROVAL_TIMEOUT)
-    give approvals.wait(id, APPROVAL_TIMEOUT)
+    -- tocar la historia compartida (merge a main desde la copia de un agente): la persona tiene 30 min, no 3
+    let tmo be when contains(text(why), "shared history") then 1800 otherwise APPROVAL_TIMEOUT
+    let id be approvals.open("api", permission.describe_call(name, args), why, tmo)
+    give approvals.wait(id, tmo)
 
 -- ---------- el worker ----------
 

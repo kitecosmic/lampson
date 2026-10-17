@@ -1799,3 +1799,61 @@ test "objetivos: la tool objective — solo en su conversación, estados, y el t
     teams.obj_reply(id2, "seguí", false, "joel")
     assert(teams.obj_get(id2)["status"] == "active" and teams.obj_get(id2)["budget_tokens"] == 110, "seguir da otro tramo de presupuesto")
     assert_eq(teams.obj_cancel(id2, "joel")["status"], "cancelled")
+
+-- ---------- copias de git por agente (lib/worktree.syn) ----------
+use "./lib/worktree.syn" as worktree
+
+test "worktree: traducir rutas y bash a la copia del agente; lo que toca la historia compartida"
+    let r be ".lampson/worktrees/dev"
+    assert_eq(worktree.rooted("read", {"path": "src/a.js"}, r)["path"], r + "/src/a.js")
+    assert_eq(worktree.rooted("ls", {}, r)["path"], r)
+    assert_eq(worktree.rooted("grep", {"pattern": "x", "path": "./"}, r)["path"], r)
+    assert_eq(worktree.rooted("read", {"path": r + "/src/a.js"}, r)["path"], r + "/src/a.js", "ya traducida no se duplica")
+    assert_eq(worktree.rooted("read", {"path": ".lampson/spill/c1.txt"}, r)["path"], ".lampson/spill/c1.txt", "los spill viven en la raíz")
+    assert_eq(worktree.rooted("bash", {"command": "npm test"}, r)["command"], "cd \"" + r + "\" && npm test")
+    assert_eq(worktree.touches_shared("git commit -m x && git status"), "")
+    assert_eq(worktree.touches_shared("git merge main"), "", "traer main a su rama, adentro de su copia: libre")
+    assert(worktree.touches_shared("git push origin team/x/dev") != "")
+    assert(worktree.touches_shared("git -C ../../.. merge team/x/dev") != "")
+    assert(worktree.touches_shared("cd ../../.. && git merge team/x/dev") != "")
+    assert(worktree.touches_shared("git branch -D main") != "")
+    assert_eq(worktree.touches_shared("npm test"), "")
+
+test "worktree: en un repo, cada agente tiene su copia, su rama y su autor (y .lampson/ queda excluido)"
+    run("git", ["init", "-q", "-b", "main"], 30, {"cwd": "workspace"})
+    write_file("workspace/README.md", "hola\n")
+    run("git", ["add", "README.md"], 30, {"cwd": "workspace"})
+    run("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "-m", "init"], 30, {"cwd": "workspace"})
+    assert(worktree.is_repo())
+    let w be worktree.ensure("t", "dev", {"name": "Dev (Lampson)", "email": "dev@lampson.local"})
+    assert(w["ok"] and w["root"] == ".lampson/worktrees/dev" and w["branch"] == "team/t/dev", json_encode(w))
+    assert(file_exists("workspace/.lampson/worktrees/dev/README.md"), "la copia tiene el proyecto")
+    let br be run("git", ["rev-parse", "--abbrev-ref", "HEAD"], 30, {"cwd": "workspace/.lampson/worktrees/dev"})
+    assert_eq(trim(br["stdout"]), "team/t/dev")
+    assert_eq(trim(run("git", ["config", "user.name"], 30, {"cwd": "workspace/.lampson/worktrees/dev"})["stdout"]), "Dev (Lampson)")
+    assert(trim(run("git", ["config", "user.name"], 30, {"cwd": "workspace"})["stdout"]) != "Dev (Lampson)", "la copia principal conserva su autor")
+    assert(contains(read_file("workspace/.git/info/exclude"), "/.lampson/"))
+    assert(worktree.ensure("t", "dev", {"name": "Dev (Lampson)", "email": "dev@lampson.local"})["ok"], "la segunda vez la reusa")
+    assert(not contains(run("git", ["status", "--porcelain"], 30, {"cwd": "workspace"})["stdout"], ".lampson/"), "las copias no ensucian la copia principal")
+
+test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del equipo y suma el gasto de todos"
+    let t be team_fixture()
+    assert_eq(teams.lead_of(t), "ttceo")
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    let id be teams.obj_create("ttceo", "lanzar la v2", {"team": "t-test", "created_by": "test"})
+    let o be teams.obj_get(id)
+    assert(o["team"] == "t-test" and o["round_seconds"] == 60 and teams.obj_scope(o) == "team:t-test")
+    assert(starts_with(teams.obj_head(o), "[objective O-" + text(id) + " for team t-test] lanzar la v2\n\nYou lead this objective with your team"))
+    assert_eq(teams.team_objective("t-test", "ttceo")["id"], id)
+    assert_eq(teams.team_objective("t-test", "ttdev"), nothing, "solo el líder")
+    assert_eq(teams.objective_tool("report", "repartido", "ttceo", "team:t-test"), "reported")
+    assert(contains(teams.objective_tool("report", "x", "ttdev", "team:t-test"), "don't lead"))
+    assert(length(where(teams.ledger("team:t-test", 0, 50), (r) => r["kind"] == "report")) == 1, "el informe va al registro del equipo")
+    teams.team_turn_end("t-test", "ttdev", 300)
+    teams.team_turn_end("t-test", "ttceo", 200)
+    let o2 be teams.obj_get(id)
+    assert(o2["spent"] == 500 and o2["last_end"] > 0, "gasto de todos; el turno del líder cierra su ronda")
+    assert(contains(teams.objective_tool("done", "v2 lista", "ttceo", "team:t-test"), "is done"))
+    each a in ["ttceo", "ttcto", "ttdev", "ttcmo"]
+        rm_file(runtime.PROJECT_DIR + "/" + a + ".agent.json")
+    rm_file(teams.DIR + "/t-test.team.json")

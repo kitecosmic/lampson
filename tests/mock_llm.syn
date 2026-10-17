@@ -114,7 +114,12 @@ serve on 8765
         when starts_with(q, "[message from rt-team-a")
             when tools_seen == 0
                 give reply_tools([tool_call("board", {"action": "add", "title": "login de B", "owner": "rt-team-b"})])
-            give reply_text("final equipo-b · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+            -- en su copia de git (lib/worktree.syn): su rama; y un push, que espera aprobación de la persona
+            when tools_seen == 1
+                give reply_tools([tool_call("bash", {"command": "git rev-parse --abbrev-ref HEAD"})])
+            when tools_seen == 2
+                give reply_tools([tool_call("bash", {"command": "git push origin team/rt-team/rt-team-b"})])
+            give reply_text("final equipo-b · branch: " + replace(slice(msgs[length(msgs) - 3]["content"], 0, 40), "\n", " ") + " · push: " + slice(msgs[length(msgs) - 1]["content"], 0, 40))
         -- objetivos (lib/teams.syn): el primer turno planifica (board), informa y pide aprobación; aprobado, termina
         when starts_with(q, "[objective o-")
             when tools_seen == 0
