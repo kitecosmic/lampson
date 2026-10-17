@@ -330,8 +330,8 @@ export task send(team, sender, dest, txt)
     when not contains(peers(team, sender), d)
         let ps be peers(team, sender)
         raise("you can't message " + d + " in team " + team["id"] + " — you can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")))
-    when trim(text(txt)) == ""
-        raise("empty message")
+    when trim(text(txt)) == "" or contains(["null", "none", "undefined"], lower(trim(text(txt))))
+        raise("empty message — write what you want to tell them in `message`")
     when not file_exists("workspace/.lampson/agents/" + d + ".agent.json") and not file_exists("agents/" + d + ".agent.json")
         raise(d + " is in the team but has no agent file, so nobody would read it — tell the person (the team needs .lampson/agents/" + d + ".agent.json)")
     let scope be "team:" + team["id"]

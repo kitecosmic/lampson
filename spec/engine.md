@@ -471,7 +471,9 @@ Decisiones y cambios de rumbo, lo más nuevo arriba.
   aprobación de lo que toca la historia compartida es del MOTOR (loop + cola de aprobaciones), no del prompt; el
   objetivo de un equipo lo lidera el primero sin jefe, vive en el tablero del equipo y suma el gasto de todos; una ronda
   solo despierta a un agente por lo que es para él (tareas suyas, mensajes y asignaciones a él; al líder, la persona).
-  Pendiente para cerrar la fase: CLI de objetivos, documentación (en/es/pt) y merge a main.
+  Cerrada el mismo día: CLI (`lampson objective …`, `lampson team list`), los agentes saben cuando una aprobación
+  venció (no es un «no»), un mensaje que nadie leería se rechaza, un turno fallido queda en el registro;
+  documentación en lampson-site (objectives, teams, API, comandos, interfaz, portada; en/es/pt) y merge a main.
 
 - **2026-10-16** — 6b (Objetivos) andando de punta a punta con un modelo real (ver la fase 6b). Decisiones: un
   objetivo es un equipo de un agente — misma base, mismo registro y mismo tablero, con scope `objective:<id>`; el
