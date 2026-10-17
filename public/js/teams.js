@@ -10,7 +10,7 @@ const LANES = [['todo', 'por hacer'], ['doing', 'en curso'], ['review', 'en revi
 const STATUS = { active: 'trabajando', waiting: 'te espera', done: 'hecho', failed: 'falló', cancelled: 'cancelado', paused: 'sin presupuesto' };
 const KIND = { added: 'agregó', claimed: 'tomó', updated: 'movió', message: 'escribió', report: 'informó', asked: 'preguntó', 'approval requested': 'pide aprobación', approved: 'aprobó', denied: 'denegó', answered: 'respondió', done: 'terminó', failed: 'falló', cancelled: 'canceló', paused: 'pausado', budget: 'presupuesto', objective: 'nuevo objetivo', error: 'error' };
 
-const PRESETS = [['code', 'código (leer, escribir, bash)'], ['read', 'solo lectura'], ['none', 'ninguna']];
+const PRESETS = [['code', 'código (leer, editar, comandos)'], ['read', 'leer y correr comandos (no edita)'], ['none', 'ninguna (solo coordina)']];
 const state = { approvals: [], teamsMeta: [], draft: null, sel: null, tab: new URLSearchParams(location.search).get('tab') || localStorage.getItem('lampson.teams.tab') || 'objectives', obj: Number(new URLSearchParams(location.search).get('o')) || null, team: null, objectives: [], agents: [], teams: [], seen: new Set() };
 
 async function api(path, body) {
@@ -189,7 +189,7 @@ function draftFrom(team) {
   return { isNew: false, id: team.id, description: team.description, round_minutes: team.round_minutes, budget_daily_tokens: team.budget_daily_tokens, worktrees: team.worktrees !== false, talks: (team.talks || []).map((p) => p.slice()),
     members: team.members.map((m) => ({ agent: m.agent, role: m.role, reports_to: m.reports_to, description: m.description, system: m.system, preset: presetOf(m.tools), permission: m.permission || 'strict', dirty: false })) };
 }
-function presetOf(tools) { const t = (tools || []).join(','); if (!t) return 'none'; if (t.includes('write') || t.includes('bash')) return 'code'; return 'read'; }
+function presetOf(tools) { const t = tools || []; if (!t.length) return 'none'; if (t.includes('write') || t.includes('edit')) return 'code'; return 'read'; }
 function startNewTeam() {
   state.draft = { isNew: true, id: '', description: '', round_minutes: 0, budget_daily_tokens: 300000, worktrees: true, talks: [], members: [{ agent: 'lider', role: 'Líder', reports_to: '', description: '', system: '', preset: 'code', permission: 'strict', dirty: true }] };
   state.sel = 'lider'; renderTeams();
@@ -282,6 +282,9 @@ async function refreshTeams() {
   const r = await api('teams');
   if (!r.ok) return false;
   state.teams = r.data.teams;
+  // ?edit=<equipo> abre el editor de ese equipo (enlaces directos, capturas)
+  const ed = new URLSearchParams(location.search).get('edit');
+  if (ed && !state.editOpened) { state.editOpened = true; const t = state.teams.find((x) => x.id === ed); if (t) { state.team = t.id; state.draft = draftFrom(t); state.sel = t.lead || t.members[0].agent; renderTeams(); return true; } }
   if (state.draft) return true;   // editando: el pulso no pisa el formulario
   renderTeams();
   return true;

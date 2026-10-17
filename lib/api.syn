@@ -236,7 +236,7 @@ export task teams_view()
 
 -- guardar un equipo desde la pantalla: el archivo del equipo y los de sus agentes (los que vienen). Cada agente
 -- conserva lo que su archivo ya tenía y pisa solo lo que se editó. → {ok, error}
-export let TOOL_PRESETS be {"code": ["read", "write", "edit", "ls", "find", "grep", "bash", "todo"], "read": ["read", "ls", "find", "grep"], "none": []}
+export let TOOL_PRESETS be {"code": ["read", "write", "edit", "ls", "find", "grep", "bash", "todo"], "read": ["read", "ls", "find", "grep", "bash"], "none": []}
 
 export task save_team(body)
     require db(".lampson/teams.db")
