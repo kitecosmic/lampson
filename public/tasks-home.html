@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>Lampson · tareas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131412">
+<link rel="manifest" href="/manifest.webmanifest">
+<!-- tareas programadas de TODOS los proyectos (el hub, /tareas): qué corre, cuándo y cómo salió. Se crean dentro de cada proyecto; acá se ven, se encienden, se apagan y se corren. -->
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/teams.css">
+<link rel="stylesheet" href="/css/views.css">
+<script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body class="home">
+<header class="tbar">
+  <span class="brand">lampson</span>
+  <nav class="navtabs" data-on="tareas"></nav>
+  <span class="spacer"></span>
+  <span class="live" id="live" title="actualizado en vivo">en vivo</span>
+  <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
+</header>
+<main class="homegrid">
+  <div class="vhead"><h1>Tareas programadas</h1><p class="vlead">Lo que tus agentes hacen solos, a su hora, en todos tus proyectos. Una tarea se crea dentro de un proyecto: pedíselo al agente («todos los días a las 9, corré los tests y avisame si algo se rompió») o usá «+» en Programadas, en el panel del proyecto.</p></div>
+  <div id="list"></div>
+</main>
+<script src="/js/navtabs.js"></script>
+<script src="/js/tasks-home.js"></script>
+</body>
+</html>

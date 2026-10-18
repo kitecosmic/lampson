@@ -14,8 +14,11 @@ async function paintWorkspacePill() {
   const ok = await fetchWorkspaces();
   const me = wsList.find(w => w.slug === WS_SLUG);
   pill.style.display = ok ? '' : 'none';
-  pill.textContent = (me ? me.name : WS_SLUG) + ' ▾'; pill.title = (me ? me.path + '\n' : '') + 'cambiar de workspace · los demás siguen vivos';
+  pill.textContent = (me ? me.name : WS_SLUG) + ' ▾'; pill.title = (me ? shortPath(me.path) + '\n' : '') + 'cambiar de workspace · los demás siguen vivos';
+  const proj = $('#proj'); if (proj && ok) { proj.classList.add('switch'); proj.title = pill.title; proj.onclick = () => openWorkspaces(); }
 }
+// la marca vuelve al inicio del hub; sin hub (standalone) no hay inicio y queda como texto
+if (BASE && $('#home')) { $('#home').href = HUB_BASE + '/'; $('#home').title = 'inicio: todos los proyectos, equipos, tareas y plugins'; }
 const WS_NEW = { slug: '__new' };
 function openWorkspaces(selectSlug) {
   Panel.open({
@@ -23,11 +26,11 @@ function openWorkspaces(selectSlug) {
     browse: {
       placeholder: 'buscar workspace…', listWidth: '300px', key: w => w.slug,
       load: async (q) => { await fetchWorkspaces(); const list = wsList.filter(w => !q || (w.name + ' ' + w.path).toLowerCase().includes(q.toLowerCase())); return q ? list : [...list, WS_NEW]; },
-      render: (w) => w === WS_NEW ? `<span class="dot">+</span><div><div class="nm" style="color:var(--accent);font-weight:400">nuevo workspace…</div><div class="meta">elegí una carpeta</div></div>` : `<span class="dot ${w.alive ? 'on' : 'off'}">${w.alive ? '●' : '○'}</span><div><div class="nm">${esc(w.name)}${w.slug === WS_SLUG ? ' <span class="meta">(este)</span>' : ''}</div><div class="meta">${esc(w.path)}</div></div>`,
+      render: (w) => w === WS_NEW ? `<span class="dot">+</span><div><div class="nm" style="color:var(--accent);font-weight:400">nuevo workspace…</div><div class="meta">elegí una carpeta</div></div>` : `<span class="dot ${w.alive ? 'on' : 'off'}">${w.alive ? '●' : '○'}</span><div><div class="nm">${esc(w.name)}${w.slug === WS_SLUG ? ' <span class="meta">(este)</span>' : ''}</div><div class="meta">${esc(shortPath(w.path))}</div></div>`,
       count: (rows) => { const n = rows.filter(r => r !== WS_NEW).length, a = rows.filter(r => r !== WS_NEW && r.alive).length; return `${n} workspace${n === 1 ? '' : 's'} · ${a} vivo${a === 1 ? '' : 's'}`; },
       emptyHtml: 'nada coincide', emptyDetail: 'Todavía no hay workspaces. Creá uno con «nuevo workspace…» o abrí <code>lampson</code> en la carpeta de un proyecto.',
       detail: (w) => w === WS_NEW ? wsNewForm() : `<div class="dhead"><span class="nm">${esc(w.name)}</span><span class="meta"><b class="st ${w.alive ? 'on' : 'off'}">${w.alive ? '● vivo' : (w.paused ? '○ apagado a mano' : '○ apagado')}</b> · ${esc(w.policy)}</span></div>
-        <div class="dcap">${esc(w.path)}</div>
+        <div class="dcap">${esc(shortPath(w.path))}</div>
         <div class="ddesc">${w.schedules_on ? `${w.schedules_on} tarea${w.schedules_on === 1 ? '' : 's'} programada${w.schedules_on === 1 ? '' : 's'} encendida${w.schedules_on === 1 ? '' : 's'} ${w.alive ? '(lo mantienen vivo)' : (w.paused ? '— en pausa hasta que lo enciendas' : '')}. ` : ''}${!w.alive && w.paused ? 'Lo apagaste a mano: no se enciende solo hasta ▶ encender o abrir <code>lampson</code> en la carpeta. ' : ''}Último uso: ${esc(fmtWhen(w.last_used))}.</div>
         <div class="dacts"><button class="primary" data-open>${w.slug === WS_SLUG ? 'Ya estás acá' : 'Abrir'}</button>${w.alive ? '<button data-stop>■ apagar</button>' : '<button data-start>▶ encender</button>'}</div>
         <div class="dform" style="margin-top:14px"><label>vida <select name="policy"><option value="auto" ${w.policy === 'auto' ? 'selected' : ''}>auto — vivo mientras se use (${wsIdle === 0 ? 'nunca se apaga' : 'se apaga tras ' + wsIdle + ' h sin uso'}) o tenga tareas</option><option value="always" ${w.policy === 'always' ? 'selected' : ''}>siempre vivo</option><option value="off" ${w.policy === 'off' ? 'selected' : ''}>apagado — solo cuando lo abrís</option></select></label><span class="ds">las horas de inactividad se cambian en ⚙ → General</span></div>

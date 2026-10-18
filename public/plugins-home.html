@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>Lampson · plugins</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#131412">
+<link rel="manifest" href="/manifest.webmanifest">
+<!-- PLUGINS de la instalación y de cada proyecto (el hub, /plugins): un escaparate de lo que se le puede sumar a los agentes y dónde está encendido cada uno. Encender es por proyecto, dentro del proyecto: un plugin puede cambiar lo que el agente hace o responde ahí. -->
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/teams.css">
+<link rel="stylesheet" href="/css/views.css">
+<script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+</head>
+<body class="home">
+<header class="tbar">
+  <span class="brand">lampson</span>
+  <nav class="navtabs" data-on="plugins"></nav>
+  <span class="spacer"></span>
+  <span class="live" id="live" title="actualizado en vivo">en vivo</span>
+  <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
+</header>
+<main class="homegrid">
+  <div class="vhead"><h1>Plugins</h1><p class="vlead">Canales, herramientas y datos que les suman a tus agentes. Cada proyecto enciende los que quiere: un plugin puede cambiar lo que el agente hace o responde, así que se decide proyecto por proyecto.</p></div>
+  <div class="pgrid" id="grid"></div>
+  <p class="vfoot">¿Te falta uno? Pedíselo al agente dentro de un proyecto: «haceme un plugin que…». Lo crea en ese proyecto y queda apagado hasta que vos lo enciendas. Para escribirlo vos, copiá la plantilla <code>plugins/example-hello</code>, o leé la <a href="https://lampson.org/es/docs/plugins" target="_blank" rel="noopener">guía completa de plugins</a>.</p>
+</main>
+<script src="/js/navtabs.js"></script>
+<script src="/js/plugins-home.js"></script>
+</body>
+</html>

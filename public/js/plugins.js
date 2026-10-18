@@ -3,10 +3,23 @@
 let pluginsData = [], pluginsMeta = { global: 'plugins/', project: '.lampson/plugins/' };
 async function fetchPlugins() {
   let r; try { r = await (await fetch(BASE + '/api/plugins')).json(); } catch (e) { return pluginsData; }
-  pluginsData = r.plugins || []; pluginsMeta = { global: r.global || 'plugins/', project: r.project || '.lampson/plugins/' };
+  pluginsData = (r.plugins || []).filter(l => !l.example || l.enabled); pluginsMeta = { global: r.global || 'plugins/', project: r.project || '.lampson/plugins/' };
   const on = pluginsData.filter(l => l.enabled).length;
   const pill = $('#plugins'); pill.textContent = pluginsData.length ? `plugins ${on}/${pluginsData.length}` : 'plugins'; pill.classList.toggle('on', on > 0);
+  pill.title = pluginsData.length ? `${on} de ${pluginsData.length} plugins instalados encendidos en este proyecto · clic para ver qué hace cada uno y encender los que quieras` : 'plugins: tools propias que vos encendés · clic para ver y activar';
+  paintPlugHint();
   return pluginsData;
+}
+// en la portada del proyecto: los plugins instalados que acá están apagados (sin los de ejemplo ni los rotos). Sin
+// esto, quien no sabe que existen cree que el agente «no puede» mandar un Telegram o tomar un pedido. Encender
+// sigue siendo decisión de la persona: la pista solo abre el panel.
+function paintPlugHint() {
+  const el = $('#plugHint'); if (!el) return;
+  const off = pluginsData.filter(l => !l.enabled && !l.error);
+  el.hidden = !off.length; if (!off.length) return;
+  const names = off.slice(0, 3).map(l => `<b>${esc(l.name)}</b>`).join(', ') + (off.length > 3 ? ` y ${off.length - 3} más` : '');
+  el.innerHTML = `⧉ ${off.length === 1 ? 'Hay un plugin instalado que este proyecto no tiene encendido' : `Hay ${off.length} plugins instalados que este proyecto no tiene encendidos`}: ${names}. <span class="try">ver qué hacen →</span>`;
+  el.querySelector('.try').onclick = () => openPlugins(off[0].name);
 }
 async function loadPlugins() { await fetchPlugins(); if (Panel.is('plugins')) Panel.refresh(); }
 function pluginMatches(l, q) {
@@ -36,25 +49,32 @@ function pluginArgs(tdiv, props, required) {
   }
   return { args };
 }
+// la ayuda del «?» es corta y lleva a la acción (un pedido listo para el chat); lo largo vive en la guía del sitio
+const PLUGINS_DOCS = 'https://lampson.org/es/docs/plugins';
+const PLUGIN_PROMPT = 'Hacé un plugin para este proyecto que liste los endpoints del backend: método, path y handler. Validalo y pedime que lo encienda.';
 const PLUGINS_HELP = `<h4>Herramientas hechas a medida para este proyecto</h4>
-  <p>Un plugin es una tool que el agente (o vos) escribe para <em>este</em> repo: una carpeta con <code>plugin.json</code> y el código — en Synsema (corre bajo un techo de capacidades que no puede superar) o en cualquier lenguaje (<code>python</code>, <code>node</code>, un binario). A diferencia de un script suelto, el modelo lo ve en su catálogo con parámetros tipados, vos lo podés correr desde acá, y queda en el repo para la próxima sesión.</p>
-  <p><b>Pedilo en el chat</b> — <i>«hacé un plugin que liste los endpoints del backend»</i>. El agente lo escribe en <code data-project></code>, lo valida y te pide encenderlo acá.</p>
-  <p><b>Encendido = existe</b> — apagado, el agente ni lo ve. Al encenderlo, sus tools entran al catálogo como <code>plugin_&lt;plugin&gt;_&lt;tool&gt;</code> desde el próximo turno. Los globales viven en <code data-global></code> y valen para todos los proyectos.</p>
-  <p><b>Ejemplos</b></p>
-  <ul>
-    <li><b>Consultas del proyecto</b> — <code>endpoints()</code> que parsea tus rutas y devuelve método + path + handler; <code>env_keys()</code> usadas vs. definidas en <code>.env.example</code>.</li>
-    <li><b>Generadores con tus convenciones</b> — <code>new_component(name)</code> que crea el <code>.tsx</code> + test + story con tu plantilla exacta.</li>
-    <li><b>Checkers</b> — <code>check_i18n()</code> claves faltantes por idioma; <code>lint_styles()</code> colores hardcodeados fuera de tus tokens.</li>
-    <li><b>Datos locales</b> — <code>db_schema()</code> / <code>query(sql)</code> contra tu SQLite con techo <code>db=./dev.db</code>.</li>
-    <li><b>Integraciones sin MCP</b> — <code>deploy_status()</code> contra tu API con techo <code>net=api.x.com</code>.</li>
-  </ul>
-  <p>¿Querés herramientas con techo real, versionadas y compartidas entre agentes (Claude Code, Cursor, lampson…)? Eso son las <a href="https://lamps.sh" target="_blank" rel="noopener">lámparas de lamps.sh</a>: se instalan con <code>lamp add</code> y entran acá como servidor MCP (<code>lamp mcp</code>).</p>
-  <p><button class="primary" data-back>← volver a los plugins</button></p>`;
+  <p>Un plugin es una tool nueva que el agente ve en su catálogo, con parámetros tipados: una carpeta con <code>plugin.json</code> y el código, en Synsema (con un techo de capacidades que no puede superar) o en cualquier lenguaje. Queda en el repo para la próxima sesión y lo podés correr vos desde acá.</p>
+  <div class="pprompt"><b>Pedíselo al agente</b><p>${esc(PLUGIN_PROMPT)}</p><div class="pacts"><button class="primary" data-use>Escribirlo en el chat</button><button data-copy>Copiar</button><span class="ds" data-copied></span></div></div>
+  <p><b>Encendido = existe.</b> Apagado, el agente ni lo ve; encendido, sus tools entran al catálogo como <code>plugin_&lt;plugin&gt;_&lt;tool&gt;</code> desde el próximo turno. Los de este proyecto viven en <code data-project></code>; los globales, en <code data-global></code>, y valen para todos los proyectos.</p>
+  <p><b>Otras ideas:</b> <code>check_i18n()</code> con las claves que faltan por idioma, <code>db_schema()</code> y <code>query(sql)</code> contra tu SQLite de desarrollo, <code>new_component(name)</code> con tu plantilla exacta, <code>deploy_status()</code> contra tu API.</p>
+  <p class="plinks"><a href="${PLUGINS_DOCS}" target="_blank" rel="noopener">Guía completa de plugins</a><span data-all-wrap> · <a data-all>Todos los plugins instalados</a></span> · <a href="https://lamps.sh" target="_blank" rel="noopener">lamps.sh</a>, para herramientas compartidas entre agentes</p>
+  <p><button data-back>← volver a los plugins</button></p>`;
+// el «?» abre la ayuda y engancha sus botones (rutas reales, pedido al chat, enlace al hub)
+function wirePluginsHelp(b) {
+  Panel.help(true);
+  const h = b.querySelector('.phelp');
+  h.querySelector('[data-project]').textContent = shortPath(pluginsMeta.project); h.querySelector('[data-global]').textContent = shortPath(pluginsMeta.global);
+  h.querySelector('[data-back]').onclick = () => Panel.help(false);
+  h.querySelector('[data-use]').onclick = () => { Panel.close(); const ta = $('#in'); if (!ta) return; ta.value = PLUGIN_PROMPT; ta.dispatchEvent(new Event('input')); ta.focus(); };
+  h.querySelector('[data-copy]').onclick = async () => { const ok = h.querySelector('[data-copied]'); try { await navigator.clipboard.writeText(PLUGIN_PROMPT); ok.textContent = 'copiado'; } catch (e) { ok.textContent = 'no se pudo copiar'; } };
+  if (BASE) h.querySelector('[data-all]').href = HUB_BASE + '/plugins'; else h.querySelector('[data-all-wrap]').remove();
+}
 function openPlugins(selectName) {
   let first = selectName || null;
   Panel.open({
     id: 'plugins', eyebrow: 'plugins', title: 'Plugins', layout: 'browse',
-    headActions: [{ label: '?', title: '¿qué es un plugin?', onClick: (b) => { Panel.help(true); const h = b.querySelector('.phelp'); h.querySelector('[data-project]').textContent = pluginsMeta.project; h.querySelector('[data-global]').textContent = pluginsMeta.global; h.querySelector('[data-back]').onclick = () => Panel.help(false); } }],
+    // «todos los plugins» = la pantalla del hub (/plugins): qué hay instalado y en qué proyectos está encendido
+    headActions: [...(BASE ? [{ label: 'todos los plugins', href: HUB_BASE + '/plugins', title: 'los plugins de todos tus proyectos y dónde está encendido cada uno' }] : []), { label: '?', title: '¿qué es un plugin?', onClick: wirePluginsHelp }],
     browse: {
       placeholder: 'buscar plugin o tool…', listWidth: '260px', help: PLUGINS_HELP,
       key: l => l.name,
@@ -62,7 +82,7 @@ function openPlugins(selectName) {
       render: (l) => `<span class="dot">${l.error ? '!' : (l.enabled ? '●' : '○')}</span><div><div class="nm">${esc(l.name)}</div><div class="meta">${esc(l.scope)} · ${esc(l.kind)} · ${(l.tools || []).length} tool${(l.tools || []).length === 1 ? '' : 's'}${l.error ? ' · roto' : ''}${l.legacy ? ' · carpeta vieja' : ''}</div></div>`,
       count: (rows, q) => q ? `${rows.length} de ${pluginsData.length}` : `${pluginsData.length} plugin${pluginsData.length === 1 ? '' : 's'}`,
       emptyHtml: 'ninguno todavía',
-      emptyDetail: `Todavía no hay plugins.<br><br>Pedile uno al agente en el chat — <i>«hacé un plugin que liste los endpoints del backend»</i> — o creá una carpeta con <code>plugin.json</code> en <code>${esc(pluginsMeta.project)}</code> (proyecto) o <code>${esc(pluginsMeta.global)}</code> (global). El botón <b>?</b> de arriba explica qué son y para qué sirven.`,
+      emptyDetail: `Todavía no hay plugins.<br><br>Pedile uno al agente en el chat — <i>«hacé un plugin que liste los endpoints del backend»</i> — o creá una carpeta con <code>plugin.json</code> en <code>${esc(shortPath(pluginsMeta.project))}</code> (proyecto) o <code>${esc(shortPath(pluginsMeta.global))}</code> (global). El botón <b>?</b> de arriba explica qué son y para qué sirven.`,
       detail: (l) => {
         const specs = l.tool_specs || [];
         const cap = l.error ? `<div class="dcap err">roto: ${esc(l.error)}</div>` : (l.kind === 'syn' ? `<div class="dcap">techo de capacidades: ${esc(l.caps)}</div>` : `<div class="dcap"><b>sin techo</b> (exec) · $ ${esc(l.command)}</div>`);
@@ -77,7 +97,7 @@ function openPlugins(selectName) {
                 + (l.enabled ? `<div class="go"><button class="primary run">▶ correr</button><span class="st"></span></div><pre class="out" style="display:none"></pre>` : '')
                 + `</div>`;
             }).join('')
-          + `<div class="dfoot"><span>${esc(l.dir || '')}</span>${l.scope === 'project' ? '<span class="del">eliminar</span>' : '<span title="los globales se borran a mano">global · se borra a mano</span>'}</div><div class="err" data-err></div>`;
+          + `<div class="dfoot"><span>${esc(shortPath(l.dir))}</span>${l.scope === 'project' ? '<span class="del">eliminar</span>' : '<span title="los globales se borran a mano">global · se borra a mano</span>'}</div><div class="err" data-err></div>`;
       },
       wire: (l, box) => {
         const errEl = box.querySelector('[data-err]');
@@ -111,4 +131,6 @@ function openPlugins(selectName) {
   });
 }
 $('#plugins').onclick = () => openPlugins();
-if (location.hash === '#plugins' || location.hash === '#lamps') setTimeout(() => openPlugins(), 400); // deep link: abre el panel al cargar
+// deep link: abre el panel al cargar; #plugins=<nombre> (desde /plugins del hub, «usar en este proyecto») con ese plugin elegido
+if (location.hash === '#plugins' || location.hash === '#lamps') setTimeout(() => openPlugins(), 400);
+else if (location.hash.startsWith('#plugins=')) setTimeout(() => openPlugins(decodeURIComponent(location.hash.slice(9))), 400);

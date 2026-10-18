@@ -26,7 +26,7 @@ task flag_budget(team, agent)
     let k be "teams:budget:" + team["id"] + ":" + agent + ":" + format_time(now(), "%Y-%m-%d")
     when state_get(k) == nothing
         state_set(k, true)
-        teams.log("team:" + team["id"], agent, "budget", "", "daily budget reached (" + text(team["budget_daily_tokens"]) + " tokens): no more turns today")
+        teams.log("team:" + team["id"], agent, "budget", "", "daily budget reached (" + text(teams.cap_of(team, agent)) + " tokens): no more turns today")
 
 -- un turno para `agent` en su conversación del equipo
 export task deliver_to(team, agent, sender, head)
@@ -43,7 +43,18 @@ export task deliver_to(team, agent, sender, head)
     when spec == nothing
         teams.log("team:" + team["id"], "lampson", "error", "", "no agent file for '" + agent + "' — create .lampson/agents/" + agent + ".agent.json")
         give false
-    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head), "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
+    -- su primer turno en un objetivo: conversación nueva (el tablero, el registro y git ya cuentan lo anterior)
+    let oid be teams.objective_of_scope("team:" + team["id"])
+    when oid != 0 and teams.seat_session_of(oid, agent) == ""
+        runtime.forget_thread(agent, "team:" + team["id"])
+    -- quién está en medio de un turno: sus mensajes le llegan cuando termina. (Visto 2026-10-17: el CEO le preguntó
+    -- tres veces al CMO, que estaba documentando, no le contestó, y le pasó su tarea al CTO: los dos hicieron lo mismo.)
+    let busy be []
+    each m in team["members"]
+        when m["agent"] != agent and mailbox.working(m["agent"], "team:" + team["id"])
+            set busy to append(busy, m["agent"])
+    let now_line be when length(busy) == 0 then "" otherwise "\nWorking right now (your messages reach them when their turn ends — wait for them, don't reassign their tasks): " + join(busy, ", ")
+    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head) + now_line, "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
     mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, false)})
     give true
 
@@ -97,8 +108,33 @@ export task objective_due(o)
         give false
     -- en un equipo, el líder solo hace ronda si algo cambió o tiene tareas propias (si no, está esperando a los demás)
     when o["team"] != ""
-        give teams.has_work("team:" + o["team"], o["agent"])
+        when teams.has_work("team:" + o["team"], o["agent"])
+            give true
+        -- nadie se mueve hace rato: el líder recibe UNA ronda para destrabar (y otra si sigue igual, STALL_SECONDS después)
+        when stalled(o)
+            teams.obj_set(o["id"], {"reply": STALL_TEXT})
+            give true
+        give false
     give true
+
+export let STALL_SECONDS be 600
+export let STALL_TEXT be "[stalled] Nothing has moved in the team for 10 minutes and nobody is working. Look at the board: is someone waiting for something, or did someone stop without saying? Unblock it (`send` them what they need; reassign only if they said they are blocked) or, if the team can't go on, ask the person with `objective` ask."
+
+-- ¿el equipo de un objetivo está quieto? nadie trabajando, ningún mensaje por entregar y nada en el registro hace rato
+task stalled(o)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    require time
+    let tm be teams.get(o["team"])
+    when tm == nothing or now() - o["last_end"] < STALL_SECONDS
+        give false
+    each m in tm["members"]
+        when mailbox.working(m["agent"], "team:" + tm["id"])
+            give false
+    give teams.quiet_for("team:" + tm["id"]) >= STALL_SECONDS
 
 -- escribe el resumen si cambió: equipos, objetivos abiertos (y los últimos cerrados) y aprobaciones pendientes
 export task write_summary()
@@ -110,7 +146,8 @@ export task write_summary()
     require file(".lampson/*")
     require file.read("workspace")
     require file.read("workspace/*")
-    let ts be apply(teams.all(), (t) => {"id": t["id"], "description": t["description"], "members": length(t["members"]), "lead": teams.lead_of(t)})
+    -- roles: lo que /equipos del hub muestra de cada equipo (el rol, o el id del agente si no tiene)
+    let ts be apply(teams.all(), (t) => {"id": t["id"], "name": t["name"], "description": t["description"], "members": length(t["members"]), "lead": teams.lead_of(t), "roles": apply(t["members"], (m) => when contains(m, "role") and m["role"] != nothing and text(m["role"]) != "" then text(m["role"]) otherwise text(m["agent"]))})
     let objs be teams.obj_list()
     let open_o be where(objs, (o) => contains(["active", "waiting", "paused"], o["status"]))
     let closed be slice(where(objs, (o) => not contains(["active", "waiting", "paused"], o["status"])), 0, 5)
@@ -163,7 +200,7 @@ export task tick()
                 flag_budget(team, m["recipient"])
             otherwise
                 let who be teams.member(team, m["sender"])
-                let head be "[message from " + m["sender"] + (when who != nothing then " (" + who["role"] + ")" otherwise "") + "]\n" + m["text"]
+                let head be when m["sender"] == "person" then "[message from the person who owns this team — act on it]\n" + m["text"] otherwise "[message from " + m["sender"] + (when who != nothing then " (" + who["role"] + ")" otherwise "") + "]\n" + m["text"]
                 when deliver_to(team, m["recipient"], m["sender"], head)
                     teams.mark(m["id"], "delivered")
                     set n to n + 1

@@ -447,6 +447,13 @@ export task thread_session(agent, thread)
         give ""
     give ""
 
+-- la próxima entrega a (agente, thread) arranca una conversación nueva
+export task forget_thread(agent, thread)
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    remember_thread(agent, thread, "")
+
 task remember_thread(agent, thread, sid)
     require time
     require file(".lampson")
@@ -509,6 +516,11 @@ export task open(sobre, hooks)
         -- en un equipo con git, cada agente en su copia (lib/worktree.syn); "worktrees": false en el equipo lo apaga
         when starts_with(thread, "team:")
             let tm be teams.get(slice(thread, 5, length(thread)))
+            -- un asiento que no es el líder no le abre aprobaciones a la persona: van a su jefe (lib/loop.syn)
+            when tm != nothing
+                let mine be teams.member(tm, ctx["agent"])
+                when mine != nothing and ctx["agent"] != teams.lead_of(tm) and mine["reports_to"] != ""
+                    set copts["escalate_to"] to mine["reports_to"]
             when tm != nothing and tm["worktrees"]
                 let me be teams.member(tm, ctx["agent"])
                 let wt be worktree.ensure(tm["id"], ctx["agent"], {"name": (when me != nothing and me["role"] != ctx["agent"] then me["role"] + " · " + ctx["agent"] otherwise ctx["agent"]) + " (Lampson)", "email": ctx["agent"] + "@lampson.local"})
@@ -539,6 +551,35 @@ export task save(o, messages)
     session.save(o["session"], messages, {"title": session.title_of(messages), "agent": o["ctx"]["agent"], "thread": o["thread"]})
     remember_thread(o["ctx"]["agent"], o["thread"], o["session"])
 
+-- la vista en vivo de un objetivo (public/js/objlive.js): cada paso de un asiento de equipo u objetivo sale al bus
+-- ("team.step") en el momento, compacto — el detalle completo sigue en la traza
+task live(th, agent, kind, data)
+    require time
+    when not (starts_with(th, "team:") or starts_with(th, "objective:"))
+        give false
+    let d be nothing
+    when kind == "busy"
+        set d to {"label": slice(text(field(data, "label", "")), 0, 200), "what": field(data, "kind", ""), "name": field(data, "name", "")}
+    otherwise when kind == "tool_call"
+        set d to {"name": data["name"], "args": slice(json_encode(data["args"]), 0, 1500)}
+    otherwise when kind == "tool_result"
+        let out be text(data["output"])
+        set d to {"name": data["call"]["name"], "ok": not (starts_with(out, "ERROR") or starts_with(out, "DENIED") or starts_with(out, "NOT RUN")), "out": slice(out, 0, 200)}
+    otherwise when kind == "tool_denied"
+        set d to {"name": data["call"]["name"], "reason": slice(text(data["reason"]), 0, 200)}
+    otherwise when kind == "assistant"
+        set d to {"text": slice(text(data), 0, 400)}
+    otherwise when kind == "usage"
+        let u be data["usage"]
+        let cached be field(u, "cached", 0)
+        set d to {"cost": u["input"] - cached + floor(cached / 10) + u["output"]}
+    otherwise when kind == "turn_start" or kind == "turn_end" or kind == "idle"
+        set d to {}
+    when d == nothing
+        give false
+    bus_publish("team.step", {"scope": th, "agent": agent, "kind": kind, "data": d, "at": now()})
+    give true
+
 -- corre UN turno sobre mensajes ya armados (el del usuario ya agregado): traza, run_turn, guarda.
 -- o: {ctx: {cfg, opts, agent}, session, thread} — lo que devuelve open(), o lo que arma la terminal.
 -- label: lo que se anota como turno del usuario en la traza ("" = el último mensaje de usuario).
@@ -565,8 +606,11 @@ export task turn(o, messages, label, hooks)
     require secret("LAMPSON_*")
     let sid be o["session"]
     let user_cb be field(hooks, "on_event", nothing)
+    let th0 be text(field(o, "thread", ""))
+    let me be o["ctx"]["agent"]
     task on_event(kind, data, tag)
         trace.event(sid, kind, data, tag)
+        live(th0, me, kind, data)
         when user_cb != nothing
             call(user_cb, {"kind": kind, "data": data, "tag": tag})
     let said be label
@@ -576,14 +620,21 @@ export task turn(o, messages, label, hooks)
                 set said to text(m["content"])
     let cfg be o["ctx"]["cfg"]
     trace.user(sid, said, o["ctx"]["agent"], o["ctx"]["opts"]["permission_mode"], cfg["model"])
+    live(th0, me, "turn_start", nothing)
+    when starts_with(th0, "team:")
+        let oid be teams.objective_of_scope(th0)
+        when oid != 0
+            teams.seat_session(oid, me, sid)
     let result be loop.run_turn(cfg, messages, o["ctx"]["opts"], on_event)
     trace.turn_end(sid, result)
+    live(th0, me, "turn_end", nothing)
     -- presupuesto de equipos: lo que gastó este turno (los cacheados pesan 10%, como en el loop)
     let cost be result["usage"]["input"] - result["usage"]["cached"] + floor(result["usage"]["cached"] / 10) + result["usage"]["output"]
     let th be text(field(o, "thread", ""))
     when starts_with(th, "team:")
         teams.record_spend(o["ctx"]["agent"], cost)
         teams.team_turn_end(slice(th, 5, length(th)), o["ctx"]["agent"], cost)
+        teams.seat_turn_end(slice(th, 5, length(th)), o["ctx"]["agent"], field(result, "stopped", "done"), field(result, "text", ""))
     when starts_with(th, "objective:")
         teams.obj_turn_end(floor(number(slice(th, 10, length(th)))), cost)
     save(o, result["messages"])
@@ -626,5 +677,10 @@ export task deliver(sobre, hooks)
     let images be field(sobre, "images", [])
     when length(images) > 0
         set umsg to {"role": "user", "content": msg, "images": images}
+    let t0 be now()
     let result be turn(o, append(o["messages"], umsg), msg, hooks)
+    -- en un equipo, la respuesta final no la lee nadie: si el asiento no mandó nada, se le reenvía a quien lo despertó
+    let th be text(o["thread"])
+    when starts_with(th, "team:")
+        teams.forward_final(slice(th, 5, length(th)), o["ctx"]["agent"], text(field(field(sobre, "meta", {}), "from", "")), field(result, "stopped", "done"), field(result, "text", ""), t0, msg)
     give {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": sid, "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"]}

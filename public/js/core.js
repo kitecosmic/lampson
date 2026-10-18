@@ -7,6 +7,9 @@ const log = $('#log');
 let session = new URLSearchParams(location.search).get('session') || localStorage.getItem('lampson.session') || '';
 let busy = false; let cfg = {};
 
+// la carpeta del usuario se muestra como ~ (igual que en el inicio): el nombre de usuario no aparece al compartir
+// pantalla o grabar un video, y la ruta sigue siendo inequívoca
+function shortPath(p) { return String(p || '').replace(/^[a-z]:[\\/]users[\\/][^\\/]+/i, '~').replace(/^\/(home|Users)\/[^/]+/, '~'); }
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function md(src) { // Markdown mínimo: code fences, inline code, bold, headers, listas, párrafos
   const blocks = []; src = String(src ?? '').replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, c) => { blocks.push('<pre><code class="hljs">' + (typeof hlCode === 'function' ? hlCode(c, l) : esc(c)) + '</code></pre>'); return '\uE000' + (blocks.length - 1) + '\uE001'; }); // marcador = índice entre U+E000/U+E001, NUNCA dígitos a secas (se perdieron dos veces al reescribir el archivo y todo número salía undefined)
@@ -67,7 +70,6 @@ function empty() {
   const name = (cfg.workspace || '').split(/[\\/]/).filter(Boolean).pop() || 'workspace';
   log.classList.add('hero');
   log.innerHTML = `<div class="empty">
-    <p class="eyebrow">workspace</p>
     <h1>${esc(name)}</h1>
     <p class="lead">Un agente con herramientas acotadas a este proyecto. Vos pedís; él lee, busca, edita y corre comandos — y cada paso queda a la vista.</p>
     <div class="grid">
@@ -88,6 +90,7 @@ function empty() {
       <div class="card"><h3>Cómo lo ve el modelo</h3>
         <p>Cada tool y su resultado — errores y rechazos incluidos — queda en el historial y se le reenvía en cada turno.</p>
         <p>Hacé clic en un archivo del panel de archivos para verlo. Un mensaje que empieza con <code>!</code> lo corrés vos, sin el modelo.</p></div>
-    </div></div>`;
+    </div><p class="plughint" id="plugHint" hidden></p></div>`;
   log.querySelectorAll('.try').forEach(el => el.onclick = () => { $('#in').value = el.textContent; $('#in').focus(); });
+  if (typeof paintPlugHint === 'function') paintPlugHint();
 }

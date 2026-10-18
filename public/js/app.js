@@ -2,8 +2,8 @@
 async function loadCfg() {
   try { cfg = await (await fetch(BASE + '/api/config')).json(); } catch (e) { cfg = {}; }
   const ws = cfg.workspace || '';
-  $('#proj').textContent = ws.split(/[\\/]/).filter(Boolean).pop() || 'workspace'; $('#proj').title = ws;
-  $('#hpath').textContent = ws; $('#hpath').title = ws;
+  $('#proj').textContent = ws.split(/[\\/]/).filter(Boolean).pop() || 'workspace'; $('#proj').title = shortPath(ws);
+  $('#hpath').textContent = shortPath(ws); $('#hpath').title = shortPath(ws);
   $('#perm').value = localStorage.getItem('lampson.perm') || cfg.permission || 'ask'; $('#perm').onchange = () => localStorage.setItem('lampson.perm', $('#perm').value);
   paintModel();
   if (cfg.configured === false) openSetup(true);

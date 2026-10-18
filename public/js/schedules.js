@@ -116,3 +116,8 @@ function schedFormWire(box, err) {
   };
 }
 $('#schedAddBtn').onclick = (ev) => { ev.stopPropagation(); openSched('__new'); };
+// deep link desde /tareas del hub: #tareas (el panel), #tareas=<id> (esa tarea), #tareas=nueva (el formulario)
+if (location.hash === '#tareas' || location.hash.startsWith('#tareas=')) {
+  const sel = decodeURIComponent(location.hash.slice(8));
+  setTimeout(() => openSched(sel === 'nueva' ? '__new' : sel || null), 400);
+}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<title>Lampson · workspaces</title>
+<title>Lampson · proyectos</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#131412">
 <meta name="mobile-web-app-capable" content="yes">
@@ -21,25 +21,33 @@
 <body class="hub">
 <header>
   <div class="hrow">
-    <span class="brand">lampson<span class="proj">workspaces</span></span>
+    <span class="brand">lampson</span>
+    <nav class="navtabs" data-on="proyectos"></nav>
     <span class="spacer"></span>
-    <a class="pill" href="/equipos" style="text-decoration:none" title="equipos y objetivos de todos tus proyectos">equipos</a>
     <span class="pill" id="devicesBtn" role="button" tabindex="0">dispositivos</span>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
   </div>
 </header>
 <main>
   <div id="stage">
-    <div class="empty">
-      <p class="eyebrow">workspaces</p>
-      <h1>¿En qué proyecto trabajamos?</h1>
-      <p class="lead">Cada workspace es una carpeta de tu disco con su propio agente: sesiones, tareas programadas, plugins, MCP. Corren en procesos separados, así podés tener varios abiertos a la vez. Los que tienen tareas encendidas siguen vivos aunque cierres todo.</p>
-      <div class="wsgrid" id="wsGrid"></div>
-      <p class="lead" style="margin-top:22px">Desde una terminal: <code>cd mi-proyecto &amp;&amp; lampson</code> (terminal) o <code>lampson --web</code> (esta web, en ese workspace).</p>
+    <div class="empty hubhome">
+      <div class="hhead">
+        <h1>Proyectos</h1>
+        <span class="spacer"></span>
+        <input id="wsSearch" type="search" placeholder="buscar proyecto…" autocomplete="off" spellcheck="false" aria-label="buscar proyecto">
+        <button id="wsManage" type="button" title="encender, apagar, política de vida, quitar">gestionar</button>
+        <button id="wsNew" class="primary" type="button">+ nuevo proyecto</button>
+      </div>
+      <div class="lead">Cada proyecto es una carpeta de tu disco con su propio agente. <details class="how"><summary>¿cómo funciona?</summary><p>Cada uno tiene sus sesiones, tareas programadas, plugins y MCP, y corre en su propio proceso: podés tener varios abiertos a la vez. Los que tienen tareas encendidas siguen activos aunque cierres todo; al abrir uno apagado se enciende solo.</p></details></div>
+      <div id="wsAttn"></div>
+      <div class="tiles" id="wsTiles"></div>
+      <div id="wsGroups"></div>
+      <p class="cli">desde una terminal: <code>cd mi-proyecto &amp;&amp; lampson</code> <span class="copy" data-copy="cd mi-proyecto &amp;&amp; lampson" role="button" tabindex="0">copiar</span> · <code>lampson --web</code> abre esta web en ese proyecto <span class="copy" data-copy="lampson --web" role="button" tabindex="0">copiar</span></p>
     </div>
   </div>
 </main>
 <script src="/js/panel.js"></script>
+<script src="/js/navtabs.js"></script>
 <script src="/js/hub.js"></script>
 <script src="/js/workspaces.js"></script>
 <script src="/vendor/qrcode.js"></script>

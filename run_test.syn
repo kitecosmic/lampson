@@ -131,6 +131,26 @@ print("deliver: sin humano, lo que pide aprobación se deniega")
 let r5 be runtime.deliver({"to": "build", "text": "peligro"}, {"mode": "ask", "ask_fn": nothing})
 set created to append(created, r5["session"])
 check(contains(r5["text"], "DENIED"), "bash peligroso denegado: " + slice(r5["text"], 0, 80))
+
+print("deliver: en un equipo, lo que pide aprobación de un asiento que no es el líder sube a su jefe")
+write_file(ADIR + "/rt-jefe.agent.json", json_encode({"id": "rt-jefe", "system": "Jefe.", "tools": ["bash"]}))
+write_file(ADIR + "/rt-sub.agent.json", json_encode({"id": "rt-sub", "system": "Sub.", "tools": ["bash"]}))
+write_file(teams.DIR + "/rt-cadena.team.json", json_encode({"id": "rt-cadena", "worktrees": false, "members": [{"agent": "rt-jefe", "role": "Jefe"}, {"agent": "rt-sub", "role": "Sub", "reports_to": "rt-jefe"}]}))
+set threads to append(append(threads, ["rt-sub", "team:rt-cadena"]), ["rt-jefe", "team:rt-cadena"])
+let asked be 0
+task ask_spy(name, args, why)
+    set asked to asked + 1
+    give false
+let rc be runtime.deliver({"to": "rt-sub", "text": "peligro", "thread": "team:rt-cadena"}, {"mode": "ask", "ask_fn": ask_spy})
+set created to append(created, rc["session"])
+check(contains(rc["text"], "NOT RUN: this needs approval"), "el subordinado no le pregunta a la persona: " + slice(rc["text"], 0, 100))
+check(asked == 0, "y la aprobación no se abre")
+let rj be runtime.deliver({"to": "rt-jefe", "text": "peligro", "thread": "team:rt-cadena"}, {"mode": "ask", "ask_fn": ask_spy})
+set created to append(created, rj["session"])
+check(asked == 1 and contains(rj["text"], "DENIED by the user"), "el líder sí se la pide a la persona: " + slice(rj["text"], 0, 100))
+rm_file(teams.DIR + "/rt-cadena.team.json")
+rm_file(ADIR + "/rt-jefe.agent.json")
+rm_file(ADIR + "/rt-sub.agent.json")
 let unknown_failed be false
 try
     runtime.deliver({"to": "nadie", "text": "x"}, {})

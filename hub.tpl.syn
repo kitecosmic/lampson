@@ -6,6 +6,8 @@
 --   GET  /w/<slug>            la UI de ese workspace (public/index.html; los assets /css /js los sirve el hub)
 --   *    /w/<slug>/api/…      proxy al proceso del workspace (127.0.0.1:808N) — SSE y WebSocket pasan (Synsema ≥ 0.6.12)
 --   GET  /w/<slug>/approve/…  links de aprobación de ese workspace
+--   GET  /equipos · /tareas · /plugins   vistas de todos los proyectos (pestañas del inicio)
+--   GET  /w/<slug>/equipos[/…] · /w/<slug>/objetivos/<n>   equipos, objetivos y rutinas de un proyecto
 --   /api/workspaces…          registro, crear (diálogo nativo o explorador), start/stop/quitar, política
 -- Supervisor: cada 15 s arranca los workspaces que deben vivir y apaga los inactivos (política en ⚙ → idle_hours).
 -- Acceso: esta PC entra sin nada; lo remoto — túnel, LAN, VPS — necesita la sesión de un dispositivo emparejado con
@@ -35,6 +37,9 @@ require file.read("public/*")
 -- equipos que no programan: su carpeta vive en la instalación (equipos/<nombre>/), creada desde /equipos
 require file("equipos")
 require file("equipos/*")
+-- /plugins: el catálogo de plugins de la instalación (solo lectura: encender es dentro de cada proyecto)
+require file.read("plugins")
+require file.read("plugins/*")
 require random
 
 use "./lib/workspaces.syn" as ws
@@ -61,6 +66,21 @@ task check_client(token, request)
 -- las páginas (no el API): un remoto sin sesión va a /login
 task page_allowed(request)
     give check_client(nothing, request) != nothing
+
+-- la pantalla de equipos (public/teams.html) en cualquiera de sus rutas: /w/<nombre> sin el hash va al slug completo, y
+-- entrar enciende el workspace si estaba apagado
+task teams_page(request, slug, rest, query)
+    when not page_allowed(request)
+        give redirect("/login", 302)
+    let full be ws.resolve_slug(slug)
+    when full != nothing and full != slug
+        give redirect("/w/" + full + rest + (when contains(query, "new") then "?new=1" otherwise ""), 302)
+    let w be ws.get(slug)
+    when w != nothing and ws.health(w) == nothing
+        ws.start_ws(w)
+        ws.wait_ready(w, 8)
+        ws.summary()
+    give html(read_file("public/teams.html"))
 
 task with_session(resp, request, sid)
     give set_cookie(resp, auth.COOKIE, sid, {"max_age": auth.SESSION_MAX_DAYS * 86400, "secure": auth.secure_cookie(headers of request), "same_site": "Lax"})
@@ -185,19 +205,15 @@ serve on 8080
             ws.summary()
         give html(read_file("public/index.html"))
 
-    -- la pantalla de equipos y objetivos de un workspace (public/teams.html): página propia, a pantalla completa
+    -- la pantalla de equipos y objetivos de un workspace (public/teams.html): página propia, a pantalla completa. Las
+    -- subrutas (…/equipos/<equipo>, /editar, /objetivos/<n>, /rutinas/<id>, /w/<slug>/objetivos/<n>) son la misma
+    -- página: js/teams.js lee la URL y muestra ese nivel (así «atrás» y los enlaces van a donde dicen)
     route "GET /w/:slug/equipos"
-        when not page_allowed(request)
-            give redirect("/login", 302)
-        let full be ws.resolve_slug(params.slug)
-        when full != nothing and full != params.slug
-            give redirect("/w/" + full + "/equipos" + (when contains(query, "new") then "?new=1" otherwise ""), 302)
-        let w be ws.get(params.slug)
-        when w != nothing and ws.health(w) == nothing
-            ws.start_ws(w)
-            ws.wait_ready(w, 8)
-            ws.summary()
-        give html(read_file("public/teams.html"))
+        give teams_page(request, params.slug, "/equipos", query)
+    route "GET /w/:slug/equipos/*rest"
+        give teams_page(request, params.slug, "/equipos/" + params.rest, query)
+    route "GET /w/:slug/objetivos/*rest"
+        give teams_page(request, params.slug, "/objetivos/" + params.rest, query)
 
     -- EQUIPOS Y OBJETIVOS de todos los workspaces (public/teams-home.html): lo que espera a la persona, cada proyecto
     -- con sus equipos y objetivos, y «+ equipo». Lee el resumen que escribe cada workspace (lib/teamrun.syn).
@@ -237,6 +253,33 @@ serve on 8080
         ws.wait_ready(w, 8)
         ws.summary()
         give {"ok": true, "slug": w["slug"], "url": "/w/" + w["slug"] + "/equipos?new=1"}
+
+    -- TAREAS PROGRAMADAS de todos los workspaces (public/tasks-home.html): leídas del json de cada uno, así se ven
+    -- también las de un proyecto apagado. Correr y encender/apagar van al workspace por el proxy (/w/<slug>/api/…).
+    route "GET /tareas"
+        when not page_allowed(request)
+            give redirect("/login", 302)
+        give html(read_file("public/tasks-home.html"))
+
+    route "GET /api/tasks-home" requires auth
+        let out be []
+        each w in ws.summary_cached(20)
+            set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "alive": w["alive"], "tasks": ws.tasks_summary(w)})
+        give {"workspaces": out}
+
+    -- PLUGINS (public/plugins-home.html): qué hay instalado y en qué proyectos está encendido cada uno. Es un
+    -- escaparate: encender sigue siendo una decisión por proyecto, dentro del proyecto (/w/<slug>#plugins=<nombre>).
+    route "GET /plugins"
+        when not page_allowed(request)
+            give redirect("/login", 302)
+        give html(read_file("public/plugins-home.html"))
+
+    route "GET /api/plugins-home" requires auth
+        let out be []
+        each w in ws.summary_cached(20)
+            let p be ws.plugins_of(w)
+            set out to append(out, {"slug": w["slug"], "name": w["name"], "path": w["path"], "alive": w["alive"], "enabled": p["enabled"], "local": p["local"]})
+        give {"global": ws.plugins_global(), "workspaces": out}
 
     route "GET /api/hub" requires auth
         give {"ok": true, "port": ws.HUB_PORT, "idle_hours": ws.idle_hours(), "home": ws.home(), "local": request.user["local"]}

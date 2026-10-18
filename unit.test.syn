@@ -158,9 +158,11 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert_eq(provider.normalize_model("minimax", "MiniMax-M3"), "MiniMax-M3")
     assert_eq(provider.normalize_model("glm", "GLM-5.3-Flash"), "glm-5.3-flash")
     assert_eq(provider.normalize_model("glm-coding", "GLM-5.3"), "glm-5.3")
-    assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-v4-flash")
+    assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-flash")
     assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
-    assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
+    assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-flash"}))
+    assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-pro"}))
+    assert(provider.supports_vision({"provider": "openai", "model": "gpt-6.1-sol"}))
     -- Z.ai: glm-5.3-flash por defecto (multimodal nativo); glm-5.3 y los glm-4.x sin sufijo v no ven imágenes
     assert_eq(provider.PRESETS["glm"]["model"], "glm-5.3-flash")
     assert_eq(provider.PRESETS["glm-coding"]["model"], "glm-5.3-flash")
@@ -1671,7 +1673,9 @@ test "plugin orders: cotiza con promos, valida, guarda el pedido, baja el stock 
     assert(contains(plugins.set_enabled("orders", false), "OFF"))
 
 -- ---------- equipos (lib/teams.syn) ----------
+use "./lib/diagnose.syn" as diagnose
 use "./lib/teams.syn" as teams
+use "./lib/api.syn" as api
 
 task team_fixture()
     db_open(teams.DB)
@@ -1691,6 +1695,9 @@ task board(agent, args)
 
 test "equipos: validar el archivo — id, miembros, reports_to y talks dentro del equipo"
     assert(teams.validate({"id": "x", "members": [{"agent": "a"}]}, "f")["ok"])
+    -- el nombre visible: libre y editable; sin él, el id
+    assert_eq(teams.validate({"id": "x", "members": [{"agent": "a"}]}, "f")["team"]["name"], "x")
+    assert_eq(teams.validate({"id": "x", "name": "  Mantenimiento web ", "members": [{"agent": "a"}]}, "f")["team"]["name"], "Mantenimiento web")
     assert(not teams.validate({"id": "X Y", "members": [{"agent": "a"}]}, "f")["ok"])
     assert(not teams.validate({"id": "x", "members": []}, "f")["ok"])
     assert(contains(teams.validate({"id": "x", "members": [{"agent": "a", "reports_to": "nadie"}]}, "f")["error"], "not in the team"))
@@ -1707,11 +1714,39 @@ test "equipos: el grafo es una regla — a quién le puede escribir cada uno"
     assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "nadie", "message": "x"}), "not in team"))
     assert(contains(teams.send_with({"recipient": "ttcto", "message": "x"}), "who is sending"), "sin _agent no hay send")
     assert(contains(teams.send_with({"_agent": "rt-ajeno", "recipient": "ttcto", "message": "x"}), "not in any team"))
+    -- los del mismo nivel se hablan solo si el par está en "talks" (no se da por hecho)
+    let flat be {"members": [{"agent": "a", "reports_to": ""}, {"agent": "b", "reports_to": "a"}, {"agent": "c", "reports_to": "a"}, {"agent": "d", "reports_to": "b"}], "talks": []}
+    assert_eq(sort(teams.peers(flat, "b")), ["a", "d"])
+    set flat["talks"] to [["b", "c"]]
+    assert_eq(sort(teams.peers(flat, "b")), ["a", "c", "d"])
     rm_file(runtime.PROJECT_DIR + "/ttcmo.agent.json")
     assert(contains(teams.send_with({"_agent": "ttceo", "recipient": "ttcmo", "message": "x"}), "has no agent file"), "un mensaje que nadie leería se rechaza en el momento")
     write_file(runtime.PROJECT_DIR + "/ttcmo.agent.json", json_encode({"id": "ttcmo", "system": "Eres ttcmo.", "tools": ["read"], "permission": "strict"}))
     let p be where(teams.pending(), (m) => m["scope"] == "team:t-test")
     assert(length(p) == 1 and p[0]["sender"] == "ttdev" and p[0]["recipient"] == "ttcto")
+
+test "rutinas: una tarea programada le da un objetivo al equipo; si la ejecución anterior sigue abierta, se saltea"
+    team_fixture()
+    let r be schedule.add({"name": "test rutina", "when": "daily 09:00", "action": {"type": "objective", "team": "t-test", "text": "Armá el resumen de la semana"}})
+    assert_eq(r["action"]["type"], "objective")
+    assert(contains(schedule.describe_action(r["action"]), "objective for team t-test"))
+    let mine be "rutina:" + r["id"]
+    let out be schedule.run_simple(r)
+    assert(starts_with(out, "O-") and contains(out, "team t-test"), out)
+    let runs be where(teams.obj_list(), (o) => o["created_by"] == mine)
+    assert(length(runs) == 1 and runs[0]["team"] == "t-test" and runs[0]["agent"] == "ttceo" and runs[0]["status"] == "active", "una ejecución: un objetivo del líder")
+    assert(starts_with(schedule.run_simple(r), "SKIPPED"), "la anterior sigue abierta: no se amontonan")
+    teams.obj_cancel(runs[0]["id"], "person")
+    assert(starts_with(schedule.run_simple(r), "O-"), "cerrada la anterior, la rutina vuelve a crear")
+    each o in where(teams.obj_list(), (x) => x["created_by"] == mine and x["status"] == "active")
+        teams.obj_cancel(o["id"], "person")
+    let bad be ""
+    try
+        schedule.add({"when": "daily 09:00", "action": {"type": "objective", "team": "no-existe", "text": "x"}})
+    recover err
+        set bad to text(err)
+    assert(contains(bad, "id of a team"), bad)
+    schedule.remove(r["id"])
 
 test "equipos: un miembro tiene send y board, su rol en el prompt, y opts sabe quién es"
     team_fixture()
@@ -1721,6 +1756,9 @@ test "equipos: un miembro tiene send y board, su rol en el prompt, y opts sabe q
     let ctx be runtime.boot("ttdev", {}, nothing)
     assert(contains(ctx["system"]["content"], "# Team t-test — equipo de prueba\nYou are ttdev, role: Dev. You report to ttcto."), ctx["system"]["content"])
     assert(contains(ctx["system"]["content"], "You can message: ttcto"))
+    -- la cadena de mando: el dev le pregunta a su jefe, nunca a la persona; el líder es el único que le pregunta
+    assert(contains(ctx["system"]["content"], "Chain of command: when you are stuck, unsure what to do, or need a decision, ask ttcto with `send` — never the person."))
+    assert(contains(runtime.boot("ttceo", {}, nothing)["system"]["content"], "You lead the team."))
     assert_eq(ctx["opts"]["agent_id"], "ttdev")
     write_file(runtime.PROJECT_DIR + "/rt-solo.agent.json", json_encode({"id": "rt-solo", "system": "solo", "tools": ["read"]}))
     assert(not contains(keys(runtime.registry_of(runtime.get("rt-solo"))), "send"), "fuera de un equipo, sin send")
@@ -1852,6 +1890,30 @@ test "worktree: en un repo, cada agente tiene su copia, su rama y su autor (y .l
     assert(contains(read_file("workspace/.git/info/exclude"), "/.lampson/"))
     assert(worktree.ensure("t", "dev", {"name": "Dev (Lampson)", "email": "dev@lampson.local"})["ok"], "la segunda vez la reusa")
     assert(not contains(run("git", ["status", "--porcelain"], 30, {"cwd": "workspace"})["stdout"], ".lampson/"), "las copias no ensucian la copia principal")
+    -- la aprobación de un merge muestra qué entra: la rama, sus commits, los archivos, si avanza directo y si choca
+    write_file("workspace/.lampson/worktrees/dev/api.js", "uno\ndos\n")
+    run("git", ["add", "api.js"], 30, {"cwd": "workspace/.lampson/worktrees/dev"})
+    run("git", ["commit", "-q", "-m", "filtro por estado"], 30, {"cwd": "workspace/.lampson/worktrees/dev"})
+    let pv be worktree.preview("git -C ../../.. merge --no-ff team/t/dev -m \"Merge: el filtro\" && git log -1")
+    assert(pv["kind"] == "merge" and pv["branch"] == "team/t/dev" and pv["into"] == "main" and pv["count"] == 1, json_encode(pv))
+    assert(pv["commits"][0]["subject"] == "filtro por estado" and pv["commits"][0]["author"] == "Dev", json_encode(pv["commits"]))
+    assert(length(pv["files"]) == 1 and pv["files"][0]["path"] == "api.js" and pv["files"][0]["add"] == 2, json_encode(pv["files"]))
+    assert(pv["ff"] and not pv["conflicts"])
+    assert_eq(worktree.preview("cd ../../.. && git merge -m \"x y\" team/t/dev")["branch"], "team/t/dev")
+    assert_eq(worktree.preview("git status"), nothing)
+    write_file("workspace/api.js", "otro\n")
+    run("git", ["add", "api.js"], 30, {"cwd": "workspace"})
+    run("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "-m", "choca"], 30, {"cwd": "workspace"})
+    let pc be worktree.preview("git -C ../../.. merge team/t/dev")
+    assert(not pc["ff"] and pc["conflicts"], json_encode(pc))
+    run("git", ["reset", "-q", "--hard", "HEAD~1"], 30, {"cwd": "workspace"})
+    -- al borrar el equipo: la copia se va y lo que no llegó a main (incluso sin commitear) queda en una rama archive/
+    write_file("workspace/.lampson/worktrees/dev/nuevo.txt", "trabajo a medias")
+    let rt be worktree.retire("t", "dev")
+    assert(rt["copy"] == "removed" and starts_with(rt["branch"], "archive/t/dev-"), json_encode(rt))
+    assert(not file_exists("workspace/.lampson/worktrees/dev/.git"), "la copia se fue")
+    assert(contains(run("git", ["show", rt["branch"] + ":nuevo.txt"], 30, {"cwd": "workspace"})["stdout"], "trabajo a medias"), "el trabajo quedó en la rama archivada")
+    assert(run("git", ["rev-parse", "--verify", "refs/heads/team/t/dev"], 30, {"cwd": "workspace"})["exit_code"] != 0, "la rama del asiento quedó libre")
 
 test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del equipo y suma el gasto de todos"
     let t be team_fixture()
@@ -1866,6 +1928,15 @@ test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del
     assert_eq(teams.objective_tool("report", "repartido", "ttceo", "team:t-test"), "reported")
     assert(contains(teams.objective_tool("report", "x", "ttdev", "team:t-test"), "don't lead"))
     assert(length(where(teams.ledger("team:t-test", 0, 50), (r) => r["kind"] == "report")) == 1, "el informe va al registro del equipo")
+    -- las tareas del tablero del equipo saben de qué objetivo son; la vista del objetivo muestra solo las suyas y quién
+    -- trabajó (los asientos, con su sesión en la conversación del equipo)
+    sql_exec("UPDATE tasks SET objective = 0 WHERE scope = 'team:t-test'")
+    assert(contains(board("ttceo", {"action": "add", "title": "login de la v2", "owner": "ttdev"}), "#"))
+    let mine be where(teams.tasks("team:t-test"), (x) => x["title"] == "login de la v2")
+    assert(length(mine) == 1 and mine[0]["objective"] == id, "la tarea nueva es del objetivo abierto del equipo")
+    let v be api.objective_view(teams.obj_get(id))
+    assert(length(v["tasks"]) == 1 and v["tasks"][0]["title"] == "login de la v2", "solo las tareas de este objetivo")
+    assert(length(v["seats"]) == 4 and length(where(v["seats"], (x) => x["lead"])) == 1 and where(v["seats"], (x) => x["lead"])[0]["agent"] == "ttceo", "los asientos, con el líder marcado")
     teams.team_turn_end("t-test", "ttdev", 300)
     teams.team_turn_end("t-test", "ttceo", 200)
     let o2 be teams.obj_get(id)
@@ -1875,6 +1946,152 @@ test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del
         rm_file(runtime.PROJECT_DIR + "/" + a + ".agent.json")
     rm_file(teams.DIR + "/t-test.team.json")
 
+
+test "equipos: un turno cortado sigue donde quedó, una tarea que espera a otras no es trabajo, y el tope por asiento"
+    let t be team_fixture()
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    sql_exec("DELETE FROM messages WHERE scope = 'team:t-test'")
+    let id be teams.obj_create("ttceo", "algo", {"team": "t-test", "created_by": "test"})
+    -- el merge del CEO espera a la tarea del Dev: mientras tanto el CEO no tiene trabajo
+    let a be teams.add_task("team:t-test", "ttceo", "implementar", "", "ttdev", [])
+    teams.add_task("team:t-test", "ttceo", "merge", "", "ttceo", [a])
+    sql_exec("INSERT OR REPLACE INTO cursors (agent, scope, last) VALUES ('ttceo', 'team:t-test', 999999999)")
+    assert(not teams.has_work("team:t-test", "ttceo"), "su tarea espera a otra")
+    sql_exec("UPDATE tasks SET status = 'done' WHERE id = ?", [a])
+    assert(teams.has_work("team:t-test", "ttceo"), "ya puede hacerla")
+    -- el Dev llega al límite de pasos: recibe un mensaje para seguir, con lo último que dijo
+    assert(teams.seat_turn_end("t-test", "ttdev", "max_steps", "54 de 55 tests pasan"))
+    let ms be sql("SELECT * FROM messages WHERE scope = 'team:t-test' AND recipient = 'ttdev' AND state = 'pending'", [])
+    assert(length(ms) == 1 and ms[0]["sender"] == "lampson" and contains(ms[0]["text"], "Continue where you left off") and contains(ms[0]["text"], "54 de 55") and contains(ms[0]["text"], "to ttcto"), json_encode(ms))
+    assert(not teams.seat_turn_end("t-test", "ttdev", "done", ""), "un turno que termina bien reinicia la cuenta")
+    each i in [1, 2, 3]
+        teams.seat_turn_end("t-test", "ttdev", "max_steps", "")
+    assert(not teams.seat_turn_end("t-test", "ttdev", "max_steps", "sigo trabado"), "a la cuarta seguida, no")
+    assert(length(sql("SELECT * FROM messages WHERE scope = 'team:t-test' AND recipient = 'ttcto' AND sender = 'lampson'", [])) == 1, "le avisa a su jefe")
+    assert(length(where(teams.ledger("team:t-test", 0, 100), (r) => r["kind"] == "stuck")) == 1)
+    -- el tope: el del equipo, o el propio del asiento; la persona le da más por hoy o lo reinicia
+    assert_eq(teams.cap_of(t, "ttdev"), 1000)
+    write_file(teams.DIR + "/t-test.team.json", json_encode({"id": "t-test", "members": [{"agent": "ttceo", "role": "CEO"}, {"agent": "ttdev", "role": "Dev", "reports_to": "ttceo", "daily_tokens": 5000}], "budget_daily_tokens": 1000}))
+    let t2 be teams.get("t-test")
+    assert(teams.cap_of(t2, "ttdev") == 5000 and teams.cap_of(t2, "ttceo") == 1000)
+    teams.record_spend("ttceo", 1500)
+    sql_exec("UPDATE objectives SET status = 'done' WHERE team = 't-test'")
+    assert(teams.over_budget(t2, "ttceo") and not teams.over_budget(t2, "ttdev"))
+    let g be api.seat_tokens({"agent": "ttceo", "action": "grant", "tokens": 1000})
+    assert(g["ok"] and g["today"] == 500 and not teams.over_budget(t2, "ttceo"), json_encode(g))
+    assert_eq(api.seat_tokens({"agent": "ttceo", "action": "reset"})["today"], 0)
+    assert(not api.seat_tokens({"agent": "nadie", "action": "reset"})["ok"])
+    sql_exec("DELETE FROM messages WHERE scope = 'team:t-test'")
+    each x in ["ttceo", "ttcto", "ttdev", "ttcmo"]
+        rm_file(runtime.PROJECT_DIR + "/" + x + ".agent.json")
+    rm_file(teams.DIR + "/t-test.team.json")
+
+test "equipos: la respuesta final que nadie lee se reenvía, y «Revisar qué pasa» ve lo trabado"
+    let t be team_fixture()
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    sql_exec("DELETE FROM messages WHERE scope = 'team:t-test'")
+    let id be teams.obj_create("ttceo", "agregá undone", {"team": "t-test", "created_by": "test"})
+    let long be "Opción 1: avanzando, sin commit todavía. Hice reopen(id) en store y la ruta POST /tasks/:id/undone; faltan 1 de 55 tests."
+    -- contestó en la respuesta final a un pedido del CTO: se le reenvía al CTO
+    assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "done", long, 0, "[message from ttcto] ¿cómo va?"), "ttcto")
+    let fw be sql("SELECT * FROM messages WHERE scope = 'team:t-test' AND sender = 'ttdev' AND recipient = 'ttcto'", [])
+    assert(length(fw) == 1 and contains(fw[0]["text"], teams.FORWARD_MARK) and contains(fw[0]["text"], "reopen(id)"), json_encode(fw))
+    -- no: si ya mandó algo en el turno, si es corta, si lo que lo despertó era un reenvío, si se cortó
+    assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "done", long, 0, "x " + teams.FORWARD_MARK), "")
+    assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "done", "nada que hacer", 0, ""), "")
+    assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "max_steps", long, 0, ""), "")
+    assert_eq(teams.forward_final("t-test", "ttdev", "lampson", "done", long, now() + 100, ""), "ttcto", "lo despertó Lampson: a su jefe")
+    assert_eq(teams.forward_final("t-test", "ttceo", "lampson", "done", long, now() + 100, ""), "", "el líder no tiene a quién")
+    -- la persona le escribe a un asiento y mueve una tarea
+    assert(teams.person_message("t-test", "ttdev", "Seguí con #48: tenés presupuesto."))
+    assert(not teams.person_message("t-test", "nadie", "x"))
+    assert(sql("SELECT COUNT(*) AS n FROM messages WHERE scope = 'team:t-test' AND sender = 'person' AND recipient = 'ttdev'", [])[0]["n"] == 1)
+    let tk be teams.add_task("team:t-test", "ttceo", "implementar undone", "EN ESPERA: dev fuera de servicio por cap diario", "ttdev", [])
+    teams.person_move("team:t-test", tk, "blocked")
+    teams.add_task("team:t-test", "ttceo", "review", "", "ttcto", [tk])
+    -- lo que ve sin IA: bloqueada, la que espera a la bloqueada, la creencia de «sin presupuesto», la respuesta sin enviar
+    write_file(".lampson/trace/tt-dev-sid.log", "02:27:52.044 +500.2s  USER  [ttdev · ask · m] [message from ttcto (CTO)] ⏎ ¿Cómo va?\n02:27:55.166 +  3.1s  STEP 1  modelo respondió · in=1 out=1\n02:27:55.171 +  0.0s  SAY   " + long + "\n02:27:55.182 +  0.0s  END   1 pasos · 43788 tokens · done\n")
+    teams.seat_session(id, "ttdev", "tt-dev-sid")
+    let lt be diagnose.last_turn("tt-dev-sid")
+    assert(lt["stopped"] == "done" and length(lt["calls"]) == 0 and starts_with(lt["said"], "Opción 1") and contains(lt["trigger"], "Cómo va"), json_encode(lt))
+    let fs be diagnose.facts(teams.obj_get(id))
+    let kinds be apply(fs, (f) => f["kind"])
+    assert(contains(kinds, "blocked") and contains(kinds, "waits") and contains(kinds, "budget_belief") and contains(kinds, "unsent"), json_encode(fs))
+    -- las acciones desde la pantalla
+    assert(api.obj_act(teams.obj_get(id), {"kind": "task", "task": tk, "status": "todo"})["ok"])
+    assert_eq(teams.task_get("team:t-test", tk)["status"], "todo")
+    assert(not api.obj_act(teams.obj_get(id), {"kind": "task", "task": tk, "status": "volando"})["ok"])
+    assert(api.obj_act(teams.obj_get(id), {"kind": "message", "agent": "ttdev", "text": "dale"})["ok"])
+    rm_file(".lampson/trace/tt-dev-sid.log")
+    sql_exec("DELETE FROM messages WHERE scope = 'team:t-test'")
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    each x in ["ttceo", "ttcto", "ttdev", "ttcmo"]
+        rm_file(runtime.PROJECT_DIR + "/" + x + ".agent.json")
+    rm_file(teams.DIR + "/t-test.team.json")
+
+test "equipos: pasar el trabajo a otro equipo — solo a los que nombró la persona, sin volver atrás, con aprobación opcional"
+    let t be team_fixture()
+    each a in ["ttsec", "ttaud"]
+        write_file(runtime.PROJECT_DIR + "/" + a + ".agent.json", json_encode({"id": a, "system": "Eres " + a + ".", "tools": ["read"], "permission": "strict"}))
+    write_file(teams.DIR + "/t-sec.team.json", json_encode({"id": "t-sec", "name": "Seguridad", "description": "busca vulnerabilidades", "members": [{"agent": "ttsec", "role": "Jefe"}]}))
+    write_file(teams.DIR + "/t-aud.team.json", json_encode({"id": "t-aud", "members": [{"agent": "ttaud", "role": "Auditor"}]}))
+    sql_exec("DELETE FROM objectives WHERE team IN ('t-test', 't-sec', 't-aud')")
+    sql_exec("DELETE FROM ledger WHERE scope = 'team:t-sec'")
+    assert_eq(teams.mentions("revisá y pasáselo a @t-test, o a @nadie, o a @t-test."), ["t-test"], "solo equipos que existen, una vez")
+    let id be teams.obj_create("ttsec", "revisá la seguridad y si hay algo pasáselo a @t-test", {"team": "t-sec", "created_by": "test"})
+    let o be teams.obj_get(id)
+    assert_eq(json_decode(o["pass_to"]), ["t-test"])
+    assert(contains(teams.obj_head(o), "Handing over") and contains(teams.obj_head(o), "- t-test: equipo de prueba — seats: CEO, CTO, Dev, CMO"), teams.obj_head(o))
+    assert(contains(teams.objective_tool("handoff", "arreglá X", "ttsec", "team:t-sec", "t-aud"), "only hand it over to the teams the person named"))
+    let r be teams.objective_tool("handoff", "Arreglá la inyección en api.js:40", "ttsec", "team:t-sec", "t-test")
+    assert(contains(r, "handed over to team t-test as O-"), r)
+    let kids be teams.obj_children(id)
+    assert(length(kids) == 1 and kids[0]["team"] == "t-test")
+    let c be teams.obj_get(kids[0]["id"])
+    assert(c["agent"] == "ttceo" and c["text"] == "Arreglá la inyección en api.js:40" and c["from_obj"] == id and c["created_by"] == "team:t-sec", json_encode(c))
+    assert_eq(json_decode(c["chain"]), ["t-sec"])
+    assert_eq(json_decode(c["pass_to"]), [], "no vuelve a un equipo de la cadena (ni a sí mismo)")
+    assert(contains(teams.obj_head(c), "handed over by team t-sec from O-" + text(id)))
+    assert(contains(teams.objective_tool("handoff", "otra vez", "ttsec", "team:t-sec", "t-test"), "already handed over"), "no dos veces")
+    assert(length(where(teams.ledger("team:t-sec", 0, 50), (x) => x["kind"] == "handed off")) == 1, "queda en el registro del que lo pasó")
+    let v be api.objective_view(c)
+    assert(v["from"]["id"] == id and v["from"]["team"] == "t-sec", json_encode(v["from"]))
+    assert_eq(api.objective_view(teams.obj_get(id))["passed"][0]["team"], "t-test")
+    -- con aprobación: el pase espera a la persona; aprobado sale, denegado no
+    sql_exec("DELETE FROM objectives WHERE team IN ('t-test', 't-sec')")
+    let id2 be teams.obj_create("ttsec", "revisá y pasáselo a @t-test o a @t-aud", {"team": "t-sec", "created_by": "test", "pass_ask": true})
+    assert(contains(teams.objective_tool("handoff", "arreglá Y", "ttsec", "team:t-sec", "t-test"), "for approval"))
+    assert(teams.obj_get(id2)["status"] == "waiting" and length(teams.obj_children(id2)) == 0, "todavía no salió")
+    teams.obj_reply(id2, "", true, "joel")
+    assert(length(teams.obj_children(id2)) == 1 and contains(teams.obj_get(id2)["reply"], "Handed over to team t-test"), "aprobado, sale")
+    assert_eq(teams.obj_get(id2)["pass_pending"], "")
+    assert(contains(teams.objective_tool("handoff", "arreglá Z", "ttsec", "team:t-sec", "t-aud"), "for approval"))
+    teams.obj_reply(id2, "no hace falta", false, "joel")
+    assert(length(teams.obj_children(id2)) == 1 and contains(teams.obj_get(id2)["reply"], "Don't hand it over to team t-aud"), "denegado, no sale")
+    -- como mucho dos saltos: el que llega por segundo salto ya no pasa a nadie
+    let deep be teams.obj_create("ttceo", "x @t-aud", {"team": "t-test", "chain": ["t-sec", "t-aud2"]})
+    assert_eq(json_decode(teams.obj_get(deep)["pass_to"]), [])
+    sql_exec("DELETE FROM objectives WHERE team IN ('t-test', 't-sec', 't-aud')")
+    each a in ["ttceo", "ttcto", "ttdev", "ttcmo", "ttsec", "ttaud"]
+        rm_file(runtime.PROJECT_DIR + "/" + a + ".agent.json")
+    each f in ["t-test", "t-sec", "t-aud"]
+        rm_file(teams.DIR + "/" + f + ".team.json")
+
+test "equipos: borrar uno cancela sus objetivos en curso, borra su archivo y sus agentes (si no los usa otro equipo)"
+    let t be team_fixture()
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    let id be teams.obj_create("ttceo", "algo", {"team": "t-test", "created_by": "test"})
+    teams.add_task("team:t-test", "ttceo", "tarea vieja", "", "ttdev", [])
+    assert(not api.delete_team({"id": "no-existe"})["ok"])
+    let r be api.delete_team({"id": "t-test", "agents": true})
+    assert(r["ok"] and r["cancelled"] == ["O-" + text(id)], json_encode(r))
+    assert_eq(teams.obj_get(id)["status"], "cancelled")
+    assert(not file_exists(teams.DIR + "/t-test.team.json"), "el archivo del equipo se fue")
+    assert_eq(teams.get("t-test"), nothing)
+    assert(length(r["agents"]) == 4 and not file_exists(runtime.PROJECT_DIR + "/ttceo.agent.json"), "sus agentes también")
+    -- un equipo nuevo con el mismo nombre arranca de cero: el tablero viejo quedó archivado con su objetivo
+    assert_eq(length(teams.tasks("team:t-test")), 0, "el tablero viejo no lo hereda nadie")
+    assert(length(teams.tasks("team:" + r["archived"])) == 1 and teams.obj_get(id)["team"] == r["archived"], "el historial sigue, archivado")
 
 test "workspaces: /w/<nombre> sin el hash resuelve al workspace si hay uno solo con ese nombre"
     let reg be wsp.all()

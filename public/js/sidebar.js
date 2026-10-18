@@ -18,16 +18,18 @@ for (const s of document.querySelectorAll('.sec')) {
   const pref = localStorage.getItem('lampson.sec.' + s.dataset.sec);
   if (pref !== null) setSec(s.dataset.sec, pref === '1');
 }
-// plegar/desplegar: cerrado = barra angosta con su icono; preferencia por lado en localStorage
-function sideSet(which, closed) {
+// plegar/desplegar: cerrado = barra angosta con su icono; preferencia por lado en localStorage.
+// Sin preferencia arrancan plegados: el proyecto abre con la conversación sola y los paneles a un clic.
+// Quien abre uno lo encuentra abierto la próxima vez (se guarda solo lo que la persona eligió)
+function sideSet(which, closed, keep = true) {
   document.body.classList.toggle(which + '-closed', closed);
   const a = document.querySelector(which === 'l' ? 'aside:not(.right)' : 'aside.right'); if (a) a.classList.toggle('closed', closed);
-  try { localStorage.setItem('lampson.side.' + which, closed ? '1' : '0'); } catch (e) {}
+  if (keep) try { localStorage.setItem('lampson.side.' + which, closed ? '1' : '0'); } catch (e) {}
 }
 for (const which of ['l', 'r']) {
   const a = document.querySelector(which === 'l' ? 'aside:not(.right)' : 'aside.right'); if (!a) continue;
   a.querySelector('.fold').onclick = () => sideSet(which, true);
   a.querySelector('.rail button').onclick = () => sideSet(which, false);
   let pref = null; try { pref = localStorage.getItem('lampson.side.' + which); } catch (e) {}
-  if (pref === '1') sideSet(which, true);
+  if (pref !== '0') sideSet(which, true, false);
 }

@@ -2,14 +2,14 @@
    tres layouts: browse (buscador + lista + detalle), tabs (pestañas con formularios) y form (un formulario).
    Cada vista (sesiones, plugins, configuración, programar…) solo aporta su contenido; nada de esto se repite. */
 .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:50; }
-.panel { background:var(--paper); border:1px solid var(--rule-2); border-radius:var(--r); box-shadow:0 10px 30px rgba(0,0,0,.35); display:flex; flex-direction:column; min-height:0; max-height:92vh; }
+.panel { background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--r-lg); box-shadow:0 10px 30px rgba(0,0,0,.35); display:flex; flex-direction:column; min-height:0; max-height:92vh; }
 .panel.lg { width:min(1100px, 94vw); height:min(760px, 90vh); padding:14px 18px 12px; }
 .panel.md { width:min(680px, 94vw); padding:14px 18px 12px; }
 .panel.sm { width:min(560px, 92vw); padding:14px 18px 12px; }
 
 /* cabecera */
 .panel .phead { display:flex; align-items:center; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--rule); flex:none; }
-.panel .phead .eyebrow { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.12em; color:var(--rubric); margin:0; }
+.panel .phead .eyebrow { display:none; }
 .panel .phead h3 { margin:0; font:600 16px/1.2 var(--serif); letter-spacing:-.01em; }
 .panel .phead .sub { color:var(--ink-3); font:400 11.5px/1 var(--mono); }
 .panel .pghost { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; margin:0; font:400 13px/1 var(--mono); letter-spacing:0; text-transform:none; border:1px solid var(--rule); border-radius:var(--r); background:transparent; color:var(--ink-3); cursor:pointer; }
@@ -18,15 +18,15 @@
 
 /* pestañas */
 .panel .ptabs { display:flex; gap:2px; border-bottom:1px solid var(--rule); margin:0 0 14px; flex:none; }
-.panel .ptab { font:400 11px/1 var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--ink-3); padding:10px 12px 8px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+.panel .ptab { font:400 12px/1 var(--mono); color:var(--ink-3); padding:10px 12px 8px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
 .panel .ptab:hover { color:var(--ink); }
 .panel .ptab.on { color:var(--accent); border-bottom-color:var(--accent); }
 
 /* cuerpo genérico (form / tabs): prosa y campos con la gramática de la app */
 .panel .pbody { flex:1; min-height:0; overflow:auto; padding:14px 2px 4px; }
 .panel .lead { color:var(--ink-2); margin:0 0 16px; font-size:14px; }
-.panel .lead code, .panel .phelp code { font:400 .88em/1.5 var(--mono); background:var(--paper-2); padding:.08em .3em; border-radius:2px; color:var(--ink); }
-.panel label { display:flex; align-items:center; gap:12px; font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); margin:0 0 10px; }
+.panel .lead code, .panel .phelp code { font:400 .88em/1.5 var(--mono); background:var(--paper-2); padding:.08em .3em; border-radius:var(--r-sm); color:var(--ink); }
+.panel label { display:flex; align-items:center; gap:12px; font:400 12px/1 var(--mono); color:var(--ink-3); margin:0 0 10px; }
 .panel label.col { flex-direction:column; align-items:stretch; gap:4px; }
 .panel label .ds { display:block; color:var(--ink-3); font:400 11.5px/1.4 var(--serif); text-transform:none; letter-spacing:0; margin-top:2px; }
 .panel input, .panel select, .panel textarea { flex:1; font:400 13px/1.4 var(--mono); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r); padding:7px 10px; min-width:0; }
@@ -119,7 +119,7 @@
 .panel .dmsg.dm-user { border-left-color:var(--accent); color:var(--ink); }
 .panel .dmsg.dm-bad { border-left-color:var(--rubric); }
 .panel .dmsg .who a { color:var(--accent); text-decoration:none; }
-.panel .dmsg .who { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--ink-3); display:block; margin-bottom:3px; }
+.panel .dmsg .who { font:400 12px/1 var(--mono); color:var(--ink-3); display:block; margin-bottom:3px; }
 /* ayuda («?»): prosa a lo ancho, reemplaza al cuerpo */
 .panel .phelp { flex:1; min-height:0; overflow:auto; padding:16px 24px 8px 6px; font:400 13.5px/1.6 var(--serif); color:var(--ink-2); }
 .panel .phelp h4 { margin:0 0 8px; font:600 15px/1.3 var(--serif); color:var(--ink); }
@@ -143,7 +143,7 @@
 .panel .pickrow a { color:var(--accent); text-decoration:none; }
 .panel .pickrow a:hover { text-decoration:underline; text-underline-offset:.18em; }
 .panel .chosen { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--rule-2); border-radius:var(--r); background:var(--paper-2); margin:0 0 6px; max-width:640px; }
-.panel .chosen .lk { font:400 10.5px/1 var(--mono); text-transform:uppercase; letter-spacing:.1em; color:var(--ink-3); }
+.panel .chosen .lk { font:400 12px/1 var(--mono); color:var(--ink-3); }
 .panel .chosen code { font:400 12.5px/1.4 var(--mono); color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
 .panel .chosen .del { color:var(--ink-3); cursor:pointer; font-size:11px; }
 .panel .chosen .del:hover { color:var(--rubric); }
@@ -186,3 +186,12 @@
 .panel .dform .trow .hbtn.pwr.ask { text-transform:none; letter-spacing:0; }
 .panel .dform .trow .hbtn.pwr.ask .yes { color:var(--rubric); cursor:pointer; text-decoration:underline; }
 .panel .dform .trow .hbtn.pwr.ask .no { cursor:pointer; }
+/* enlaces de texto en la cabecera de un panel (p.ej. «todos los plugins» → la pantalla del hub) */
+.panel .plink { font:400 12px/1 var(--mono); color:var(--accent); text-decoration:none; margin-right:12px; white-space:nowrap; }
+.panel .plink:hover { text-decoration:underline; text-underline-offset:.2em; }
+/* ayuda de plugins: el pedido listo para el chat, y los enlaces a la guía y al hub */
+.panel .phelp .pprompt { max-width:78ch; margin:0 0 16px; padding:12px 14px; background:var(--paper-2); border-radius:var(--r); }
+.panel .phelp .pprompt p { margin:4px 0 10px; color:var(--ink); font-style:italic; }
+.panel .phelp .pacts { display:flex; align-items:center; gap:8px; }
+.panel .phelp .plinks a { color:var(--accent); cursor:pointer; text-decoration:none; }
+.panel .phelp .plinks a:hover { text-decoration:underline; text-underline-offset:.2em; }

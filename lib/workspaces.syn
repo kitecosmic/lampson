@@ -794,6 +794,64 @@ export task teams_summary(w)
     recover err
         give {"teams": [], "objectives": [], "approvals": [], "active": 0, "waiting": 0}
 
+task field(m, k)
+    give when contains(m, k) then m[k] otherwise nothing
+
+task field_or(m, k, d)
+    give when contains(m, k) and m[k] != nothing then m[k] otherwise d
+
+-- las tareas programadas del workspace, leídas de su json (sirve aunque el proceso esté apagado) — para /tareas.
+-- Solo las de este proyecto: lib/schedule.syn marca cada tarea con el slug (una sin marca es de quien la lea).
+export task tasks_summary(w)
+    let out be []
+    try
+        let doc be json_decode(read_file(dir_of(w["slug"]) + "/.lampson/schedules.json"))
+        each t in doc["tasks"]
+            let p be field(t, "project")
+            when p == nothing or p == w["slug"]
+                set out to append(out, {"id": t["id"], "name": t["name"], "when": field(t, "when"), "plan": field(t, "plan"), "action": field(t, "action"), "enabled": field(t, "enabled") == true, "running": field(t, "running") == true, "last_run": field(t, "last_run"), "last_status": field(t, "last_status"), "last_summary": field(t, "last_summary"), "next_run": field(t, "next_run")})
+    recover err
+        give out
+    give out
+
+-- un plugin.json → lo que muestra /plugins (sin código ni techo: eso se revisa al encenderlo, dentro del proyecto)
+task plugin_card(dir, name, scope)
+    try
+        let m be json_decode(read_file(dir + "/" + name + "/plugin.json"))
+        let tools be field(m, "tools")
+        give {"name": name, "scope": scope, "description": text(field_or(m, "description", "")), "kind": text(field_or(m, "kind", "")), "channel": field(m, "channel") != nothing, "tools": when tools == nothing then [] otherwise apply(tools, (t) => t["name"]), "config": field_or(m, "config", []), "example": field(m, "example") == true}
+    recover err
+        give nothing
+
+task plugin_scan(dir, scope)
+    let out be []
+    try
+        each e in list_dir(dir)
+            when e["is_dir"]
+                let card be plugin_card(dir, e["name"], scope)
+                when card != nothing
+                    set out to append(out, card)
+    recover err
+        give out
+    give out
+
+-- los plugins instalados con lampson (plugins/ de la instalación: valen para todos los proyectos)
+export task plugins_global()
+    give plugin_scan("plugins", "global")
+
+-- los plugins de un workspace: los suyos (.lampson/plugins/ del proyecto) y cuáles tiene encendidos (.lampson/plugins.json)
+export task plugins_of(w)
+    let on be []
+    try
+        let st be json_decode(read_file(dir_of(w["slug"]) + "/.lampson/plugins.json"))
+        let en be when contains(st, "enabled") then st["enabled"] otherwise {}
+        each name in keys(en)
+            when en[name] == true
+                set on to append(on, name)
+    recover err
+        set on to on
+    give {"enabled": on, "local": plugin_scan(dir_of(w["slug"]) + "/workspace/.lampson/plugins", "project")}
+
 -- /w/<nombre> sin el hash: el slug completo si un solo workspace se llama así (si no, nothing)
 export task resolve_slug(name)
     require file(".lampson")

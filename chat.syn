@@ -854,7 +854,7 @@ task attach_image(mode, path)
     let vis be provider.supports_vision(cfg)
     print("  " + green("📎 imagen " + text(length(pending_images)) + " adjunta") + dim(" · " + text(im["w"]) + "x" + text(im["h"]) + " · " + text(floor(length(im["data"]) * 3 / 4 / 1024)) + " KB · se manda con tu próximo mensaje"))
     when not vis
-        print("  " + yellow("ojo: " + cfg["provider"] + " · " + cfg["model"] + " no acepta imágenes; el modelo recibirá solo una nota. Cambiá con /provider a uno con visión (anthropic, gpt-4o…)"))
+        print("  " + yellow("ojo: " + cfg["provider"] + " · " + cfg["model"] + " no acepta imágenes; el modelo recibirá solo una nota. Cambiá con /provider a uno con visión (anthropic, gpt-6.1-sol, deepseek-flash…)"))
     give true
 
 -- ---------- boot ----------
