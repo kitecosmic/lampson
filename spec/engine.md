@@ -355,6 +355,18 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
       un `--stdio` concurrente.
       → hecho: protocolo 2, un agente por ask; misma conversación en fila, distintas en paralelo (6 s en vez de 12).
 - [ ] Otros lenguajes: generar clientes desde `/v1/openapi.json` (5a); PHP a mano si hay demanda.
+- [x] Prueba de un dev nuevo (2026-10-18, informe en el repo de datos): arreglado en `fix/sdk-embebido`.
+      - Un `LAMPSON_HOME` distinto ya no reinicia ni para el hub de otro: `workspaces.hub_ours()` compara el `home`
+        de `/api/hub`. Antes, registrar un workspace en el home de la app mataba el :8080 del usuario y levantaba
+        otro hub con su web (los 4 procesos que quedaban vivos).
+      - `home` relativo a la app; `close()` mata el árbol; un `error` dentro de un turno ya no cierra el pedido
+        (el SDK lo tomaba por el error del protocolo, que no trae `agent`).
+      - Herramientas que un agente lista y no va a tener (`runtime.missing`): `ready.warnings` y evento
+        `warning` en `--stdio`, línea `warning` en `run --json`, `eprint` en `run`. SDK: `onWarning`, `warnings`.
+      - `lampson plugin list|on|off <nombre>` (VPS, scripts). Encender plugins NO es una opción del SDK: las
+        herramientas de una app van por otro camino (`spec/sdk-tools.md`).
+      - SDK `agent` (agente por defecto del cliente) y `lampsonTools: false` → `LAMPSON_BUILTIN_TOOLS=off`: el
+        proceso no ofrece ninguna tool propia de Lampson, tampoco a `build` (`runtime.registry_of`/`catalog_of`).
 
 ### Fase 6 — Equipos de agentes (rama `feat/teams`, desde `main` @ cdcd54d)
 

@@ -116,6 +116,9 @@ lampson run --agent shop "hi"                    # one message from a script; --
 import { Lampson } from "lampson";               // also: pip install lampson
 const lampson = new Lampson({ local: { workspace: "./my-project" } });   // or { url, key } for a running Lampson
 const r = await lampson.ask({ agent: "shop", thread: "customer-42", text: "do you have whole-wheat bread?" });
+
+// an agent for your customers: only the tools you give it — no bash, read, write or fetch of Lampson's own
+const shop = new Lampson({ agent: "shop", local: { workspace: "./my-project", lampsonTools: false } });
 ```
 
 - **An agent is a file**: `.lampson/agents/shop.agent.json` (or `~/lampson/agents/` for every project) — its prompt,

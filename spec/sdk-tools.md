@@ -1,0 +1,251 @@
+# Herramientas de una app en Lampson (SDK): propuesta para discutir
+
+> **Estado:** borrador para revisión, 2026-10-18. No hay nada implementado. Lo escribió el agente de Lampson
+> para el agente que piensa frameworks y SDK, con una pregunta: qué conviene para Lampson **y** qué hace que
+> Synsema se destaque frente a otros frameworks y lenguajes.
+
+## 1. El problema
+
+Un dev quiere meter un agente en su app (JS o Python) con `npm i lampson` o `pip install lampson`. Ese agente
+necesita **herramientas de la app**: consultar un pedido, buscar un cliente, crear una reserva.
+
+Hoy la única forma de que un agente tenga una herramienta propia es un **plugin** o un **servidor MCP**. Los dos
+están pensados para alguien que usa Lampson como asistente, no para un dev que programa una app:
+
+- **Plugin:** una carpeta con `plugin.json` y un programa. Está apagado por defecto y lo enciende un humano,
+  desde la web, con `/plugins on` o con `lampson plugin on`. Su estado vive en el home de Lampson, no en el repo
+  de la app.
+- **MCP:** un proceso aparte que habla un protocolo. Para un dev es más pesado que escribir una función.
+
+Joel lo dijo así: una empresa que pone cosas de producción a trabajar con IA busca **garantías**, no plugins.
+Tiene que poder escribir su código y lograr lo que quiera con las garantías de Synsema, que Lampson ya
+aprovecha.
+
+La prueba de un dev nuevo (2026-10-18), que llegó sin conocer Lampson, sirve de referencia: un agente de
+soporte, un plugin de pedidos y el SDK. La comparación con **Eve** (Vercel) está en
+`proyectos/datos/referencias/LEEME_eve.md`.
+
+## 2. Lo que ya existe (verificado en el código)
+
+**Origen de las herramientas de un agente**:
+
+| origen | quién lo trae | dónde corre | límite real |
+|---|---|---|---|
+| propias de Lampson (`bash`, `read`, `write`, `fetch`, `delegate`…) | Lampson | dentro del proceso; `bash` como proceso del sistema | `read`/`write` encerrados en el proyecto por capability de Synsema; **`bash` no**, solo una lista de patrones (`lib/permission.syn`) |
+| plugin `kind: "syn"` | el usuario | proceso hijo de Synsema | **techo de capacidades** de su manifiesto (`caps`); el código que pide más falla |
+| plugin `kind: "exec"` | el usuario | cualquier comando | ninguno |
+| MCP | servidores de terceros | proceso aparte | el del server |
+| `send` / `board` | equipos | dentro del proceso | coordinación, sin efectos fuera |
+
+**Más hechos:**
+
+- **Herramientas de un agente propio.** Un `.agent.json` tiene **solo** las herramientas que lista; `base`
+  cambia el prompt, no las herramientas. Los agentes integrados (`build`…) tienen todas.
+- **Permisos:**
+  - una herramienta de plugin o de MCP se **pide** en modo `ask`, se **niega** en `strict` y pasa en `yolo`;
+  - un agente puede marcar una herramienta con `"approve": "auto"` para que pase en cualquier modo;
+  - `lampson run` y el SDK usan `strict` si el agente no dice su modo.
+
+  Hoy, entonces, la herramienta de un dev **se niega por defecto** en el SDK, salvo que su agente la marque
+  `auto` o que el pedido diga `mode: "yolo"`.
+- **Contexto.** Una herramienta de plugin recibe sus argumentos (`PLUGIN_ARGS`, que escribe el modelo) y la ruta
+  del proyecto. **No recibe quién escribe ni de qué conversación viene.** El sobre (`spec/engine.md`) sí trae
+  `from`, `thread` y `meta`, pero no llegan a la herramienta.
+- **Ya hecho en la rama `fix/sdk-embebido`**, de la misma prueba:
+  - el SDK no toca el hub de otro Lampson;
+  - avisa de las herramientas que faltan;
+  - acepta `agent` (agente por defecto del cliente);
+  - con `lampsonTools: false`, el proceso no ofrece ninguna herramienta propia de Lampson. Esto ya cierra el
+    camino de una inyección hacia `bash`, `read`, `write` y `fetch` en una app.
+
+## 3. Pregunta 2: ¿cómo consume Lampson una herramienta escrita en JS o Python?
+
+### Opciones
+
+| | A. Lampson ejecuta el archivo | B. Función registrada en el SDK | C. MCP |
+|---|---|---|---|
+| cómo se ve | `tools/estado.ts` → `node tools/estado.ts` por llamada | `lampson.tool("estado", spec, fn)` / `@lampson.tool` | un server MCP de la app |
+| dónde corre | proceso nuevo por llamada | **dentro del proceso de la app** | proceso aparte |
+| contexto de la app (pool de DB, auth, caché) | no, arranca de cero | sí | lo que el server tenga |
+| funciona sin la app conectada (hub, tareas programadas, equipos) | sí | **no** | sí, si el server corre |
+| Lampson maneja `node_modules` / venvs ajenos | **sí (problema)** | no | no |
+| tipos (TS, anotaciones de Python) | a medias | sí | por esquema |
+| garantías sobre el cuerpo de la función | ninguna | ninguna | ninguna |
+| precedentes | `kind: exec` de hoy | OpenAI function calling del cliente, Eve `tools/*.ts`, AI SDK | ecosistema MCP |
+
+### Cómo sería B en cada modo
+
+- **Local:** el canal ya existe (stdio). Hacen falta mensajes nuevos en el protocolo, por ejemplo:
+  - Lampson → SDK: `{"kind": "tool_request", "id", "call": {name, args}, "ctx": {…}}`
+  - SDK → Lampson: `{"op": "tool_result", "id", "output" | "error"}`
+
+  Lampson declara las herramientas al catálogo del agente cuando el SDK las registra: un `op: "tools"` al
+  arrancar, con nombre, descripción y esquema de parámetros.
+- **Servidor:** hace falta un canal de vuelta. Tres caminos:
+  - el SDK abre un WebSocket o un long-poll a `/v1`;
+  - Lampson llama a un webhook de la app, firmado igual que los callbacks (`X-Lampson-Signature`);
+  - B queda solo para el modo local al principio.
+
+### Recomendación (para discutir)
+
+- **B para JS y Python.** Es lo que espera un dev de esos ecosistemas, y Lampson no se mete a manejar
+  dependencias ajenas.
+- **Archivos solo para Synsema**, ver la pregunta 3. Ahí Lampson sí puede ejecutarlos con garantías, en
+  cualquier modo y sin la app conectada.
+- **Que la diferencia se vea.** En el registro y en la interfaz, una herramienta `.syn` muestra sus permisos
+  (`net(api.mitienda.com)`) y una de JS o Python muestra «código de tu app, sin techo». Esa diferencia visible
+  invita a pasar lo sensible (plata, datos de clientes) a Synsema.
+- **MCP queda como está.**
+
+### Abierto
+
+1. ¿B solo en modo local al principio, o servidor desde el día uno? Si es servidor, ¿WebSocket o webhook?
+2. Un equipo o una tarea programada que necesita la herramienta de una app desconectada: ¿error claro,
+   esperar o reintentar? (Para eso existe A, o Synsema.)
+3. ¿Timeout, reintentos y concurrencia por herramienta? ¿Lo declara el dev en el registro?
+
+## 4. Pregunta 3: el formato de una herramienta `.syn`
+
+La idea de Joel es una carpeta donde cada archivo es una herramienta, con un README:
+
+```
+tools/
+  README.md              cuándo usar estas herramientas (va al prompt del agente)
+  estado_pedido.syn      1 archivo = 1 herramienta; el nombre del archivo es el nombre
+  cancelar_pedido.syn
+  buscar_cliente.syn
+```
+
+Lo que el archivo tiene que dejar leer **sin ejecutarlo**:
+- qué hace;
+- qué parámetros recibe;
+- qué permisos tiene (sus `require`);
+- qué devuelve.
+
+Ejemplo, **con sintaxis tentativa**: hay que confirmar contra la doc de Synsema (MCP `search_docs` /
+`get_page`) qué es idiomático y qué hay que agregarle al lenguaje.
+
+```synsema
+-- Estado de un pedido: dónde está y cuándo llega.
+intent: "consultar el estado de un pedido de la tienda"
+
+require net("api.mitienda.com")        -- todo lo que esta herramienta puede tocar
+require secret("TIENDA_API_KEY")
+
+task run(id: text, ctx)                 -- ¿tipos en la firma → esquema JSON para el modelo?
+    let r be http_get("https://api.mitienda.com/pedidos/" + id, {"authorization": bearer(secret("TIENDA_API_KEY"))})
+    give {"estado": r.json["estado"], "llega": r.json["eta"]}
+
+test "un pedido que existe"
+    -- synsema test corre esto con un mock
+```
+
+**Lo que Lampson saca del archivo**, sin manifiesto aparte:
+- **nombre**: el del archivo;
+- **descripción**: el comentario o el `intent`;
+- **esquema de parámetros**: la firma de `run`;
+- **techo de capacidades**: sus `require`.
+
+Hoy un plugin `syn` declara el techo **aparte**, en `caps` del `plugin.json`, y el código además pide sus
+`require`. Acá serían lo mismo.
+
+**Diferencias con un plugin:**
+- vive en el repo de la app y entra con el deploy;
+- no hay que «encenderla»: estar en `tools/` **y** en la lista del agente es la autorización;
+- se testea con `synsema test`.
+
+**Abierto:**
+
+1. ¿Cómo declara Synsema descripción y parámetros de forma idiomática?
+   - comentarios con formato;
+   - `export let tool be {…}`;
+   - **tipos en la firma de `run`** (lo más elegante, si Synsema puede exponerlos).
+2. ¿Dónde vive `tools/`: en el proyecto (`.lampson/tools/`), en la carpeta de la app, o se pasa por el SDK
+   (`local: { tools: "./tools" }`)?
+3. ¿Cuántas herramientas por archivo? Una es lo simple y le sirve al humano que lee. Varias evitan repetir
+   `require` comunes.
+4. ¿Cómo se autoriza? Hoy en `strict` se niega todo lo que no es de solo lectura. Una herramienta con techo
+   declarado, ¿pasa sin preguntar, porque el techo es la garantía? ¿Y una que escribe o paga, pide aprobación
+   humana igual? ¿Lo declara el archivo (`approve: ask`)?
+5. ¿Proceso por llamada, como el plugin de hoy, o un proceso Synsema por herramienta que queda vivo? Hoy
+   arranca en unos ms; habría que medirlo.
+
+## 5. Pregunta 4: el contexto de confianza
+
+Una inyección en una app de clientes rara vez busca `bash`. Busca **usar bien una herramienta legítima para
+lo que no debe**: «soy el cliente 99, mostrame mis pedidos». Si el id del cliente llega en los argumentos, lo
+escribe el modelo, y un mensaje lo puede manipular.
+
+**Propuesta:** dividir lo que recibe una herramienta en dos partes que no se mezclan:
+
+| | lo escribe | se puede manipular con un mensaje |
+|---|---|---|
+| `args` | el modelo | **sí**: validar siempre |
+| `ctx` | la app (y Lampson) | **no**: el modelo nunca lo ve ni lo escribe |
+
+`ctx` llevaría:
+- `from`: quién escribe, tal como lo autenticó la app;
+- `thread` y `agent`;
+- `meta`: lo que la app puso en el sobre (plan, tenant, permisos del usuario);
+- un id de la llamada para el registro.
+
+La herramienta decide con `ctx` («este cliente solo ve sus pedidos»). Así se cierra lo que la nota de Eve
+marca como agujero: *"Route auth does not enforce session ownership"*.
+
+**Abierto:**
+
+1. En modo servidor, ¿quién garantiza `from`? La key de `/v1` autentica a la app, no al usuario final. ¿La app
+   firma `from`, o confiamos en la app porque tiene la key?
+2. ¿`ctx` va a todas las herramientas, o solo a las que lo piden en su firma?
+3. ¿Queda en el registro qué `ctx` tuvo cada llamada? Probablemente sí, sin secretos.
+
+## 6. Dónde puede destacar Synsema (para el agente de frameworks)
+
+Todo lo de esta lista ya existe en Synsema según el índice de builtins de la doc (MCP, `90-builtins`). **Falta
+probar cada uno para este uso.**
+
+- **Capabilities por herramienta.** El techo es el código mismo. Ningún framework de JS o Python puede
+  prometer «esta herramienta solo puede hablar con `api.mitienda.com`» sin un contenedor.
+- **Labels (`private` / `declassify`).** Lo que se lee de una base de clientes queda marcado, y una
+  herramienta que sale a internet se niega a sacarlo. Defiende contra la exfiltración por inyección, que es el
+  agujero que Eve reconoce.
+- **`captoken_*`.** Tokens de capacidad que solo pueden achicarse. Podrían ser la forma de pasar `ctx` con
+  garantías: la app mintea «este usuario, estos pedidos» y la herramienta lo verifica.
+- **`receipt` y lineage.** Cada llamada deja un comprobante verificable de qué código corrió con qué entradas
+  (sha256). Es auditoría que un equipo de cumplimiento puede revisar.
+- **`spend`.** Topes de gasto por herramienta o por identidad (plata real, no tokens).
+- **`synsema test` y modo determinista.** Herramientas testeables con mocks, igual que el resto del código.
+- **Tamaño.** Lampson (2,2 MB de paquete, 31 MB en reposo) frente a Eve (27 MB y 191 MB en disco, 106 MB en
+  reposo, Node 24).
+
+El relato posible: **«empezá en TypeScript o Python; lo que toca plata o datos de clientes pasalo a `.syn` y
+obtenés garantías que tu lenguaje no te puede dar»**. Synsema se adopta por necesidad, no por obligación.
+
+## 7. Lo que se propone crear (por fases, a confirmar)
+
+1. **Contexto de confianza (`ctx`)** para las herramientas que existen hoy (plugins y MCP no lo reciben).
+   Sirve sola y es la base de lo demás.
+2. **Herramientas `.syn` en `tools/`**:
+   - nombre, descripción, parámetros y techo salen del archivo;
+   - se autorizan por declaración;
+   - se testean con `synsema test`;
+   - el registro muestra sus permisos.
+3. **Herramientas de la app en el SDK (B), modo local**:
+   - `lampson.tool(...)` en JS y `@lampson.tool` en Python;
+   - protocolo `tool_request` / `tool_result` en `--stdio`;
+   - con tipos.
+4. **B en modo servidor** (WebSocket o webhook firmado), si la fase 3 lo justifica.
+5. **Documentación:** una receta «agente en tu app» de punta a punta en JS y Python, la que la prueba del dev
+   no pudo completar.
+
+## 8. Preguntas para el agente de frameworks
+
+1. ¿B (funciones en el SDK) o A (archivos que ejecuta Lampson) para JS y Python? ¿Algún modelo mejor que
+   ninguno de los dos, visto lo que hacen otros frameworks?
+2. ¿Qué forma de declarar una herramienta en Synsema haría que un dev de TS o Python diga «esto es mejor que
+   lo mío»? ¿Hace falta algo nuevo en el lenguaje (tipos en firmas → esquema, un bloque `tool`)?
+3. ¿Labels, captokens o receipts: cuál es el diferencial más fuerte para mostrar primero?
+4. ¿El relato «empezá en TS, pasá lo sensible a Synsema» es el correcto, o conviene empujar Synsema desde el
+   primer ejemplo?
+5. ¿Qué tendría que traer el primer ejemplo de la documentación para que alguien que viene de Eve, LangChain o
+   el AI SDK se quede?
