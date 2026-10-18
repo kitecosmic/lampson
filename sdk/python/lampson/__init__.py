@@ -25,6 +25,10 @@ Two ways to reach Lampson, the same methods for both:
           model) and defaults; a parameter named `ctx` receives {from, thread, agent, session, meta, channel} of
           the message — set by your app, never seen or written by the model. List the name in the agent's "tools".
 
+  Server mode too: Lampson(url=..., key=..., tools_url="https://my-app/lampson/tools", tools_secret="whsec_...")
+          sends the tools with each message; Lampson POSTs each call there, signed (RFC 9421) with the key's secret,
+          and lampson.tools_asgi() (FastAPI/Starlette) or lampson.handle_tool_request(...) (any framework) answers.
+
   Lampson(agent="support", ...)  the agent that answers when a message does not say `agent` (without it, the
           workspace default: "build", Lampson's coding agent, with all of Lampson's tools)
 
@@ -38,6 +42,7 @@ Two ways to reach Lampson, the same methods for both:
 It is also a context manager:  with Lampson(local={...}) as lampson: ...
 Contracts behind it: spec/engine.md (envelope, events), lib/api.syn (HTTP), run.syn (--stdio).
 """
+import base64
 import hashlib
 import hmac
 import inspect
@@ -48,6 +53,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import threading
 import urllib.error
 import urllib.request
@@ -237,6 +243,65 @@ def _tool_spec(fn, name=None, description=None, timeout=None):
     return {"wire": wire, "fn": fn, "ctx": wants_ctx, "models": models}
 
 
+def _execute_tool(spec, name, args, ctx):
+    """Run one of the app's tools -> {"output"} or {"error"} (the same over stdio and over HTTP)."""
+    if spec is None:
+        return {"error": "the app has no tool %s" % name}
+    try:
+        args = dict(args or {})
+        for k, model in spec["models"].items():
+            if k in args:
+                args[k] = model.model_validate(args[k])
+        if spec["ctx"]:
+            args["ctx"] = dict(ctx or {})
+        out = spec["fn"](**args)
+        if inspect.isawaitable(out):
+            raise TypeError("an async tool needs tools_asgi() (server mode); in local mode use a plain def")
+        if hasattr(out, "model_dump"):
+            out = out.model_dump()
+        return {"output": out}
+    except Exception as e:   # the error goes back to the model, the app keeps running
+        return {"error": "%s: %s" % (type(e).__name__, e)}
+
+
+def _header(headers, name):
+    for k, v in (headers or {}).items():
+        if k.lower() == name:
+            return v.decode() if isinstance(v, bytes) else str(v)
+    return ""
+
+
+_SIG_INPUT = re.compile(r'^sig1=(\("@method" "@target-uri" "content-digest"\);created=(\d+);keyid="([^"]*)";alg="hmac-sha256")$')
+_SIG = re.compile(r"^sig1=:([A-Za-z0-9+/=]+):$")
+
+
+def verify_tool_request(method, url, headers, body, secret, now=None):
+    """The RFC 9421 profile of Synsema's http_sign (@method, @target-uri, content-digest; created, keyid,
+    hmac-sha256), +-300 s. -> {"keyid", "created"} or None."""
+    if not secret:
+        return None
+    mi, ms = _SIG_INPUT.match(_header(headers, "signature-input")), _SIG.match(_header(headers, "signature"))
+    if not mi or not ms:
+        return None
+    created = int(mi.group(2))
+    if abs((time.time() if now is None else now) - created) > 300:
+        return None
+    raw = body if isinstance(body, bytes) else str(body or "").encode("utf-8")
+    digest = "sha-256=:" + base64.b64encode(hashlib.sha256(raw).digest()).decode() + ":"
+    if _header(headers, "content-digest") != digest:
+        return None
+    sig_base = "\n".join(['"@method": ' + str(method or "POST").upper(), '"@target-uri": ' + url,
+                          '"content-digest": ' + digest, '"@signature-params": ' + mi.group(1)])
+    want = hmac.new(secret.encode("utf-8"), sig_base.encode("utf-8"), hashlib.sha256).digest()
+    try:
+        got = base64.b64decode(ms.group(1))
+    except ValueError:
+        return None
+    if not hmac.compare_digest(want, got):
+        return None
+    return {"keyid": mi.group(3), "created": created}
+
+
 class _Local:
     def __init__(self, workspace=None, home=None, env=None, command=None, spawn=None, on_warning=None, lampson_tools=True,
                  tools=None):
@@ -313,25 +378,8 @@ class _Local:
 
     def _run_tool(self, data):
         """A tool_request: run the app's function and answer with tool_result."""
-        call_id, name = data.get("call_id"), data.get("name")
-        spec = self.tools.get(name)
-        reply = {"op": "tool_result", "call_id": call_id}
-        if spec is None:
-            reply["error"] = "the app has no tool %s" % name
-        else:
-            try:
-                args = dict(data.get("args") or {})
-                for k, model in spec["models"].items():
-                    if k in args:
-                        args[k] = model.model_validate(args[k])
-                if spec["ctx"]:
-                    args["ctx"] = dict(data.get("ctx") or {})
-                out = spec["fn"](**args)
-                if hasattr(out, "model_dump"):
-                    out = out.model_dump()
-                reply["output"] = out
-            except Exception as e:   # the error goes back to the model, the app keeps running
-                reply["error"] = "%s: %s" % (type(e).__name__, e)
+        name = data.get("name")
+        reply = dict(_execute_tool(self.tools.get(name), name, data.get("args"), data.get("ctx")), op="tool_result", call_id=data.get("call_id"))
         self.proc.stdin.write(json.dumps(reply, default=str) + "\n")
         self.proc.stdin.flush()
 
@@ -419,8 +467,14 @@ class _Local:
 class Lampson:
     """Server mode: Lampson(url=..., key=...).  Local mode: Lampson(local={"workspace": ...})."""
 
-    def __init__(self, url=None, key=None, local=None, timeout=None, on_warning=False, agent=None):
+    def __init__(self, url=None, key=None, local=None, timeout=None, on_warning=False, agent=None, tools_url=None,
+                 tools_secret=None):
         self.agent = agent or ""
+        # server mode: the tools travel with each message and Lampson POSTs the calls to tools_url (the PUBLIC URL of
+        # tools_asgi / handle_tool_request, the one Lampson signs); tools_secret = the key's secret (lampson key add)
+        self.tools_url = tools_url or ""
+        self.tools_secret = tools_secret or ""
+        self._server_tools = {}
         if local is not None:
             if on_warning is False:
                 on_warning = lambda w: print("lampson: " + w, file=sys.stderr)
@@ -432,7 +486,7 @@ class Lampson:
 
     def ask(self, agent=None, text=None, **msg):
         """Send a message to an agent and wait for its answer. Raises LampsonError if the turn ended in an error."""
-        result = self._t.ask(_envelope(dict(msg, agent=agent or (None if msg.get("to") else self.agent) or None, text=text)))
+        result = self._t.ask(self._with_tools(_envelope(dict(msg, agent=agent or (None if msg.get("to") else self.agent) or None, text=text))))
         if result.get("status") == "queued":
             return result   # server mode with callback: {"job", "status"}
         if _failed(result):
@@ -441,21 +495,86 @@ class Lampson:
 
     def stream(self, agent=None, text=None, **msg):
         """The agent's steps as they happen: session, assistant, tool_call, tool_result…, and "done" last."""
-        env = _envelope(dict(msg, agent=agent or (None if msg.get("to") else self.agent) or None, text=text))
+        env = self._with_tools(_envelope(dict(msg, agent=agent or (None if msg.get("to") else self.agent) or None, text=text)))
         if "callback" in env:
             raise TypeError("stream does not take a callback (use ask)")
         return self._t.stream(env)
 
     def tool(self, fn=None, *, name=None, description=None, timeout=None):
-        """Local mode: a function of your app as a tool. Use as @lampson.tool or @lampson.tool(name=..., timeout=...).
-        The schema comes from its type hints and defaults; a `ctx` parameter gets the message's context."""
-        if self.mode != "local":
-            raise LampsonError("lampson.tool needs local mode for now (in server mode, write the tool in Synsema: .lampson/tools/<name>.syn)")
+        """A function of your app as a tool. Use as @lampson.tool or @lampson.tool(name=..., timeout=...).
+        The schema comes from its type hints and defaults; a `ctx` parameter gets the message's context.
+        Server mode needs tools_url (and tools_secret to answer the calls)."""
+        if self.mode != "local" and not self.tools_url:
+            raise LampsonError("server mode: pass tools_url (the public URL of tools_asgi/handle_tool_request) to register tools, or write them in Synsema: .lampson/tools/<name>.syn")
 
         def register(f):
-            self._t.set_tools([_tool_spec(f, name, description, timeout)])
+            spec = _tool_spec(f, name, description, timeout)
+            if self.mode == "local":
+                self._t.set_tools([spec])
+            else:
+                self._server_tools[spec["wire"]["name"]] = spec
             return f
         return register(fn) if fn is not None else register
+
+    def _with_tools(self, env):
+        if self.mode != "server" or not self._server_tools:
+            return env
+        return dict(env, tools=[s["wire"] for s in self._server_tools.values()], tools_url=self.tools_url)
+
+    def handle_tool_request(self, method, headers, body):
+        """Server mode, any framework: verify Lampson's signature on a tool call and run it -> (status, dict).
+        Pass the raw body (bytes) exactly as received; the signed URL is tools_url, not the request's."""
+        if not verify_tool_request(method, self.tools_url, headers, body, self.tools_secret):
+            return 401, {"error": "invalid or missing Lampson signature"}
+        try:
+            msg = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+        except ValueError:
+            return 400, {"error": "body must be JSON"}
+        name = msg.get("name")
+        return 200, _execute_tool(self._server_tools.get(name), name, msg.get("args"), msg.get("ctx"))
+
+    def tools_asgi(self):
+        """Server mode: an ASGI app for the tool calls (FastAPI/Starlette: app.mount("/lampson/tools", lampson.tools_asgi())).
+        async def tools are awaited; plain def tools run in a thread."""
+        import asyncio
+
+        async def app(scope, receive, send):
+            if scope["type"] != "http":
+                return
+            chunks, more = [], True
+            while more:
+                ev = await receive()
+                chunks.append(ev.get("body", b""))
+                more = ev.get("more_body", False)
+            body = b"".join(chunks)
+            headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers", [])}
+            if not verify_tool_request(scope.get("method", "POST"), self.tools_url, headers, body, self.tools_secret):
+                status, out = 401, {"error": "invalid or missing Lampson signature"}
+            else:
+                try:
+                    msg = json.loads(body.decode("utf-8"))
+                    spec = self._server_tools.get(msg.get("name"))
+                    if spec is not None and inspect.iscoroutinefunction(spec["fn"]):
+                        try:
+                            args = dict(msg.get("args") or {})
+                            for k, model in spec["models"].items():
+                                if k in args:
+                                    args[k] = model.model_validate(args[k])
+                            if spec["ctx"]:
+                                args["ctx"] = dict(msg.get("ctx") or {})
+                            o = await spec["fn"](**args)
+                            out = {"output": o.model_dump() if hasattr(o, "model_dump") else o}
+                        except Exception as e:
+                            out = {"error": "%s: %s" % (type(e).__name__, e)}
+                    else:
+                        out = await asyncio.to_thread(_execute_tool, spec, msg.get("name"), msg.get("args"), msg.get("ctx"))
+                    status = 200
+                except ValueError:
+                    status, out = 400, {"error": "body must be JSON"}
+            data = json.dumps(out, default=str).encode("utf-8")
+            await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": data})
+        return app
 
     @property
     def warnings(self):

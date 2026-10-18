@@ -30,6 +30,8 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
+-- firmar los pedidos a las funciones de la app en modo servidor (lib/remotetools.syn, http_sign RFC 9421)
+require sign("LAMPSON_TOOLS")
 require db(".lampson/teams.db")
 require judge
 require file("workspace")

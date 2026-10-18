@@ -1,6 +1,6 @@
 # Herramientas de una app en Lampson (SDK)
 
-> **Estado (2026-10-18):** las fases 1 a 4 están hechas en la rama `feat/sdk-tools`, siguiendo la respuesta del
+> **Estado (2026-10-18):** las fases 1 a 5 están hechas en la rama `feat/sdk-tools`, siguiendo la respuesta del
 > agente de frameworks (`proyectos/datos/reportes/06_respuesta_sdk_tools.md`). Lo que sigue es la propuesta
 > original, para tener el porqué.
 
@@ -33,14 +33,31 @@ Pruebas:
 
 **Arreglado en el camino:** `run --stdio` descartaba el `from` que mandaba la app (la API HTTP no).
 
+**Fase 5, hecha** según la segunda respuesta del agente de frameworks (`06_respuesta_sdk_tools.md`, «Fase 5»):
+- **Primero, tres arreglos de seguridad en las callbacks de hoy** (rama `fix/callbacks`, desde `main`):
+  - una key sin lista solo llega a hosts públicos (antes, SSRF);
+  - la lista compara esquema, host y puerto exactos, y la ruta como carpeta (antes, `starts_with`);
+  - cada key nueva tiene su secreto de firma (antes, uno global para todas).
+- **Las herramientas viajan en cada mensaje:** `tools` + `tools_url` en `POST /v1/messages`, sin estado en
+  Lampson. `tools_url` tiene que estar en la lista de la key (obligatoria acá) y ser https, salvo loopback
+  (`lib/api.syn`).
+- **La llamada:** `lib/remotetools.syn` hace POST con `{call_id, name, args, ctx}`:
+  - firmado con `http_sign` (RFC 9421, el secreto de la key, `keyid` = la key);
+  - dentro de `sandbox under {"net": <host de tools_url>}`;
+  - la app contesta en ese mismo POST `{output}` o `{error}`;
+  - sin reintentos.
+- **SDK de JS:** `toolsUrl` / `toolsSecret`, `toolsHandler()` (Web estándar y Node) y `Lampson.verifyToolRequest`.
+- **SDK de Python:** `tools_url` / `tools_secret`, `tools_asgi()` y `handle_tool_request()`.
+- **Los verificadores** de los dos SDK están probados contra un vector firmado por Synsema: aceptan la firma
+  real y rechazan otra URL, otro cuerpo, otro secreto y una firma vieja.
+- **Arreglado en el camino:** el buzón abría el turno sin `from`, así que en modo servidor el `ctx.from` de las
+  herramientas `.syn` llegaba vacío.
+
 **Pendiente:**
-1. **Modo servidor para funciones de JS/Python** (fase 5): webhook firmado, como propuso el agente de
-   frameworks. Toca la seguridad del servidor y hay que decidirlo antes:
-   - a qué URLs puede llamar Lampson (¿las `callback` permitidas de la key?);
-   - qué herramientas ve cada key;
-   - cómo se registran (¿`POST /v1/tools`?).
-2. **Tipos en la firma de un `task`**, del lado del motor: con eso el esquema sale completo del archivo.
-3. `ctx` para plugins (`PLUGIN_CTX`): fácil, pero cambia los plugins, así que queda para cuando haga falta.
+1. **Tipos en la firma de un `task`**, del lado del motor: con eso el esquema sale completo del archivo.
+2. `ctx` para plugins (`PLUGIN_CTX`): fácil, pero cambia los plugins, así que queda para cuando haga falta.
+3. Un ping del SDK a `toolsUrl` antes del primer `ask`, para detectar el bloqueo de un servidor de un solo
+   worker. Por ahora está documentado.
 
 ---
 

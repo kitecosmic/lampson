@@ -26,6 +26,7 @@ use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
 use "./apptools.syn" as apptools
 use "./sdktools.syn" as sdktools
+use "./remotetools.syn" as remotetools
 use "./tools/todo.syn" as todo
 use "./scope.syn" as scope
 use "./worktree.syn" as worktree
@@ -370,6 +371,9 @@ task execute(tc, opts, on_event)
         -- funciones de la app (lib/sdktools.syn): se las pide al SDK por stdio y espera su respuesta
         otherwise when registry[name] == sdktools.MARK
             set out to text(sdktools.call(name, args, when contains(opts, "tool_ctx") then opts["tool_ctx"] otherwise {}))
+        -- funciones de la app en modo servidor (lib/remotetools.syn): POST firmado a tools_url, bajo sandbox under
+        otherwise when registry[name] == remotetools.MARK
+            set out to text(remotetools.call(name, args, when contains(opts, "tool_ctx") then opts["tool_ctx"] otherwise {}, when contains(opts, "remote_tools") then opts["remote_tools"] otherwise nothing))
         -- equipos: send/board saben quién llama por opts.agent_id (el modelo no lo elige: se pisa lo que mande)
         otherwise when name == "send" or name == "board" or name == "objective"
             let targs be args

@@ -26,6 +26,9 @@ use "./teams.syn" as teams
 use "./schedule.syn" as schedule
 use "./worktree.syn" as worktree
 use "./diagnose.syn" as diagnose
+use "./sdktools.syn" as sdktools
+use "./apptools.syn" as apptools
+use "./tools/url.syn" as urls
 
 
 -- la key del header Authorization (o nothing)
@@ -120,6 +123,29 @@ export task parse(body, rec)
     when contains(body, "sent_at") and body["sent_at"] != nothing
         set meta["sent_at"] to body["sent_at"]
     let sobre be {"to": target, "thread": text(field(body, "thread", "")), "session": text(field(body, "session", "")), "from": from, "text": msg, "images": images, "channel": text(field(body, "channel", "http")), "meta": meta}
+    -- funciones de la app (lib/remotetools.syn): viajan en el mensaje, sin estado en Lampson. tools_url tiene que
+    -- estar en la lista de callbacks de la key (obligatoria acá: sin lista no hay tools_url) y ser https salvo loopback
+    let rt be field(body, "tools", nothing)
+    when rt != nothing
+        let tu be text(field(body, "tools_url", ""))
+        when tu == ""
+            give {"ok": false, "status": 400, "error": "tools needs tools_url: the URL where your app answers the tool calls"}
+        let tp be urls.parse(tu)
+        when not tp["ok"] or (tp["scheme"] != "https" and urls.host_class(tp["host"]) != "private")
+            give {"ok": false, "status": 400, "error": "tools_url must be an https URL (http only for localhost)"}
+        when length(field(rec, "callbacks", [])) == 0 or not apikeys.callback_allowed(rec, tu)
+            give {"ok": false, "status": 403, "error": "this API key cannot call tools at " + tu + ": add it to the key's list (`lampson key add --callback URL`)"}
+        when apikeys.signing_secret(rec["id"]) == ""
+            give {"ok": false, "status": 403, "error": "this API key predates per-key signing secrets: create a new one to use app tools"}
+        let nt be sdktools.normalize(rt)
+        when length(nt["errors"]) > 0
+            give {"ok": false, "status": 400, "error": join(nt["errors"], "; ")}
+        let clash be where(nt["tools"], (t) => contains(apptools.names(), t["name"]))
+        when length(clash) > 0
+            give {"ok": false, "status": 400, "error": "tool '" + clash[0]["name"] + "' already exists as a Synsema tool of this project (.lampson/tools/)"}
+        set sobre["tools"] to nt["tools"]
+        set sobre["tools_url"] to tu
+        set sobre["tools_key"] to rec["id"]
     give {"ok": true, "status": 200, "error": "", "sobre": sobre, "callback": cb, "stream": field(body, "stream", false) == true}
 
 -- el modo de un agente por la API: el suyo, y si no dice → strict (nadie en la request para preguntarle)

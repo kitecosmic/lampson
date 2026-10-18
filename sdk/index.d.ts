@@ -9,6 +9,10 @@ export interface ServerOptions {
   fetch?: typeof fetch;
   /** Per-request timeout in ms (default 15 min: an agent can take a while). */
   timeout?: number;
+  /** Your tools in server mode: the PUBLIC URL of toolsHandler(), where Lampson POSTs each call (in the key's list). */
+  toolsUrl?: string;
+  /** The key's signing secret (whsec_…, shown by `lampson key add`): toolsHandler() verifies Lampson's calls with it. */
+  toolsSecret?: string;
 }
 
 export interface LocalOptions {
@@ -118,10 +122,15 @@ export interface ToolDefinition<A = any> {
 export class Lampson {
   constructor(opts: (ServerOptions | LocalOptions) & CommonOptions);
   readonly mode: 'server' | 'local';
-  /** Local mode: a function of your app as a tool; list its name in the agent's "tools". */
+  /** A function of your app as a tool (server mode needs toolsUrl); list its name in the agent's "tools". */
   tool<A = any>(name: string, def: ToolDefinition<A>): this;
-  /** Local mode: several tools at once — an AI SDK tools object works as is. */
+  /** Several tools at once — an AI SDK tools object works as is. */
   tools(map: Record<string, ToolDefinition>): this;
+  /**
+   * Server mode: the endpoint for Lampson's tool calls — verifies the signature, runs the tool, answers.
+   * Web standard (Next route handler, Hono, Bun, Deno) or Node (Express, http.createServer).
+   */
+  toolsHandler(): (req: any, res?: any) => Promise<Response | void>;
   /** The default agent given in the options ("" = the workspace default). */
   readonly agent: string;
   /** Local mode: tools some agent lists but will not have, one message each (filled once the process is ready). */
@@ -131,6 +140,8 @@ export class Lampson {
   agents(): Promise<AgentInfo[]>;
   job(id: string): Promise<unknown>;
   close(): Promise<void>;
+  /** Checks a tool call's RFC 9421 signature by hand (toolsHandler() does it) → {keyid, created} or null. */
+  static verifyToolRequest(req: { method: string; url: string; headers: Record<string, string> | Headers; body: string | Buffer }, secret: string, opts?: { now?: number }): { keyid: string; created: number } | null;
   static verifySignature(rawBody: string | Buffer, signature: string | undefined, secret: string): boolean;
 }
 

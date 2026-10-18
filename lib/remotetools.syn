@@ -1,0 +1,76 @@
+-- lib/remotetools.syn — funciones de la app (JS / Python) cuando Lampson corre en otra máquina: modo servidor del SDK
+--
+-- Sin estado en Lampson: las herramientas viajan en cada mensaje de la API /v1 — {"tools": [{name, description,
+-- parameters, timeout?}], "tools_url": "https://…"} — y viven lo que vive ese turno (o ese job, con callback).
+-- Cuando el modelo llama a una, Lampson hace POST tools_url con {call_id, name, args, ctx} y la app contesta en ese
+-- mismo POST {output} o {error}: el mismo mensaje que tool_request / tool_result por stdio (lib/sdktools.syn).
+--
+-- Garantías (2026-10-18, con el agente de frameworks):
+--   * a dónde: tools_url tiene que estar en la lista de callbacks de la key (lista obligatoria, host exacto: lo
+--     revisa lib/api.syn) y el POST sale dentro de `sandbox under {"net": <ese host>}`: aunque la comparación de la
+--     lista tuviera un bug, el motor no deja salir a otro host.
+--   * quién: firma RFC 9421 (http_sign: @method, @target-uri, content-digest, created, keyid = la key) con el
+--     secreto de ESA key — otra app que comparte este Lampson no puede firmar un pedido falso con el ctx que quiera.
+--     Una key de antes de 2026-10-18 (sin secreto propio) no puede usar herramientas remotas.
+--   * fallas: sin respuesta en el plazo → error al modelo, sin reintentar (una herramienta que cobra o cancela no puede
+--     correr dos veces; call_id va firmado para que la app deduplique si algo en el medio reenvía).
+
+use "./apikeys.syn" as apikeys
+use "./tools/url.syn" as urls
+
+export let MARK be "remotetool"
+let DEFAULT_TIMEOUT be 60
+let MAX_OUT be 60000
+
+-- lo que el turno necesita del sobre → {url, key, tools} o nothing
+export task of_sobre(sobre)
+    when type_of(sobre) != "map" or not contains(sobre, "tools") or type_of(sobre["tools"]) != "list" or length(sobre["tools"]) == 0
+        give nothing
+    give {"url": text(get(sobre, "tools_url", "")), "key": text(get(sobre, "tools_key", "")), "tools": sobre["tools"]}
+
+export task catalog(remote, allowed_names)
+    give apply((t) => {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}, where(remote["tools"], (t) => contains(allowed_names, t["name"])))
+
+export task call(name, args, ctx, remote)
+    require net
+    require time
+    require random
+    require sign("LAMPSON_TOOLS")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when remote == nothing
+        give "ERROR: no app tools in this request"
+    let f be where(remote["tools"], (t) => t["name"] == name)
+    when length(f) == 0
+        give "ERROR: the app sent no tool '" + name + "'"
+    let sec be apikeys.signing_secret(remote["key"])
+    when sec == ""
+        give "ERROR: this API key has no signing secret (it predates them): create a new key to use app tools"
+    let u be urls.parse(remote["url"])
+    when not u["ok"]
+        give "ERROR: invalid tools_url"
+    let cid be token()
+    let body be json_encode({"call_id": cid, "name": name, "args": when args == nothing then {} otherwise args, "ctx": when ctx == nothing then {} otherwise ctx})
+    let headers be http_sign({"method": "POST", "url": remote["url"], "body": body}, as_secret(sec, "LAMPSON_TOOLS"), {"alg": "hmac-sha256", "keyid": remote["key"]})
+    set headers["Content-Type"] to "application/json"
+    set headers["User-Agent"] to "lampson"
+    set headers["X-Lampson-Key"] to remote["key"]
+    let tmo be number(get(f[0], "timeout", DEFAULT_TIMEOUT), DEFAULT_TIMEOUT)
+    let techo be {"net": u["host"]}
+    let r be nothing
+    try
+        sandbox under techo
+            set r to http_post(remote["url"], body, headers, tmo)
+    recover err
+        give "ERROR: the app's tool '" + name + "' did not answer: " + text(err)
+    when r == nothing
+        give "ERROR: the app's tool '" + name + "' did not answer"
+    when not r["ok"]
+        give "ERROR: the app answered HTTP " + text(r["status"]) + " for tool '" + name + "': " + slice(text(r["body"]), 0, 300)
+    let doc be json_decode(text(r["body"]), nothing)
+    when type_of(doc) != "map"
+        give "ERROR: the app's answer for tool '" + name + "' is not JSON {output} or {error}"
+    when get(doc, "error", nothing) != nothing
+        give "ERROR: " + text(doc["error"])
+    let o be get(doc, "output", nothing)
+    give when o == nothing then "(no output)" otherwise slice(when type_of(o) == "text" then o otherwise json_encode(o), 0, MAX_OUT)

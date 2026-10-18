@@ -65,7 +65,7 @@ AGENTS = "workspace/.lampson/agents"
 os.makedirs(AGENTS, exist_ok=True)
 with open(AGENTS + "/rt-sdkpy.agent.json", "w", encoding="utf-8") as f:
     json.dump({"id": "rt-sdkpy", "description": "agente del SDK de Python", "system": "Bot del SDK.", "tools": ["ls", "py_eco"], "buffer": False}, f)
-THREADS = [("rt-sdkpy", t) for t in ("py-1", "py-2", "py-3", "py-4")]
+THREADS = [("rt-sdkpy", t) for t in ("py-1", "py-2", "py-3", "py-4", "py-5")]
 for a, t in THREADS:
     forget(a, t)
 procs = []
@@ -139,6 +139,51 @@ try:
 except LampsonError as e:
     e403 = e
 check(e403 is not None and e403.status == 403, "agente fuera de la key → LampsonError status 403")
+
+# funciones de la app en modo servidor (lib/remotetools.syn): Lampson las llama firmadas a tools_url
+import http.server  # noqa: E402
+import threading  # noqa: E402
+made2 = subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="add", LAMPSON_KEY_AGENTS="rt-sdkpy", LAMPSON_KEY_NAME="sdk-py-tools", LAMPSON_KEY_CALLBACKS="http://127.0.0.1:47999/"), capture_output=True, text=True, encoding="utf-8")
+key2 = re.search(r"lk_[A-Za-z0-9_-]+", made2.stdout).group(0)
+kid2 = re.search(r"\((k[A-Za-z0-9_-]+)\)", made2.stdout).group(1)
+secret2 = re.search(r"whsec_[A-Za-z0-9_-]+", made2.stdout).group(0)
+srv2 = Lampson(url="http://127.0.0.1:47997/w/test/v1", key=key2, tools_url="http://127.0.0.1:47999/tools", tools_secret=secret2)
+
+
+@srv2.tool
+def py_eco(x: str, ctx: dict = None) -> dict:
+    """Devuelve lo que recibe."""
+    return {"eco": x, "from": (ctx or {}).get("from", {}).get("id")}
+
+
+class ToolsHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        status, out = srv2.handle_tool_request("POST", dict(self.headers), raw)
+        data = json.dumps(out).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a):
+        pass
+
+
+tools_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 47999), ToolsHandler)
+threading.Thread(target=tools_srv.serve_forever, daemon=True).start()
+r1 = srv2.ask(agent="rt-sdkpy", thread="py-5", text='usa-tool py_eco {"x":"remoto"}', **{"from": {"id": "u-8"}})
+check('"eco": "remoto"' in r1["text"] and '"from": "u-8"' in r1["text"], "servidor: Lampson llamó a la función de la app, firmada, con el ctx: " + r1["text"][:80])
+forged = urllib.request.Request("http://127.0.0.1:47999/tools", data=b'{"name":"py_eco","args":{"x":"a"}}', method="POST")
+try:
+    urllib.request.urlopen(forged)
+    fstatus = 200
+except urllib.error.HTTPError as e:
+    fstatus = e.code
+check(fstatus == 401, "servidor: un pedido sin la firma de Lampson → 401")
+tools_srv.shutdown()
+subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="remove", LAMPSON_KEY_ID=kid2), capture_output=True)
 
 body = '{"job":"m1","text":"hola"}'
 sig = "sha256=" + hmac.new(b"s3cret", body.encode(), hashlib.sha256).hexdigest()

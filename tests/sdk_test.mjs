@@ -29,7 +29,7 @@ function forget(agent, thread) {
 const AGENTS = 'workspace/.lampson/agents';
 fs.mkdirSync(AGENTS, { recursive: true });
 fs.writeFileSync(`${AGENTS}/rt-sdk.agent.json`, JSON.stringify({ id: 'rt-sdk', description: 'agente del SDK', system: 'Bot del SDK.', tools: ['ls', 'sdk_eco', 'sdk_falla'], buffer: false }));
-const THREADS = [['rt-sdk', 'sdk-js-1'], ['rt-sdk', 'sdk-js-2'], ['rt-sdk', 'sdk-js-3'], ['rt-sdk', 'sdk-js-4'], ['rt-sdk', 'sdk-js-5'], ['rt-sdk', 'sdk-js-6'], ['rt-sdk', 'sdk-js-7']];
+const THREADS = [['rt-sdk', 'sdk-js-1'], ['rt-sdk', 'sdk-js-2'], ['rt-sdk', 'sdk-js-3'], ['rt-sdk', 'sdk-js-4'], ['rt-sdk', 'sdk-js-5'], ['rt-sdk', 'sdk-js-6'], ['rt-sdk', 'sdk-js-7'], ['rt-sdk', 'sdk-js-8']];
 THREADS.forEach(([a, t]) => forget(a, t));
 
 const procs = [];
@@ -108,6 +108,34 @@ check(e403 instanceof LampsonError && e403.status === 403, 'agente fuera de la k
 let etype = null;
 try { await srv.ask({ agent: 'rt-sdk' }); } catch (e) { etype = e; }
 check(etype instanceof TypeError, 'sin text → TypeError antes de mandar nada');
+
+// funciones de la app en modo servidor (lib/remotetools.syn): viajan en el mensaje, Lampson las llama firmadas
+const http = await import('node:http');
+const made2 = spawnSync('synsema', ['run', 'run.syn'], { env: Object.assign({}, process.env, { LAMPSON_KEY_CMD: 'add', LAMPSON_KEY_AGENTS: 'rt-sdk', LAMPSON_KEY_NAME: 'sdk-tools', LAMPSON_KEY_CALLBACKS: 'http://127.0.0.1:47998/' }), encoding: 'utf8' });
+const key2 = (made2.stdout.match(/lk_[A-Za-z0-9_-]+/) || [])[0];
+const key2Id = (made2.stdout.match(/\((k[A-Za-z0-9_-]+)\)/) || [])[1];
+const secret2 = (made2.stdout.match(/whsec_[A-Za-z0-9_-]+/) || [])[0];
+check(!!key2 && !!secret2, 'lampson key add muestra el secreto de firma de la key');
+const srv2 = new Lampson({ url: 'http://127.0.0.1:47996/w/test/', key: key2, toolsUrl: 'http://127.0.0.1:47998/tools', toolsSecret: secret2 });
+const remoteSeen = [];
+srv2.tool('sdk_eco', {
+  description: 'Devuelve lo que recibe',
+  parameters: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
+  execute: async (args, ctx) => { remoteSeen.push(ctx); return { eco: args.x, from: ctx.from && ctx.from.id }; },
+});
+const toolsServer = http.createServer(srv2.toolsHandler()).listen(47998, '127.0.0.1');
+await sleep(200);
+const r1 = await srv2.ask({ agent: 'rt-sdk', thread: 'sdk-js-8', from: { id: 'u-5' }, text: 'usa-tool sdk_eco {"x":"remoto"}' });
+check(/"eco": "remoto"/.test(r1.text) && /"from": "u-5"/.test(r1.text), 'servidor: Lampson llamó a la función de la app, firmada, con el ctx: ' + r1.text.slice(0, 80));
+const forged = await fetch('http://127.0.0.1:47998/tools', { method: 'POST', body: JSON.stringify({ call_id: 'x', name: 'sdk_eco', args: { x: 'a' }, ctx: { from: { id: 'u-99' } } }) });
+check(forged.status === 401 && !remoteSeen.some(c => c.from && c.from.id === 'u-99'), 'servidor: un pedido sin la firma de Lampson → 401 y la función no corre');
+const srvBad = new Lampson({ url: 'http://127.0.0.1:47996/w/test/', key, toolsUrl: 'http://127.0.0.1:47998/tools', toolsSecret: secret2 });
+srvBad.tool('sdk_eco', { execute: () => 1 });
+let e403t = null;
+try { await srvBad.ask({ agent: 'rt-sdk', thread: 'sdk-js-8', text: 'hola' }); } catch (e) { e403t = e; }
+check(e403t instanceof LampsonError && e403t.status === 403, 'servidor: tools_url fuera de la lista de la key → 403');
+toolsServer.close();
+if (key2Id) spawnSync('synsema', ['run', 'run.syn'], { env: Object.assign({}, process.env, { LAMPSON_KEY_CMD: 'remove', LAMPSON_KEY_ID: key2Id }) });
 
 // ---------- verifySignature ----------
 const body = '{"job":"m1","text":"hola"}';

@@ -42,6 +42,7 @@ use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
 use "./apptools.syn" as apptools
 use "./sdktools.syn" as sdktools
+use "./remotetools.syn" as remotetools
 use "./tools/proc.syn" as proc
 use "./scope.syn" as scope
 use "./teams.syn" as teams
@@ -652,6 +653,18 @@ export task open(sobre, hooks)
     -- modelo no lo ve ni lo escribe
     let aopts be ctx["opts"]
     set aopts["tool_ctx"] to {"from": field(sobre, "from", {}), "thread": thread, "agent": ctx["agent"], "session": sid, "meta": field(sobre, "meta", {}), "channel": text(field(sobre, "channel", ""))}
+    -- funciones de la app que viajan en el mensaje (modo servidor, lib/remotetools.syn): solo las que el agente lista
+    -- y sin pisar ninguna que ya tenga
+    let remote be remotetools.of_sobre(sobre)
+    when remote != nothing
+        let rspec be ctx["spec"]
+        let rreg be aopts["registry"]
+        let rnames be where(apply((t) => t["name"], remote["tools"]), (n) => allowed(rspec["tools"], n) and not contains(rreg, n))
+        each n in rnames
+            set rreg[n] to remotetools.MARK
+        set aopts["registry"] to rreg
+        set aopts["catalog"] to aopts["catalog"] + remotetools.catalog(remote, rnames)
+        set aopts["remote_tools"] to remote
     set ctx["opts"] to aopts
     -- sesión actual (blackboard): la tool todo guarda su lista por sesión (lib/tools/todo.syn)
     share {"id": sid} as "lampson:session"

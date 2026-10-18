@@ -25,6 +25,9 @@
 //           process; Lampson asks for it over stdio. `ctx` = {from, thread, agent, session, meta, channel} of the
 //           message — set by your app, never seen or written by the model. List the name in the agent's "tools".
 //           lampson.tools({ order_status: tool({...}), ... }) registers several (an AI SDK tools object as is).
+//           Server mode too: new Lampson({ url, key, toolsUrl: "https://my-app/api/lampson/tools", toolsSecret })
+//           sends the tools with each message; Lampson POSTs each call there, signed (RFC 9421) with the key's
+//           secret, and lampson.toolsHandler() answers it: export const POST = lampson.toolsHandler().
 //
 //   new Lampson({ agent: "support", ... })   the agent that answers when a message does not say `agent`
 //           (without it, the workspace default: "build", Lampson's coding agent, with all of Lampson's tools)
@@ -162,6 +165,58 @@ function toolSpec(name, def) {
   };
 }
 
+// run one of your tools: what the model wrote is validated by a zod inputSchema before your code sees it; the
+// answer is {output} or {error}, the same over stdio (local) and over HTTP (server)
+async function executeTool(t, name, args, ctx) {
+  if (!t) return { error: 'the app has no tool ' + name };
+  try {
+    let input = args || {};
+    if (t.schema && typeof t.schema.safeParse === 'function') {
+      const v = t.schema.safeParse(input);
+      if (!v.success) return { error: 'invalid arguments for ' + name + ': ' + ((v.error && v.error.message) || 'schema mismatch') };
+      input = v.data;
+    }
+    const out = await t.execute(input, Object.freeze(Object.assign({}, ctx || {})));
+    return { output: out === undefined ? null : out };
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  }
+}
+
+// the RFC 9421 profile Synsema's http_sign uses: @method, @target-uri, content-digest; created, keyid, alg=hmac-sha256
+function headerOf(headers, name) {
+  if (!headers) return '';
+  if (typeof headers.get === 'function') return headers.get(name) || '';
+  for (const k of Object.keys(headers)) if (k.toLowerCase() === name) return String(headers[k]);
+  return '';
+}
+function verifyToolRequest({ method, url, headers, body }, secret, opts = {}) {
+  if (!secret) return null;
+  const input = headerOf(headers, 'signature-input'), sigh = headerOf(headers, 'signature'), dig = headerOf(headers, 'content-digest');
+  const mi = /^sig1=(\("@method" "@target-uri" "content-digest"\);created=(\d+);keyid="([^"]*)";alg="hmac-sha256")$/.exec(input);
+  const ms = /^sig1=:([A-Za-z0-9+/=]+):$/.exec(sigh);
+  if (!mi || !ms) return null;
+  const created = Number(mi[2]);
+  const now = opts.now != null ? opts.now : Math.floor(Date.now() / 1000);
+  if (Math.abs(now - created) > 300) return null;                       // ±300 s, like http_signature_verify
+  const raw = Buffer.isBuffer(body) ? body : Buffer.from(String(body == null ? '' : body), 'utf8');
+  const wantDigest = 'sha-256=:' + crypto.createHash('sha256').update(raw).digest('base64') + ':';
+  if (dig !== wantDigest) return null;
+  const base = ['"@method": ' + String(method || 'POST').toUpperCase(), '"@target-uri": ' + url, '"content-digest": ' + dig, '"@signature-params": ' + mi[1]].join('\n');
+  const want = crypto.createHmac('sha256', secret).update(base).digest();
+  const got = Buffer.from(ms[1], 'base64');
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return null;
+  return { keyid: mi[3], created };
+}
+
+async function readNodeBody(req) {
+  if (req.body != null && (typeof req.body === 'string' || Buffer.isBuffer(req.body))) return req.body;
+  if (req.body != null && typeof req.body === 'object' && req.readableEnded) throw new Error('the body was already parsed as JSON: mount toolsHandler() before express.json(), or use express.raw()');
+  const chunks = [];
+  for await (const c of req) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+  return Buffer.concat(chunks);
+}
+
 function killTree(child) {
   try {
     if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
@@ -251,21 +306,7 @@ class LocalTransport {
   }
   async runTool({ call_id, name, args, ctx }) {
     const reply = r => { if (!this.exited) this.child.stdin.write(JSON.stringify(Object.assign({ op: 'tool_result', call_id }, r)) + '\n'); };
-    const t = this.tools.get(name);
-    if (!t) return reply({ error: 'the app has no tool ' + name });
-    try {
-      let input = args || {};
-      // a zod inputSchema validates what the model wrote before your code sees it
-      if (t.schema && typeof t.schema.safeParse === 'function') {
-        const v = t.schema.safeParse(input);
-        if (!v.success) return reply({ error: 'invalid arguments for ' + name + ': ' + ((v.error && v.error.message) || 'schema mismatch') });
-        input = v.data;
-      }
-      const out = await t.execute(input, Object.freeze(Object.assign({}, ctx || {})));
-      reply({ output: out === undefined ? null : out });
-    } catch (e) {
-      reply({ error: (e && e.message) || String(e) });
-    }
+    reply(await executeTool(this.tools.get(name), name, args, ctx));
   }
   onExit(code, err) {
     this.exited = { code, err };
@@ -322,7 +363,8 @@ class LocalTransport {
 
 class Lampson {
   /**
-   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, lampsonTools?, tools?, spawn? } };
+   * @param {object} opts  { url, key, toolsUrl?, toolsSecret? } for server mode, or
+   *                        { local: { workspace, home?, env?, lampsonTools?, tools?, spawn? } };
    *                        agent? — the default agent; onWarning?(message) — default console.warn
    */
   constructor(opts = {}) {
@@ -330,20 +372,58 @@ class Lampson {
     this.transport = opts.local ? new LocalTransport(opts.local, onWarning) : new HttpTransport(opts);
     this.mode = opts.local ? 'local' : 'server';
     this.agent = opts.agent || '';
+    // server mode: your tools travel with each message and Lampson POSTs the calls to toolsUrl (the PUBLIC URL of
+    // toolsHandler(), the one Lampson signs); toolsSecret = the key's signing secret from `lampson key add`
+    this.toolsUrl = opts.toolsUrl || '';
+    this.toolsSecret = opts.toolsSecret || '';
+    this.serverTools = new Map();
   }
   withAgent(msg) {
     return this.agent && msg && typeof msg === 'object' && !msg.agent && !msg.to ? Object.assign({}, msg, { agent: this.agent }) : msg;
   }
+  withTools(env) {
+    if (this.mode !== 'server' || this.serverTools.size === 0) return env;
+    return Object.assign({}, env, { tools: [...this.serverTools.values()].map(t => t.wire), tools_url: this.toolsUrl });
+  }
+  addTools(specs) {
+    if (this.mode === 'local') return this.transport.setTools(specs);
+    if (!this.toolsUrl) throw new LampsonError('server mode: pass toolsUrl (the public URL of lampson.toolsHandler()) to register tools, or write them in Synsema: .lampson/tools/<name>.syn');
+    for (const t of specs) this.serverTools.set(t.wire.name, t);
+  }
+  /**
+   * Server mode: the endpoint Lampson POSTs your tool calls to. Verifies the signature (RFC 9421, the key's
+   * toolsSecret, ±300 s), runs the tool and answers {output} | {error}. Web standard (Next route handler, Hono, Bun,
+   * Deno: POST = lampson.toolsHandler()) or Node (Express: app.post(path, lampson.toolsHandler()); http.createServer).
+   */
+  toolsHandler() {
+    const answer = async (method, headers, body) => {
+      const v = verifyToolRequest({ method, url: this.toolsUrl, headers, body }, this.toolsSecret);
+      if (!v) return [401, { error: 'invalid or missing Lampson signature' }];
+      let msg;
+      try { msg = JSON.parse(Buffer.isBuffer(body) ? body.toString('utf8') : String(body)); } catch { return [400, { error: 'body must be JSON' }]; }
+      return [200, await executeTool(this.serverTools.get(msg.name), msg.name, msg.args, msg.ctx)];
+    };
+    return async (req, res) => {
+      if (res && typeof res.setHeader === 'function') {                 // Node: Express, http.createServer
+        let status, out;
+        try { [status, out] = await answer(req.method, req.headers, await readNodeBody(req)); } catch (e) { [status, out] = [400, { error: e.message }]; }
+        res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(out));
+        return;
+      }
+      const [status, out] = await answer(req.method, req.headers, Buffer.from(await req.arrayBuffer()));
+      return new Response(JSON.stringify(out), { status, headers: { 'Content-Type': 'application/json' } });
+    };
+  }
   /** Send a message to an agent and wait for its answer. Throws LampsonError if the turn ended in an error. */
   async ask(msg) {
-    const result = await this.transport.ask(envelope(this.withAgent(msg)));
+    const result = await this.transport.ask(this.withTools(envelope(this.withAgent(msg))));
     if (result && result.status === 'queued') return result;     // server mode with callback: { job, status }
     if (failed(result)) throw new LampsonError(result.stopped, { result });
     return result;
   }
   /** The agent's steps as they happen: session, assistant, tool_call, tool_result…, and "done" last. */
   async *stream(msg) {
-    const env = envelope(this.withAgent(msg));
+    const env = this.withTools(envelope(this.withAgent(msg)));
     if (env.callback) throw new TypeError('stream does not take a callback (use ask)');
     yield* this.transport.stream(env);
   }
@@ -352,14 +432,12 @@ class Lampson {
    * or parameters, execute(args, ctx), timeout? (s, default 60) }. List its name in the agent's "tools".
    */
   tool(name, def) {
-    if (this.mode !== 'local') throw new LampsonError('lampson.tool() needs local mode for now (in server mode, write the tool in Synsema: .lampson/tools/<name>.syn)');
-    this.transport.setTools([toolSpec(name, def)]);
+    this.addTools([toolSpec(name, def)]);
     return this;
   }
   /** Several at once: { name: { description, inputSchema, execute } } — an AI SDK tools object works as is. */
   tools(map) {
-    if (this.mode !== 'local') throw new LampsonError('lampson.tools() needs local mode for now (in server mode, write the tools in Synsema: .lampson/tools/)');
-    this.transport.setTools(Object.entries(map || {}).map(([n, d]) => toolSpec(n, d)));
+    this.addTools(Object.entries(map || {}).map(([n, d]) => toolSpec(n, d)));
     return this;
   }
   /** Local mode: tools some agent lists but will not have (plugin off, typo), one message each. */
@@ -375,6 +453,9 @@ class Lampson {
    * Checks the X-Lampson-Signature of a callback (or approval webhook): "sha256=" + HMAC-SHA256(rawBody, secret),
    * secret = LAMPSON_WEBHOOK_SECRET of that Lampson. Pass the raw body exactly as received (string or Buffer).
    */
+  /** Checks a tool request's RFC 9421 signature by hand (toolsHandler() does it for you) → {keyid, created} | null. */
+  static verifyToolRequest(req, secret, opts) { return verifyToolRequest(req, secret, opts); }
+
   static verifySignature(rawBody, signature, secret) {
     if (!signature || !secret) return false;
     const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
