@@ -17,6 +17,9 @@ export interface LocalOptions {
     workspace: string;
     /** LAMPSON_HOME: where Lampson keeps its config, sessions and plugins (default ~/lampson). Relative to process.cwd(). */
     home?: string;
+    /** false: no tool of Lampson's own (bash, read, write, fetch…) exists in this process, not even for the built-in
+     *  agents — your agents get only the tools you give them. Default true. */
+    lampsonTools?: boolean;
     /** Extra environment for the Lampson process (e.g. provider keys). */
     env?: Record<string, string>;
     /** Advanced / tests: an exact command that speaks the `lampson run --stdio` protocol. */
@@ -25,6 +28,8 @@ export interface LocalOptions {
 }
 
 export interface CommonOptions {
+  /** The agent that answers when a message does not say `agent`. Without it: the workspace default ("build"). */
+  agent?: string;
   /** Local mode: called once per tool an agent lists but will not have (plugin off, typo). Default console.warn; null = silent. */
   onWarning?: ((message: string) => void) | null;
 }
@@ -88,6 +93,8 @@ export class LampsonError extends Error {
 export class Lampson {
   constructor(opts: (ServerOptions | LocalOptions) & CommonOptions);
   readonly mode: 'server' | 'local';
+  /** The default agent given in the options ("" = the workspace default). */
+  readonly agent: string;
   /** Local mode: tools some agent lists but will not have, one message each (filled once the process is ready). */
   readonly warnings: string[];
   ask(msg: Message): Promise<Result | Queued>;

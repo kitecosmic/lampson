@@ -249,7 +249,7 @@ task team_tools(spec)
         give false
     give contains(spec["tools"], "send") or contains(spec["tools"], "board") or length(teams.teams_of(spec["id"])) > 0
 
-export task registry_of(spec)
+task registry_full(spec)
     require exec
     require time
     require file(".lampson")
@@ -280,7 +280,7 @@ export task registry_of(spec)
         set reg["board"] to teams.board_tool
     give reg
 
-export task catalog_of(spec)
+task catalog_full(spec)
     require exec
     require time
     require file(".lampson")
@@ -303,6 +303,56 @@ export task catalog_of(spec)
     when team_tools(spec)
         set extra to extra + [teams.SEND_SPEC, teams.BOARD_SPEC]
     give cat + extra
+
+-- LAMPSON_BUILTIN_TOOLS=off (SDK: lampsonTools: false): el proceso no ofrece NINGUNA tool propia de Lampson (bash,
+-- read, write, fetch, delegate…), ni a los agentes integrados: solo las que trae quien lo usa (plugins, MCP) y la
+-- coordinación de un equipo (send, board). Para una app que embebe un agente: nada que inyectar hacia el shell.
+export task builtin_off()
+    require env("LAMPSON_*")
+    give lower(env("LAMPSON_BUILTIN_TOOLS", "")) == "off"
+
+task external(name)
+    give starts_with(name, plugins.PREFIX) or starts_with(name, "mcp_") or name == "send" or name == "board"
+
+export task registry_of(spec)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    let reg be registry_full(spec)
+    when not builtin_off()
+        give reg
+    let out be {}
+    each k in keys(reg)
+        when external(k)
+            set out[k] to reg[k]
+    give out
+
+export task catalog_of(spec)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    let cat be catalog_full(spec)
+    when not builtin_off()
+        give cat
+    give where(cat, (s) => external(s["name"]))
 
 -- las tools que el agente lista y no va a tener (plugin apagado o inexistente, MCP caído, nombre mal escrito) →
 -- un aviso por tool. Sin esto el agente arranca sin su herramienta y nadie se entera (2026-10-18, prueba del SDK)
@@ -331,6 +381,8 @@ export task missing(spec)
                 let pn be split(rest, "_")[0]
                 let found be where(plugins.all(), (l) => l["name"] == pn)
                 set why to when length(found) == 0 then "there is no plugin '" + pn + "'" otherwise (when found[0]["error"] != nothing then "plugin '" + pn + "' is broken: " + text(found[0]["error"]) otherwise (when not found[0]["enabled"] then "plugin '" + pn + "' is off (turn it on: lampson plugin on " + pn + ")" otherwise "plugin '" + pn + "' has no such tool"))
+            otherwise when builtin_off() and not external(t)
+                set why to "Lampson's own tools are off in this process (lampsonTools: false)"
             otherwise when starts_with(t, "mcp_")
                 set why to "no MCP server provides it (is the server configured and running?)"
             set out to append(out, "agent '" + spec["id"] + "': tool '" + t + "' is not available: " + why)

@@ -14,6 +14,11 @@
 //           process.cwd().
 //           An agent that lists a tool it will not have (typo, plugin off) is reported through onWarning
 //           (default console.warn) and in lampson.warnings.
+//           `lampsonTools: false` → no tool of Lampson's own exists in that process (bash, read, write, fetch…),
+//           not even for the built-in agents: your agents get only the tools you give them.
+//
+//   new Lampson({ agent: "support", ... })   the agent that answers when a message does not say `agent`
+//           (without it, the workspace default: "build", Lampson's coding agent, with all of Lampson's tools)
 //
 //   await lampson.ask({ agent: "shop", thread: "customer-42", text: "do you have whole-wheat bread?" })
 //     → { agent, thread, session, text, steps, usage, stopped }      (throws LampsonError if the turn failed)
@@ -123,7 +128,7 @@ function killTree(child) {
 }
 
 class LocalTransport {
-  constructor({ workspace, home, env, spawn: spawnSpec }, onWarning) {
+  constructor({ workspace, home, env, lampsonTools, spawn: spawnSpec }, onWarning) {
     if (!workspace && !spawnSpec) throw new TypeError('local.workspace is required (the project folder the agents work in)');
     let command, args, cwd;
     if (spawnSpec) {
@@ -139,6 +144,7 @@ class LocalTransport {
     // relative to the app, not to the workspace (the launcher runs with cwd = workspace): a relative home ended up
     // inside the project (2026-10-18)
     if (home) childEnv.LAMPSON_HOME = path.resolve(home);
+    if (lampsonTools === false) childEnv.LAMPSON_BUILTIN_TOOLS = 'off';
     this.warnings = [];
     this.onWarning = onWarning;
     this.child = spawn(command, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -236,24 +242,28 @@ class LocalTransport {
 
 class Lampson {
   /**
-   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, spawn? } };
-   *                        onWarning?(message) — default console.warn
+   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, lampsonTools?, spawn? } };
+   *                        agent? — the default agent; onWarning?(message) — default console.warn
    */
   constructor(opts = {}) {
     const onWarning = opts.onWarning === undefined ? (w => console.warn('lampson: ' + w)) : opts.onWarning;
     this.transport = opts.local ? new LocalTransport(opts.local, onWarning) : new HttpTransport(opts);
     this.mode = opts.local ? 'local' : 'server';
+    this.agent = opts.agent || '';
+  }
+  withAgent(msg) {
+    return this.agent && msg && typeof msg === 'object' && !msg.agent && !msg.to ? Object.assign({}, msg, { agent: this.agent }) : msg;
   }
   /** Send a message to an agent and wait for its answer. Throws LampsonError if the turn ended in an error. */
   async ask(msg) {
-    const result = await this.transport.ask(envelope(msg));
+    const result = await this.transport.ask(envelope(this.withAgent(msg)));
     if (result && result.status === 'queued') return result;     // server mode with callback: { job, status }
     if (failed(result)) throw new LampsonError(result.stopped, { result });
     return result;
   }
   /** The agent's steps as they happen: session, assistant, tool_call, tool_result…, and "done" last. */
   async *stream(msg) {
-    const env = envelope(msg);
+    const env = envelope(this.withAgent(msg));
     if (env.callback) throw new TypeError('stream does not take a callback (use ask)');
     yield* this.transport.stream(env);
   }

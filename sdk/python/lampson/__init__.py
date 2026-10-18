@@ -13,6 +13,11 @@ Two ways to reach Lampson, the same methods for both:
           (use one Lampson per thread for parallel conversations; the process itself runs conversations in parallel).
           `home` and `workspace` are relative to the current directory. An agent that lists a tool it will not have
           (typo, plugin off) is reported through on_warning (default: a line on stderr) and in lampson.warnings.
+          local={"lampson_tools": False} -> no tool of Lampson's own exists in that process (bash, read, write,
+          fetch...), not even for the built-in agents: your agents get only the tools you give them.
+
+  Lampson(agent="support", ...)  the agent that answers when a message does not say `agent` (without it, the
+          workspace default: "build", Lampson's coding agent, with all of Lampson's tools)
 
     lampson.ask(agent="shop", thread="customer-42", text="do you have whole-wheat bread?")
       -> {"agent", "thread", "session", "text", "steps", "usage", "stopped"}   (raises LampsonError if the turn failed)
@@ -146,12 +151,14 @@ def _lampson_command():
 
 
 class _Local:
-    def __init__(self, workspace=None, home=None, env=None, command=None, spawn=None, on_warning=None):
+    def __init__(self, workspace=None, home=None, env=None, command=None, spawn=None, on_warning=None, lampson_tools=True):
         child_env = dict(os.environ)
         child_env.update(env or {})
         # relative to the app, not to the workspace (the launcher runs with cwd = workspace)
         if home:
             child_env["LAMPSON_HOME"] = os.path.abspath(home)
+        if lampson_tools is False:
+            child_env["LAMPSON_BUILTIN_TOOLS"] = "off"
         self.warnings = []
         self.on_warning = on_warning
         if spawn:
@@ -262,7 +269,8 @@ class _Local:
 class Lampson:
     """Server mode: Lampson(url=..., key=...).  Local mode: Lampson(local={"workspace": ...})."""
 
-    def __init__(self, url=None, key=None, local=None, timeout=None, on_warning=False):
+    def __init__(self, url=None, key=None, local=None, timeout=None, on_warning=False, agent=None):
+        self.agent = agent or ""
         if local is not None:
             if on_warning is False:
                 on_warning = lambda w: print("lampson: " + w, file=sys.stderr)
@@ -274,7 +282,7 @@ class Lampson:
 
     def ask(self, agent=None, text=None, **msg):
         """Send a message to an agent and wait for its answer. Raises LampsonError if the turn ended in an error."""
-        result = self._t.ask(_envelope(dict(msg, agent=agent, text=text)))
+        result = self._t.ask(_envelope(dict(msg, agent=agent or (None if msg.get("to") else self.agent) or None, text=text)))
         if result.get("status") == "queued":
             return result   # server mode with callback: {"job", "status"}
         if _failed(result):
@@ -283,7 +291,7 @@ class Lampson:
 
     def stream(self, agent=None, text=None, **msg):
         """The agent's steps as they happen: session, assistant, tool_call, tool_result…, and "done" last."""
-        env = _envelope(dict(msg, agent=agent, text=text))
+        env = _envelope(dict(msg, agent=agent or (None if msg.get("to") else self.agent) or None, text=text))
         if "callback" in env:
             raise TypeError("stream does not take a callback (use ask)")
         return self._t.stream(env)
