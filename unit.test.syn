@@ -158,9 +158,11 @@ test "normalize_model: minúsculas donde la API es case-sensitive (deepseek), Mi
     assert_eq(provider.normalize_model("minimax", "MiniMax-M3"), "MiniMax-M3")
     assert_eq(provider.normalize_model("glm", "GLM-5.3-Flash"), "glm-5.3-flash")
     assert_eq(provider.normalize_model("glm-coding", "GLM-5.3"), "glm-5.3")
-    assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-v4-flash")
+    assert_eq(provider.PRESETS["deepseek"]["model"], "deepseek-flash")
     assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash-vision-exp"}))
-    assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-flash"}))
+    assert(provider.supports_vision({"provider": "deepseek", "model": "deepseek-flash"}))
+    assert(not provider.supports_vision({"provider": "deepseek", "model": "deepseek-v4-pro"}))
+    assert(provider.supports_vision({"provider": "openai", "model": "gpt-6.1-sol"}))
     -- Z.ai: glm-5.3-flash por defecto (multimodal nativo); glm-5.3 y los glm-4.x sin sufijo v no ven imágenes
     assert_eq(provider.PRESETS["glm"]["model"], "glm-5.3-flash")
     assert_eq(provider.PRESETS["glm-coding"]["model"], "glm-5.3-flash")

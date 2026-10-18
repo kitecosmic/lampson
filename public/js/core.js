@@ -7,6 +7,9 @@ const log = $('#log');
 let session = new URLSearchParams(location.search).get('session') || localStorage.getItem('lampson.session') || '';
 let busy = false; let cfg = {};
 
+// la carpeta del usuario se muestra como ~ (igual que en el inicio): el nombre de usuario no aparece al compartir
+// pantalla o grabar un video, y la ruta sigue siendo inequívoca
+function shortPath(p) { return String(p || '').replace(/^[a-z]:[\\/]users[\\/][^\\/]+/i, '~').replace(/^\/(home|Users)\/[^/]+/, '~'); }
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function md(src) { // Markdown mínimo: code fences, inline code, bold, headers, listas, párrafos
   const blocks = []; src = String(src ?? '').replace(/```(\w*)\n([\s\S]*?)```/g, (m, l, c) => { blocks.push('<pre><code class="hljs">' + (typeof hlCode === 'function' ? hlCode(c, l) : esc(c)) + '</code></pre>'); return '\uE000' + (blocks.length - 1) + '\uE001'; }); // marcador = índice entre U+E000/U+E001, NUNCA dígitos a secas (se perdieron dos veces al reescribir el archivo y todo número salía undefined)

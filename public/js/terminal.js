@@ -71,7 +71,13 @@ function newTerm(id, show) {
   terms.push(t);
   if (show !== false) termAt = terms.length - 1;
   terms.forEach((x, k) => { x.el.style.display = k === termAt ? '' : 'none'; });
-  term.open(el); fitTerm(t);
+  term.open(el);
+  // WebGL dibuja él mismo las líneas (─│╭) y los bloques (▀▄█): con el renderer DOM salían de otra fuente, más
+  // angosta que la celda, y quedaban punteadas o con rayas (el logo de Claude Code). Sin WebGL, sigue el DOM
+  if (window.WebglAddon) try {
+    const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl);
+  } catch (e) {}
+  fitTerm(t);
   // URLs clickeables (npm run dev imprime http://localhost:3000): link provider mínimo con la API nativa
   // de xterm v5 — el addon web-links no está vendorizado y no hace falta para http/https
   const TERM_URL_RE = /https?:\/\/[^\s"'`<>()\[\]{}]*[^\s"'`<>()\[\]{}.,;:!?]/g;
@@ -96,7 +102,7 @@ function newTerm(id, show) {
     const s = String(e.data);
     if (s[0] === 'o') { term.write(s.slice(1)); return; }
     let m; try { m = JSON.parse(s.slice(1)); } catch { return; }
-    if (m.type === 'hello') { t.id = m.id || t.id; t.meta = `${m.shell} · pid ${m.pid} · ${m.cwd || 'workspace'}`; paintTabs(); }
+    if (m.type === 'hello') { t.id = m.id || t.id; t.meta = `${m.shell} · pid ${m.pid} · ${shortPath(m.cwd) || 'workspace'}`; paintTabs(); }
     if (m.type === 'exit') {
       t.live = false; paintTabs();
       if (m.error === 'too_many') { term.write(`\r\n\x1b[2m[ya hay ${MAX_TERMS} terminales abiertas — cerrá una para abrir otra]\x1b[0m\r\n`); return; }

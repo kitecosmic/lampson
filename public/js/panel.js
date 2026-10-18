@@ -27,7 +27,8 @@ const Panel = (() => {
   }
   const box = () => ensure().querySelector('.panel');
   function head(spec) {
-    const acts = (spec.headActions || []).map((a, i) => `<button class="pghost" data-ha="${i}" title="${esc(a.title || '')}">${esc(a.label)}</button>`).join('');
+    // {href} = un enlace de texto (a otra pantalla o a la guía), no un botón cuadrado
+    const acts = (spec.headActions || []).map((a, i) => a.href ? `<a class="plink" href="${esc(a.href)}"${a.external ? ' target="_blank" rel="noopener"' : ''} title="${esc(a.title || '')}">${esc(a.label)}</a>` : `<button class="pghost" data-ha="${i}" title="${esc(a.title || '')}">${esc(a.label)}</button>`).join('');
     return `<div class="phead"><span class="eyebrow">${esc(spec.eyebrow || '')}</span><h3>${esc(spec.title || '')}</h3><span class="sub">${esc(spec.sub || '')}</span><span class="spacer"></span>${acts}${spec.noClose ? '' : `<button class="pghost" data-close title="cerrar (Esc)">${ICON_X}</button>`}</div>`;
   }
   function open(spec) {

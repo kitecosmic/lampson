@@ -124,7 +124,7 @@ the `provider · model` pill in the web header (one key per provider is kept, so
 (≤ 1568 px) and sent inline. In the terminal, `/paste` attaches the image on the clipboard (copy a
 screenshot first) and `/image <path>` a file; they go with your next message (`📎2 ❯`). If the current model does not declare image input, you are warned before
 sending and the model receives a text note instead of a 400. The table is `supports_vision` in
-`lib/provider.syn` (anthropic, minimax, gpt-4o/4.1/5, o-series, groq llama-4, glm-5.3-flash and the
+`lib/provider.syn` (anthropic, minimax, gpt-4o/4.1/5/6, o-series, deepseek flash, groq llama-4, grok-4, glm-5.3-flash and the
 GLM `*v` models, and models named `*vision*`/`*vl*` on openrouter/ollama/kimi/grok); set `"vision": true` in `config.json` to override
 it for a model Lampson does not know — or `false` to force the text note.
 

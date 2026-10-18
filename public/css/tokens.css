@@ -18,7 +18,10 @@
   --paper:#131412; --paper-2:#1d1e1b; --paper-3:#262723;
   --surface:#1a1b18; --surface-2:#21221f;
   --ink:#e9e8df; --ink-2:#a8a99d; --ink-3:#8e9083;
-  --rule:#30312b; --rule-2:#4a4b43;
+  --rule:#34352f; --rule-2:#4a4b43;
+  /* elevación: en oscuro la sombra casi no se ve, así que la tarjeta se separa con un filo de luz arriba */
+  --lift:inset 0 1px 0 rgba(255,255,255,.035), 0 1px 2px rgba(0,0,0,.45);
+  --lift-hover:inset 0 1px 0 rgba(255,255,255,.05), 0 6px 18px rgba(0,0,0,.5);
   --accent:#8fb4dc; --accent-bg:#1b2836;
   --rubric:#d98670; --str:#a8bd84; --amber:#d9b26f; --ok:#8fc28f;
   --sel:#33465b; --term-blue:#4f86d1;
@@ -31,7 +34,10 @@
   --paper:#f6f5f0; --paper-2:#ecebe4; --paper-3:#e3e2da;
   --surface:#ffffff; --surface-2:#faf9f5;
   --ink:#1a1b18; --ink-2:#4e5049; --ink-3:#63655b;
-  --rule:#dfddd3; --rule-2:#c4c2b5;
+  --rule:#d8d5c9; --rule-2:#c4c2b5;
+  /* sombras cortas y teñidas del papel (no gris puro): apoyan la tarjeta, no la hacen flotar */
+  --lift:0 1px 1px rgba(60,54,36,.05), 0 1px 3px rgba(60,54,36,.06);
+  --lift-hover:0 1px 2px rgba(60,54,36,.06), 0 6px 16px rgba(60,54,36,.09);
   --accent:#21578c; --accent-bg:#e9eef4;
   --rubric:#99372a; --str:#4a6b3f; --amber:#8a6a1f; --ok:#3d7a3d;
   --sel:#cfe0f0; --term-blue:#21578c;

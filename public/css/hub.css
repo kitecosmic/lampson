@@ -3,8 +3,8 @@ body.hub { grid-template-columns:minmax(0, 1fr); grid-template-areas:"top" "main
 body.hub main { grid-template-rows:1fr; }
 body.hub #stage { display:flex; align-items:flex-start; padding:44px 40px 32px; }
 .wsgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px; }
-.card.ws { display:block; text-decoration:none; color:inherit; cursor:pointer; transition:border-color .12s; }
-.card.ws:hover { border-color:var(--ink-3); }
+.card.ws { display:block; text-decoration:none; color:inherit; cursor:pointer; transition:border-color .12s, box-shadow .12s; }
+.card.ws:hover { border-color:var(--rule-2); box-shadow:var(--lift-hover); }
 /* estado a un vistazo: verde activo · gris apagado (apagado es normal, no un error) · ámbar mientras arranca */
 .card.ws h3 { display:flex; align-items:center; gap:8px; font:400 12px/1 var(--mono); }
 .card.ws.on h3 { color:var(--ok); }
@@ -59,9 +59,9 @@ body.hub #stage { display:flex; align-items:flex-start; padding:44px 40px 32px; 
 /* productos en el inicio: un mosaico de alto fijo por producto (no crece con los datos); .invite = todavía sin uso */
 .hubhome .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:16px; margin:30px 0 0; }
 .hubhome .tiles:empty { display:none; }
-.hubhome .tile { display:flex; flex-direction:column; padding:16px 18px 14px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); color:var(--ink); text-decoration:none; min-width:0; transition:border-color .12s; }
-.hubhome .tile:hover { border-color:var(--ink-3); }
-.hubhome .tile.invite { background:transparent; border-style:dashed; border-color:var(--rule-2); }
+.hubhome .tile { display:flex; flex-direction:column; padding:16px 18px 14px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); box-shadow:var(--lift); color:var(--ink); text-decoration:none; min-width:0; transition:border-color .12s, box-shadow .12s; }
+.hubhome .tile:hover { border-color:var(--rule-2); box-shadow:var(--lift-hover); }
+.hubhome .tile.invite { background:transparent; border-style:dashed; border-color:var(--rule-2); box-shadow:none; }
 .hubhome .tile .th { font:400 12.5px/1 var(--mono); color:var(--ink-2); margin:0 0 12px; }
 .hubhome .tile .th .ic { color:var(--accent); margin-right:6px; }
 .hubhome .tile .tm1 { font:600 16px/1.3 var(--serif); margin:0 0 4px; }

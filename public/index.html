@@ -22,13 +22,14 @@
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
+<script src="/vendor/xterm-addon-webgl.js"></script>
 <script src="/vendor/highlight.min.js"></script>
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
 <header>
   <div class="hrow">
-    <span class="brand">lampson<span class="proj" id="proj">…</span></span>
+    <span class="brand"><a class="home" id="home">lampson</a><span class="proj" id="proj">…</span></span>
     <span class="spacer"></span>
     <button class="hbtn upd" id="update" style="display:none"></button>
     <button class="hbtn" id="term" title="terminal real (shell en el workspace): lo abre, lo trae de vuelta si está minimizado y lo esconde si está a la vista — verde = shell abierta">&gt;_ terminal</button>
@@ -49,7 +50,7 @@
 </header>
 <aside>
   <button class="fold" title="plegar este panel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
-  <div class="rail"><button title="desplegar el panel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button></div>
+  <div class="rail"><button title="sesiones, procesos, agentes, memoria, MCP, tareas y más"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button></div>
   <section class="sec open" data-sec="sessions">
     <h2 title="las últimas conversaciones de este workspace; «ver todas» abre el buscador"><span class="caret">▾</span>Sesiones<span class="cnt" id="sessCount"></span><button class="h2act" id="sessAll" title="ver todas y buscar">⌕</button></h2>
     <div class="body" id="sessions"></div>

@@ -186,3 +186,12 @@
 .panel .dform .trow .hbtn.pwr.ask { text-transform:none; letter-spacing:0; }
 .panel .dform .trow .hbtn.pwr.ask .yes { color:var(--rubric); cursor:pointer; text-decoration:underline; }
 .panel .dform .trow .hbtn.pwr.ask .no { cursor:pointer; }
+/* enlaces de texto en la cabecera de un panel (p.ej. «todos los plugins» → la pantalla del hub) */
+.panel .plink { font:400 12px/1 var(--mono); color:var(--accent); text-decoration:none; margin-right:12px; white-space:nowrap; }
+.panel .plink:hover { text-decoration:underline; text-underline-offset:.2em; }
+/* ayuda de plugins: el pedido listo para el chat, y los enlaces a la guía y al hub */
+.panel .phelp .pprompt { max-width:78ch; margin:0 0 16px; padding:12px 14px; background:var(--paper-2); border-radius:var(--r); }
+.panel .phelp .pprompt p { margin:4px 0 10px; color:var(--ink); font-style:italic; }
+.panel .phelp .pacts { display:flex; align-items:center; gap:8px; }
+.panel .phelp .plinks a { color:var(--accent); cursor:pointer; text-decoration:none; }
+.panel .phelp .plinks a:hover { text-decoration:underline; text-underline-offset:.2em; }

@@ -6,6 +6,7 @@ body.home .homegrid { max-width:1180px; width:100%; margin:0 auto; }
 .vhead h1 { font:600 1.7rem/1.15 var(--serif); letter-spacing:-.02em; margin:0 0 6px; }
 .vlead { margin:0; max-width:760px; color:var(--ink-2); }
 .vfoot { margin:26px 0 0; color:var(--ink-3); font-size:13.5px; max-width:760px; }
+.vfoot a { color:var(--accent); text-underline-offset:.2em; }
 .vempty { border:1px dashed var(--rule-2); border-radius:var(--r-lg); padding:20px 22px; color:var(--ink-2); max-width:760px; }
 .vempty p { margin:0 0 8px; }
 .vpick { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
@@ -37,7 +38,7 @@ body.home .homegrid { max-width:1180px; width:100%; margin:0 auto; }
 
 /* plugins: escaparate */
 .pgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
-.pcard { display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); padding:16px 18px 14px; min-width:0; }
+.pcard { display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); box-shadow:var(--lift); padding:16px 18px 14px; min-width:0; }
 .pcard.used { border-color:var(--rule-2); }
 .pcard .pn { font:600 17px/1.2 var(--serif); margin:0 0 8px; }
 .ptags { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
@@ -64,7 +65,7 @@ body.home .homegrid { max-width:1180px; width:100%; margin:0 auto; }
 
 /* /equipos: una tarjeta por equipo (public/teams-home.html) */
 .tgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(360px, 1fr)); gap:16px; }
-.tcard { display:flex; flex-direction:column; gap:12px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); padding:18px 20px 16px; min-width:0; }
+.tcard { display:flex; flex-direction:column; gap:12px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-lg); box-shadow:var(--lift); padding:18px 20px 16px; min-width:0; }
 .thead { display:flex; align-items:baseline; gap:12px; }
 .thead h2 { font:600 20px/1.2 var(--serif); margin:0; }
 .tproj { margin-left:auto; display:flex; align-items:center; gap:7px; font:400 12.5px/1 var(--mono); color:var(--ink-2); text-decoration:none; white-space:nowrap; }
@@ -90,12 +91,28 @@ body.home .homegrid { max-width:1180px; width:100%; margin:0 auto; }
 .tdone > summary:hover { color:var(--ink); }
 .tdone[open] { display:flex; flex-direction:column; gap:8px; }
 .tdone .oline { color:var(--ink-2); }
+/* las tarjetas de una misma fila comparten sus filas (subgrid): título, para qué, roles, en curso, acciones y terminados
+   quedan a la misma altura aunque una tenga más roles o más texto. Las seis filas existen siempre (vacías si no hay) */
+@supports (grid-template-rows:subgrid) {
+  .tcard { display:grid; grid-row:span 6; grid-template-rows:subgrid; row-gap:12px; }
+  .tcard > .roles, .tcard > .tacts, .tcard > .tdone { align-self:start; }
+}
+.tcard > .tdesc:empty, .tcard > div.tdone { margin:0; }
+/* .clip: texto cortado a dos líneas (public/js/teams-home.js → clip). Si no entra, «ver más» sobre el final y, al pasar
+   el mouse o con el foco, el texto completo se despliega en el mismo lugar, encima de lo que sigue */
+.clip { position:relative; display:block; --clip-bg:var(--surface); }
+.tnow .clip { --clip-bg:var(--paper-2); }
+.clip .ct { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.clip .cmore, .clip .cfull { display:none; }
+.clip.cut .cmore { display:block; position:absolute; right:0; bottom:0; padding-left:32px; font:400 12px/1.6 var(--mono); color:var(--accent); background:linear-gradient(to right, transparent, var(--clip-bg) 28px); }
+.clip.cut:hover .cfull, .clip.cut:focus-visible .cfull, .oline:focus-visible .clip.cut .cfull { display:block; position:absolute; z-index:20; left:-11px; right:-11px; top:-9px; max-height:260px; overflow:auto; padding:8px 10px; color:var(--ink); background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--r); box-shadow:var(--lift-hover); }
+.clip.cut:focus-visible { outline:none; }
 .tinvite { max-width:620px; background:var(--surface); border:1px dashed var(--rule-2); border-radius:var(--r-lg); padding:22px 24px; }
 .tinvite h2 { font:600 20px/1.2 var(--serif); margin:0 0 8px; }
 .tinvite p { margin:0 0 16px; color:var(--ink-2); }
 .solohead { font:600 16px/1.2 var(--serif); margin:30px 0 12px; }
 .solo { display:flex; flex-direction:column; gap:8px; max-width:900px; }
-.srow { display:flex; gap:14px; align-items:baseline; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r); padding:10px 14px; }
+.srow { display:flex; gap:14px; align-items:baseline; background:var(--surface); border:1px solid var(--rule); border-radius:var(--r); box-shadow:var(--lift); padding:10px 14px; }
 .swho { font:600 13px/1.3 var(--mono); white-space:nowrap; }
 .swho span { font-weight:400; color:var(--ink-3); }
 
