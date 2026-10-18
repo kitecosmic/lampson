@@ -63,7 +63,7 @@ check(after instanceof LampsonError, 'después de close(), ask() falla con Lamps
 console.log('SDK modo servidor: API /v1 de un web.syn real');
 const web = spawn('synsema', ['serve', 'web.syn', '--port', '47996', '--bind', '127.0.0.1'], { stdio: 'ignore' }); procs.push(web);
 check(await waitUp('http://127.0.0.1:47996/w/test/api/health'), 'web.syn arriba en :47996');
-const made = spawnSync('synsema', ['run', 'run.syn'], { env: Object.assign({}, process.env, { LAMPSON_KEY_CMD: 'add', LAMPSON_KEY_AGENTS: 'rt-sdk', LAMPSON_KEY_NAME: 'sdk-test' }), encoding: 'utf8' });
+const made = spawnSync('synsema', ['run', 'run.syn'], { env: Object.assign({}, process.env, { LAMPSON_KEY_CMD: 'add', LAMPSON_KEY_AGENTS: 'rt-sdk', LAMPSON_KEY_NAME: 'sdk-test', LAMPSON_KEY_CALLBACKS: 'http://127.0.0.1:9/' }), encoding: 'utf8' });
 const key = (made.stdout.match(/lk_[A-Za-z0-9_-]+/) || [])[0];
 const keyId = (made.stdout.match(/\((k[A-Za-z0-9_-]+)\)/) || [])[1];
 check(!!key && !!keyId, 'lampson key add → key ' + (keyId || '(ninguna)'));

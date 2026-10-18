@@ -29,6 +29,7 @@ use "./agents.syn" as agents
 use "./approvals.syn" as approvals
 use "./permission.syn" as permission
 use "./plugins.syn" as plugins
+use "./apikeys.syn" as apikeys
 
 export let DEFAULT_BUFFER be {"quiet_s": 3, "max_s": 15}
 export let JOBS_DIR be ".lampson/api/jobs"
@@ -168,12 +169,20 @@ export task save_job(j)
     require file(".lampson/*")
     write_file(job_path(j["job"]), json_encode(j))
 
-task post_callback(url, payload)
+-- firma: con el secreto de la key que pidió la callback (apikeys, desde 2026-10-18) y si no tiene, el global de
+-- antes. X-Lampson-Key dice cuál: la app verifica con el secreto de esa key (Lampson.verifySignature del SDK)
+task post_callback(url, payload, key_id)
     require net
     require env("LAMPSON_*")
+    require file.read(".lampson")
+    require file.read(".lampson/*")
     let body be json_encode(payload)
     let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
-    let sec be env("LAMPSON_WEBHOOK_SECRET", "")
+    let sec be when key_id != "" then apikeys.signing_secret(key_id) otherwise ""
+    when sec == ""
+        set sec to env("LAMPSON_WEBHOOK_SECRET", "")
+    when key_id != ""
+        set headers["X-Lampson-Key"] to key_id
     when sec != ""
         set headers["X-Lampson-Signature"] to "sha256=" + decode(hmac(body, sec), "hex")
     -- dos intentos: un receptor que parpadea no pierde la respuesta
@@ -319,7 +328,8 @@ task run_batch(k, spec, items)
     each u in urls
         let mine be where(all, (it) => it["callback"] == u)
         let payload be {"job": mine[0]["id"], "jobs": apply((it) => it["id"], mine), "batch": ids, "status": when starts_with(result["stopped"], "error") then "error" otherwise "done", "agent": result["agent"], "thread": result["thread"], "session": result["session"], "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"], "meta": mine[0]["meta"]}
-        let ok be post_callback(u, payload)
+        let j0 be job(mine[0]["id"])
+        let ok be post_callback(u, payload, when j0 != nothing and contains(j0, "key") and j0["key"] != nothing then text(j0["key"]) otherwise "")
         each it in mine
             when it["job"]
                 let j be job(it["id"])

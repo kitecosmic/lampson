@@ -3,20 +3,24 @@
 --   synsema serve tests/mock_callback.syn        (puerto 8767)
 --
 --   POST /cb     guarda el body y la firma (X-Lampson-Signature) que llegaron
---   GET  /last   {count, body, signature} del último callback
+--   GET  /last   {count, body, raw, signature, key} del último callback (raw = el cuerpo exacto, para verificar la firma)
 require serve(8767)
 require time
 
 serve on 8767
     route "POST /cb"
         let sig be ""
+        let kid be ""
         let h be headers of request
         each k in keys(h)
             when lower(k) == "x-lampson-signature"
                 set sig to text(h[k])
+            when lower(k) == "x-lampson-key"
+                set kid to text(h[k])
+        let raw be read_body()
         let n be state_get("count")
         state_set("count", (when n == nothing then 0 otherwise n) + 1)
-        state_set("last", {"body": json of request, "signature": sig})
+        state_set("last", {"body": json_decode(raw), "raw": raw, "signature": sig, "key": kid})
         give {"ok": true}
 
     -- la API de Chatwoot que usa plugins/chatwoot (send): guarda el mensaje y el token que llegaron
@@ -70,4 +74,4 @@ serve on 8767
     route "GET /last"
         let n be state_get("count")
         let l be state_get("last")
-        give {"count": when n == nothing then 0 otherwise n, "body": when l == nothing then nothing otherwise l["body"], "signature": when l == nothing then "" otherwise l["signature"]}
+        give {"count": when n == nothing then 0 otherwise n, "body": when l == nothing then nothing otherwise l["body"], "raw": when l == nothing then "" otherwise l["raw"], "signature": when l == nothing then "" otherwise l["signature"], "key": when l == nothing then "" otherwise l["key"]}
