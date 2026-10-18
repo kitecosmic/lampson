@@ -304,6 +304,38 @@ export task catalog_of(spec)
         set extra to extra + [teams.SEND_SPEC, teams.BOARD_SPEC]
     give cat + extra
 
+-- las tools que el agente lista y no va a tener (plugin apagado o inexistente, MCP caído, nombre mal escrito) →
+-- un aviso por tool. Sin esto el agente arranca sin su herramienta y nadie se entera (2026-10-18, prueba del SDK)
+export task missing(spec)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require file.read("plugins")
+    require file.read("plugins/*")
+    require file.read("agents")
+    require file.read("agents/*")
+    require env("LAMPSON_*")
+    require env("OS")
+    when spec == nothing or spec["builtin"]
+        give []
+    let have be keys(registry_of(spec))
+    let out be []
+    each t in spec["tools"]
+        when length(where(have, (h) => allowed([t], h))) == 0
+            let why be "not a known tool"
+            when starts_with(t, plugins.PREFIX)
+                let rest be slice(t, length(plugins.PREFIX), length(t))
+                let pn be split(rest, "_")[0]
+                let found be where(plugins.all(), (l) => l["name"] == pn)
+                set why to when length(found) == 0 then "there is no plugin '" + pn + "'" otherwise (when found[0]["error"] != nothing then "plugin '" + pn + "' is broken: " + text(found[0]["error"]) otherwise (when not found[0]["enabled"] then "plugin '" + pn + "' is off (turn it on: lampson plugin on " + pn + ")" otherwise "plugin '" + pn + "' has no such tool"))
+            otherwise when starts_with(t, "mcp_")
+                set why to "no MCP server provides it (is the server configured and running?)"
+            set out to append(out, "agent '" + spec["id"] + "': tool '" + t + "' is not available: " + why)
+    give out
+
 -- ---------- boot: cfg + system + opts de un agente ----------
 
 task pick(a, b)

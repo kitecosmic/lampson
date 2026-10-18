@@ -322,7 +322,7 @@ export task ensure(path)
             let parts be where(split(replace(text(path), "\\", "/"), "/"), (x) => x != "")
             set w to {"slug": slug, "name": parts[length(parts) - 1], "path": text(path), "port": port, "policy": "auto", "created": now(), "last_used": now()}
         put(w)
-        when regen_hub() and hub_alive()
+        when regen_hub() and hub_ours()
             restart_hub_later()
     prepare(w)
     give w
@@ -348,7 +348,7 @@ export task remove(slug)
             set keep[k] to doc["workspaces"][k]
     set doc["workspaces"] to keep
     save_reg(doc)
-    when regen_hub() and hub_alive()
+    when regen_hub() and hub_ours()
         restart_hub_later()
     give "workspace '" + slug + "' quitado del registro (la carpeta " + dir_of(slug) + " y el proyecto quedan en disco)"
 
@@ -513,7 +513,7 @@ export task stop_ws(w)
 
 -- Lampson entero (lampson --hub stop, ⚙ → Apagar o reiniciar): workspaces y hub en una sola pasada, y el edge
 export task stop_all()
-    let ports be [HUB_PORT]
+    let ports be when hub_alive() and not hub_ours() then [] otherwise [HUB_PORT]
     each w in all()
         set ports to append(ports, w["port"])
     stop_edge()
@@ -526,6 +526,30 @@ export task hub_alive()
     try
         let r be http_get("http://127.0.0.1:" + text(HUB_PORT) + "/api/hub", {"timeout": 2})
         give r["ok"]
+    recover err
+        give false
+
+-- ¿el hub que contesta en HUB_PORT es el de ESTA instalación? Otro LAMPSON_HOME en la misma máquina (una app que
+-- embebe Lampson con el SDK, un home de pruebas) veía el hub del usuario como propio y lo reiniciaba: le mataba el
+-- 8080 y levantaba el suyo con sus workspaces (2026-10-18). Reiniciar o parar el hub es solo para el propio.
+task norm_home(p)
+    let s be lower(replace(text(p), "\\", "/"))
+    while length(s) > 1 and ends_with(s, "/")
+        set s to slice(s, 0, length(s) - 1)
+    give s
+
+export task hub_ours()
+    require net("127.0.0.1")
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require env("OS")
+    try
+        let r be http_get("http://127.0.0.1:" + text(HUB_PORT) + "/api/hub", {"timeout": 2})
+        when not r["ok"]
+            give false
+        let doc be json_decode(r["body"])
+        give type_of(doc) == "map" and contains(doc, "home") and norm_home(doc["home"]) == norm_home(home())
     recover err
         give false
 
@@ -581,6 +605,8 @@ export task stop_hub()
     require time
     require env("LAMPSON_*")
     require env("OS")
+    when hub_alive() and not hub_ours()
+        give false
     give kill_ports([HUB_PORT]) > 0
 
 -- ---------- dominio propio (opcional): edge HTTPS en :443 ----------

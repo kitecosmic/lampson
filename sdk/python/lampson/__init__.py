@@ -11,6 +11,8 @@ Two ways to reach Lampson, the same methods for both:
           starts Lampson ITSELF as a child process on this machine (`lampson run --stdio`): no hub, no port, no key.
           Needs the `lampson` command (npm i -g lampson, or the installer). This client sends one request at a time
           (use one Lampson per thread for parallel conversations; the process itself runs conversations in parallel).
+          `home` and `workspace` are relative to the current directory. An agent that lists a tool it will not have
+          (typo, plugin off) is reported through on_warning (default: a line on stderr) and in lampson.warnings.
 
     lampson.ask(agent="shop", thread="customer-42", text="do you have whole-wheat bread?")
       -> {"agent", "thread", "session", "text", "steps", "usage", "stopped"}   (raises LampsonError if the turn failed)
@@ -28,6 +30,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -143,11 +146,14 @@ def _lampson_command():
 
 
 class _Local:
-    def __init__(self, workspace=None, home=None, env=None, command=None, spawn=None):
+    def __init__(self, workspace=None, home=None, env=None, command=None, spawn=None, on_warning=None):
         child_env = dict(os.environ)
         child_env.update(env or {})
+        # relative to the app, not to the workspace (the launcher runs with cwd = workspace)
         if home:
-            child_env["LAMPSON_HOME"] = home
+            child_env["LAMPSON_HOME"] = os.path.abspath(home)
+        self.warnings = []
+        self.on_warning = on_warning
         if spawn:
             # advanced / tests: an exact command that speaks the --stdio protocol
             argv = [spawn["command"]] + list(spawn.get("args", []))
@@ -169,7 +175,16 @@ class _Local:
             m = self._read()
             if m.get("kind") == "ready":
                 self.info = m.get("data")
+                for w in (self.info or {}).get("warnings") or []:
+                    self._warn(w)
                 break
+
+    def _warn(self, w):
+        if w in self.warnings:
+            return   # ready lists them all; each ask repeats its agent's
+        self.warnings.append(w)
+        if self.on_warning:
+            self.on_warning(w)
 
     def _drain_stderr(self):
         for line in self.proc.stderr:
@@ -203,8 +218,11 @@ class _Local:
                 m = self._read()
                 if m.get("id") != rid:
                     continue
+                if m.get("kind") == "warning":
+                    self._warn(m.get("data"))
                 yield m
-                if m.get("kind") in ("done", "agents", "pong", "error"):
+                # an "error" inside a turn (it carries agent) is one more step: "done" still follows
+                if m.get("kind") in ("done", "agents", "pong") or (m.get("kind") == "error" and "agent" not in m):
                     return
 
     def _final(self, req):
@@ -234,15 +252,21 @@ class _Local:
                 self.proc.stdin.close()
                 self.proc.wait(timeout=5)
             except Exception:
-                self.proc.kill()
+                # the child is a launcher (shell → synsema): kill the whole tree, or synsema outlives it
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"], capture_output=True)
+                else:
+                    self.proc.kill()
 
 
 class Lampson:
     """Server mode: Lampson(url=..., key=...).  Local mode: Lampson(local={"workspace": ...})."""
 
-    def __init__(self, url=None, key=None, local=None, timeout=None):
+    def __init__(self, url=None, key=None, local=None, timeout=None, on_warning=False):
         if local is not None:
-            self._t = _Local(**local)
+            if on_warning is False:
+                on_warning = lambda w: print("lampson: " + w, file=sys.stderr)
+            self._t = _Local(**dict(local, on_warning=on_warning))
             self.mode = "local"
         else:
             self._t = _Http(url, key, timeout)
@@ -263,6 +287,11 @@ class Lampson:
         if "callback" in env:
             raise TypeError("stream does not take a callback (use ask)")
         return self._t.stream(env)
+
+    @property
+    def warnings(self):
+        """Local mode: tools some agent lists but will not have (plugin off, typo), one message each."""
+        return getattr(self._t, "warnings", [])
 
     def agents(self):
         """The agents this key (server) or this workspace (local) can use."""

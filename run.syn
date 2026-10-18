@@ -203,6 +203,27 @@ when env("LAMPSON_TEAM_CMD", "") != ""
         print("  ✗ " + e)
     exit(0)
 
+-- `lampson plugin list|on|off [nombre]`: encender un plugin sin interfaz (una VPS por SSH, un script)
+let pl_cmd be env("LAMPSON_PLUGIN_CMD", "")
+when pl_cmd != ""
+    let pl_name be lower(env("LAMPSON_PLUGIN_NAME", ""))
+    when pl_cmd == "list"
+        let ls be plugins.all()
+        when length(ls) == 0
+            print("no hay plugins (proyecto: workspace/.lampson/plugins/<nombre>/plugin.json · globales: plugins/<nombre>/)")
+        each l in ls
+            print("  " + (when l["enabled"] then "● " otherwise "○ ") + l["name"] + "  " + l["scope"] + "  " + (when l["error"] != nothing then "roto: " + text(l["error"]) otherwise join(apply((t) => t["name"], l["tools"]), ", ")))
+        exit(0)
+    when (pl_cmd == "on" or pl_cmd == "off") and pl_name != ""
+        try
+            print(plugins.set_enabled(pl_name, pl_cmd == "on"))
+        recover err
+            print("lampson plugin: " + text(err))
+            exit(2)
+        exit(0)
+    print("uso: lampson plugin list · plugin on|off <nombre>")
+    exit(2)
+
 -- `lampson channel list|on|off|setup [canal]`: los canales (plugins con "channel", lib/channels.syn)
 let ch_cmd be env("LAMPSON_CHANNEL_CMD", "")
 when ch_cmd != ""
@@ -269,7 +290,8 @@ task lampson_subagent(spec_json)
 --   {"id": "r2", "op": "agents"}  ·  {"id": "r3", "op": "ping"}
 -- y por stdout, una línea JSON por evento con ese id: los mismos que `--json` (session, assistant, tool_call…) y
 -- {"id", "kind": "done", "data": {agent, thread, session, text, steps, usage, stopped}} al terminar cada ask. Al
--- arrancar, {"kind": "ready", "data": {"agents": […], "protocol": 2}}.
+-- arrancar, {"kind": "ready", "data": {"agents": […], "protocol": 2, "warnings": […]}}; antes de un ask cuyo agente lista
+-- tools que no tiene (plugin apagado…), {"id", "kind": "warning", "data": "<por qué>"}.
 -- CONCURRENCIA (protocolo 2): cada ask corre en su propio agente de Synsema; conversaciones distintas van en
 -- paralelo, dos asks de la MISMA conversación (agente + thread) esperan en fila. Un agente que imprime sale con
 -- prefijo "[Agente_N]" (rompería el JSON): por eso los trabajos publican en el bus y SOLO el hilo principal escribe.
@@ -350,7 +372,7 @@ task stdio_ask(req, rid)
     -- la fila es por conversación: (agente, thread), o la sesión; sin ninguno, el pedido solo (va en paralelo)
     let key be when th != "" then agent_id + "\n" + th otherwise (when ss != "" then agent_id + "\nsession:" + ss otherwise "req:" + rid)
     let sobre be {"to": agent_id, "thread": th, "session": ss, "from": {"id": "", "name": "", "kind": "human"}, "text": msg, "images": when contains(req, "images") and type_of(req["images"]) == "list" then req["images"] otherwise [], "channel": "sdk", "meta": when contains(req, "meta") and type_of(req["meta"]) == "map" then req["meta"] otherwise {}}
-    give {"ok": true, "key": key, "job": {"id": rid, "to": agent_id, "thread": th, "mode": mode, "key": key, "sobre": sobre}}
+    give {"ok": true, "key": key, "warnings": runtime.missing(spec), "job": {"id": rid, "to": agent_id, "thread": th, "mode": mode, "key": key, "sobre": sobre}}
 
 when env("LAMPSON_RUN_STDIO", "") == "1"
     share {"id": text(now())} as "lampson:run"
@@ -365,7 +387,11 @@ when env("LAMPSON_RUN_STDIO", "") == "1"
         mcp.start_all(8)
     let sub be bus_subscribe(["stdio.line", "stdio.out", "stdio.done", "stdio.eof"], {"max_queue": 100000, "on_full": "error"})
     spawn StdioReader
-    stdio_out({"kind": "ready", "data": {"agents": all_names, "protocol": 2}})
+    -- tools que algún agente lista y no va a tener (plugin apagado, nombre mal escrito): el SDK las muestra al arrancar
+    let warns be []
+    each n in all_names
+        set warns to warns + runtime.missing(runtime.get(n))
+    stdio_out({"kind": "ready", "data": {"agents": all_names, "protocol": 2, "warnings": warns}})
     let busy be {}
     let waiting be {}
     let running be 0
@@ -412,6 +438,9 @@ when env("LAMPSON_RUN_STDIO", "") == "1"
                         stdio_out({"id": rid, "kind": "agents", "data": apply((n) => {"id": n, "description": runtime.get(n)["description"]}, runtime.names())})
                     otherwise when op == "ask"
                         let a be stdio_ask(req, rid)
+                        when a["ok"]
+                            each w in a["warnings"]
+                                stdio_out({"id": rid, "kind": "warning", "data": w, "tag": "", "agent": a["job"]["to"], "thread": a["job"]["thread"]})
                         when not a["ok"]
                             stdio_out({"id": rid, "kind": "done", "data": a["done"], "tag": "", "agent": a["done"]["agent"], "thread": a["done"]["thread"]})
                         otherwise when contains(busy, a["key"]) and busy[a["key"]]
@@ -466,6 +495,13 @@ task emit_json(kind, data, tag)
     when kind != "busy" and kind != "idle"
         print(json_encode({"kind": kind, "data": data, "tag": tag, "agent": agent_id, "thread": thread}))
         flush()
+
+-- en texto el aviso va a stderr (eprint, Synsema 0.6.42+): stdout queda solo para la respuesta
+each w in runtime.missing(spec)
+    when json_out
+        print(json_encode({"kind": "warning", "data": w, "tag": "", "agent": agent_id, "thread": thread}))
+    otherwise
+        eprint("lampson run: warning: " + w)
 
 task on_start(info)
     set thread to info["thread"]

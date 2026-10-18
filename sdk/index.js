@@ -10,13 +10,16 @@
 //   LOCAL   new Lampson({ local: { workspace: "./my-project" } })
 //           starts Lampson ITSELF as a child process on this machine (`lampson run --stdio`): no hub, no port, no
 //           key. Lampson inside your program, like SQLite. Different conversations run in parallel; two messages of
-//           the same conversation (agent + thread) are answered in order.
+//           the same conversation (agent + thread) are answered in order. `home` and `workspace` resolve against
+//           process.cwd().
+//           An agent that lists a tool it will not have (typo, plugin off) is reported through onWarning
+//           (default console.warn) and in lampson.warnings.
 //
 //   await lampson.ask({ agent: "shop", thread: "customer-42", text: "do you have whole-wheat bread?" })
 //     → { agent, thread, session, text, steps, usage, stopped }      (throws LampsonError if the turn failed)
 //   for await (const ev of lampson.stream({ ... })) { ... }          the agent's steps live, last one kind "done"
 //   await lampson.agents()                                           [{ id, description }]
-//   await lampson.close()                                            local mode: stops the child process
+//   await lampson.close()                                            local mode: stops the child process (and its own)
 //   Lampson.verifySignature(rawBody, req.headers["x-lampson-signature"], secret)   for callbacks / webhooks
 //
 // Contracts behind it: spec/engine.md (envelope, events), lib/api.syn (HTTP), run.syn (--stdio).
@@ -112,8 +115,15 @@ class HttpTransport {
 
 // ---------- local mode: `lampson run --stdio` as a child process ----------
 
+function killTree(child) {
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    else child.kill('SIGKILL');
+  } catch {}
+}
+
 class LocalTransport {
-  constructor({ workspace, home, env, spawn: spawnSpec }) {
+  constructor({ workspace, home, env, spawn: spawnSpec }, onWarning) {
     if (!workspace && !spawnSpec) throw new TypeError('local.workspace is required (the project folder the agents work in)');
     let command, args, cwd;
     if (spawnSpec) {
@@ -126,7 +136,11 @@ class LocalTransport {
       cwd = path.resolve(workspace);
     }
     const childEnv = Object.assign({}, process.env, env || {});
-    if (home) childEnv.LAMPSON_HOME = home;
+    // relative to the app, not to the workspace (the launcher runs with cwd = workspace): a relative home ended up
+    // inside the project (2026-10-18)
+    if (home) childEnv.LAMPSON_HOME = path.resolve(home);
+    this.warnings = [];
+    this.onWarning = onWarning;
     this.child = spawn(command, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.pending = new Map();   // id → { onEvent, done }
     this.seq = 0;
@@ -145,14 +159,27 @@ class LocalTransport {
     const t = line.trim();
     if (!t.startsWith('{')) return;            // launcher notices ("lampson updated…") are not protocol
     let m; try { m = JSON.parse(t); } catch { return; }
-    if (m.kind === 'ready') { this.readyInfo = m.data; this._ready(m.data); return; }
+    if (m.kind === 'ready') {
+      this.readyInfo = m.data;
+      for (const w of (m.data && m.data.warnings) || []) this.warn(w);
+      this._ready(m.data);
+      return;
+    }
+    if (m.kind === 'warning') this.warn(m.data);
     const p = this.pending.get(m.id);
     if (!p) return;
     p.onEvent(m);
-    if (m.kind === 'done' || m.kind === 'agents' || m.kind === 'pong' || m.kind === 'error') {
+    // an "error" inside a turn (it carries agent) is one more step: "done" still follows. Only the protocol's own
+    // error (bad line, unknown op) closes the request
+    if (m.kind === 'done' || m.kind === 'agents' || m.kind === 'pong' || (m.kind === 'error' && !('agent' in m))) {
       this.pending.delete(m.id);
       p.done(m);
     }
+  }
+  warn(w) {
+    if (this.warnings.includes(w)) return;      // ready lists them all; each ask repeats its agent's
+    this.warnings.push(w);
+    if (this.onWarning) this.onWarning(w);
   }
   onExit(code, err) {
     this.exited = { code, err };
@@ -200,7 +227,8 @@ class LocalTransport {
     this.child.stdin.end();
     await new Promise(resolve => {
       if (this.exited) return resolve();
-      const t = setTimeout(() => { try { this.child.kill(); } catch {} resolve(); }, 5000);
+      // the child is a launcher (node → shell → synsema): kill the whole tree, or synsema outlives it
+      const t = setTimeout(() => { killTree(this.child); resolve(); }, 5000);
       this.child.once('exit', () => { clearTimeout(t); resolve(); });
     });
   }
@@ -208,10 +236,12 @@ class LocalTransport {
 
 class Lampson {
   /**
-   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, spawn? } }
+   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, spawn? } };
+   *                        onWarning?(message) — default console.warn
    */
   constructor(opts = {}) {
-    this.transport = opts.local ? new LocalTransport(opts.local) : new HttpTransport(opts);
+    const onWarning = opts.onWarning === undefined ? (w => console.warn('lampson: ' + w)) : opts.onWarning;
+    this.transport = opts.local ? new LocalTransport(opts.local, onWarning) : new HttpTransport(opts);
     this.mode = opts.local ? 'local' : 'server';
   }
   /** Send a message to an agent and wait for its answer. Throws LampsonError if the turn ended in an error. */
@@ -227,6 +257,8 @@ class Lampson {
     if (env.callback) throw new TypeError('stream does not take a callback (use ask)');
     yield* this.transport.stream(env);
   }
+  /** Local mode: tools some agent lists but will not have (plugin off, typo), one message each. */
+  get warnings() { return this.transport.warnings || []; }
   /** The agents this key (server) or this workspace (local) can use. */
   async agents() { return this.transport.agents(); }
   /** Server mode: status and result of a message sent with a callback. */

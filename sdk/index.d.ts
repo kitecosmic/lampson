@@ -15,13 +15,18 @@ export interface LocalOptions {
   local: {
     /** The project folder the agents work in. */
     workspace: string;
-    /** LAMPSON_HOME: where Lampson keeps its config, sessions and plugins (default ~/lampson). */
+    /** LAMPSON_HOME: where Lampson keeps its config, sessions and plugins (default ~/lampson). Relative to process.cwd(). */
     home?: string;
     /** Extra environment for the Lampson process (e.g. provider keys). */
     env?: Record<string, string>;
     /** Advanced / tests: an exact command that speaks the `lampson run --stdio` protocol. */
     spawn?: { command: string; args?: string[]; cwd?: string };
   };
+}
+
+export interface CommonOptions {
+  /** Local mode: called once per tool an agent lists but will not have (plugin off, typo). Default console.warn; null = silent. */
+  onWarning?: ((message: string) => void) | null;
 }
 
 export interface Message {
@@ -63,7 +68,7 @@ export interface Result {
 export interface Queued { job: string; status: 'queued' }
 
 export interface LampsonEvent {
-  kind: 'session' | 'assistant' | 'tool_call' | 'tool_result' | 'tool_denied' | 'usage' | 'inbox' | 'error' | 'compact' | 'done' | string;
+  kind: 'session' | 'assistant' | 'tool_call' | 'tool_result' | 'tool_denied' | 'usage' | 'inbox' | 'error' | 'compact' | 'warning' | 'done' | string;
   data: any;
   tag?: string;
   agent?: string;
@@ -81,8 +86,10 @@ export class LampsonError extends Error {
 }
 
 export class Lampson {
-  constructor(opts: ServerOptions | LocalOptions);
+  constructor(opts: (ServerOptions | LocalOptions) & CommonOptions);
   readonly mode: 'server' | 'local';
+  /** Local mode: tools some agent lists but will not have, one message each (filled once the process is ready). */
+  readonly warnings: string[];
   ask(msg: Message): Promise<Result | Queued>;
   stream(msg: Omit<Message, 'callback'>): AsyncGenerator<LampsonEvent, void, unknown>;
   agents(): Promise<AgentInfo[]>;
