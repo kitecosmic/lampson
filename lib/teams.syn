@@ -17,7 +17,9 @@
 -- Todo lo compartido vive en SQLite (.lampson/teams.db, del workspace): varios agentes trabajan en paralelo y un
 -- JSON se pisaría; "tomar una tarea" es un UPDATE condicional (gana uno solo). Si el proceso se reinicia, nada se
 -- pierde. Tablas:
---   tasks    (id, scope, title, notes, owner, status, depends, created_by, created_at, updated_at)
+--   tasks    (id, scope, title, notes, owner, status, depends, created_by, created_at, updated_at, objective)
+--            objective: el objetivo para el que se creó (el tablero de un equipo es uno, compartido por todos sus
+--            objetivos; así la página de un objetivo muestra solo lo suyo). 0 = ninguno
 --   ledger   el registro: quién hizo qué y cuándo — solo crece (como el historial de git)
 --   messages de un agente a otro; el tick del servidor (lib/teamrun.syn) los entrega por el buzón
 --   cursors  hasta dónde leyó cada agente el registro (para «desde tu último turno pasó esto»)
@@ -46,10 +48,19 @@ task open()
     sql_exec("CREATE TABLE IF NOT EXISTS cursors (agent TEXT, scope TEXT, last INTEGER DEFAULT 0, PRIMARY KEY (agent, scope))")
     sql_exec("CREATE TABLE IF NOT EXISTS rounds (agent TEXT, scope TEXT, last_at REAL DEFAULT 0, PRIMARY KEY (agent, scope))")
     sql_exec("CREATE TABLE IF NOT EXISTS spend (day TEXT, agent TEXT, tokens INTEGER DEFAULT 0, PRIMARY KEY (day, agent))")
+    sql_exec("CREATE TABLE IF NOT EXISTS obj_sessions (objective INTEGER, agent TEXT, session TEXT, PRIMARY KEY (objective, agent))")
     sql_exec("CREATE TABLE IF NOT EXISTS objectives (id INTEGER PRIMARY KEY AUTOINCREMENT, agent TEXT NOT NULL, text TEXT NOT NULL, status TEXT DEFAULT 'active', progress TEXT DEFAULT '', question TEXT DEFAULT '', question_kind TEXT DEFAULT '', reply TEXT DEFAULT '', result TEXT DEFAULT '', round_seconds INTEGER DEFAULT 20, budget_tokens INTEGER DEFAULT 500000, spent INTEGER DEFAULT 0, turns INTEGER DEFAULT 0, last_start REAL DEFAULT 0, last_end REAL DEFAULT 0, created_by TEXT DEFAULT '', created_at REAL, updated_at REAL, team TEXT DEFAULT '')")
     -- bases creadas antes de los objetivos de equipo
     try
         sql_exec("ALTER TABLE objectives ADD COLUMN team TEXT DEFAULT ''")
+    recover err
+        set err to err
+    -- bases creadas antes de las tareas por objetivo: la columna, y las tareas que ya había (una sola vez, cuando se
+    -- agrega): las de un objetivo solo, por su scope; las de un equipo, al último objetivo del equipo creado antes
+    try
+        sql_exec("ALTER TABLE tasks ADD COLUMN objective INTEGER DEFAULT 0")
+        sql_exec("UPDATE tasks SET objective = CAST(substr(scope, 11) AS INTEGER) WHERE scope LIKE 'objective:%'", [])
+        sql_exec("UPDATE tasks SET objective = COALESCE((SELECT o.id FROM objectives o WHERE 'team:' || o.team = tasks.scope AND o.created_at <= tasks.created_at ORDER BY o.created_at DESC LIMIT 1), 0) WHERE objective = 0 AND scope LIKE 'team:%'", [])
     recover err
         set err to err
     give true
@@ -175,6 +186,30 @@ export task resolve(agent, wanted)
         give {"ok": false, "error": "you are in several teams — say which: " + join(apply(mine, (t) => t["id"]), ", ")}
     give {"ok": true, "team": mine[0]}
 
+-- qué puede hacer un asiento, según las tools de su archivo: así nadie se asigna (ni le asignan) algo que no puede
+-- hacer. (Visto 2026-10-17: un CEO con «leer y correr comandos» se quedó con la implementación y, sin edit ni write,
+-- «editaba» con `echo edit-1`.)
+task can_do(agent)
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let tools be nothing
+    each f in ["workspace/.lampson/agents/" + agent + ".agent.json", "agents/" + agent + ".agent.json"]
+        when tools == nothing and file_exists(f)
+            try
+                let spec be json_decode(read_file(f))
+                set tools to when contains(spec, "tools") then spec["tools"] otherwise nothing
+            recover err
+                set tools to nothing
+    when tools == nothing
+        give ""
+    when contains(tools, "edit") or contains(tools, "write")
+        give " — can edit files and run commands"
+    when contains(tools, "bash")
+        give " — can read and run commands, cannot edit files"
+    when length(tools) == 0
+        give " — coordinates only (no file tools)"
+    give " — can read, cannot edit files"
+
 -- lo que el agente tiene que saber de su equipo, para su prompt (lib/runtime.syn → system_for)
 export task instructions(agent)
     require file.read("workspace")
@@ -184,14 +219,14 @@ export task instructions(agent)
         let me be member(t, agent)
         let lines be []
         each m in t["members"]
-            set lines to append(lines, "- " + m["agent"] + ": " + m["role"] + (when m["reports_to"] != "" then " (reports to " + m["reports_to"] + ")" otherwise ""))
+            set lines to append(lines, "- " + m["agent"] + ": " + m["role"] + (when m["reports_to"] != "" then " (reports to " + m["reports_to"] + ")" otherwise "") + can_do(m["agent"]))
         let ps be peers(t, agent)
         let lead be lead_of(t)
         -- la cadena de mando: cada uno le pregunta a su jefe; solo el líder le pregunta a la persona (y solo lo que el
         -- equipo no puede resolver). Lo mismo con lo que necesita aprobación: lib/loop.syn no deja que un asiento que
         -- no es el líder abra una aprobación a la persona (opts.escalate_to, lib/runtime.syn)
         let chain be when agent == lead then "\nYou lead the team. The others bring their questions and anything that needs approval to their boss, and it comes up to you only if their boss can't solve it. Solve what you can: decide, unblock, re-plan. Ask the person (`objective` ask or request_approval) only what truly only they can decide or approve — they shouldn't hear about anything the team can handle." otherwise "\nChain of command: when you are stuck, unsure what to do, or need a decision, ask " + me["reports_to"] + " with `send` — never the person. Anything that needs approval (a merge, a push, a risky command) also goes to " + me["reports_to"] + ": you can't ask the person, only the lead does, and only if it is really needed. When someone who reports to you asks you something, answer it if you can; if you can't, ask your own boss."
-        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note), add the tasks you break work into. Never work on a task someone else owns. Each turn starts with what changed in the team since your last turn. Your final reply in a turn is not seen by anyone: to tell someone something, `send` it; to record progress, update the board." + chain + (when t["worktrees"] then "\nGit: if the project uses git, you work in your OWN working copy (it is your root for files and bash), on branch team/" + t["id"] + "/" + agent + ", and your commits carry your name. Commit your work there and say which branch when you hand it over. The main checkout is ../../.. — merging into it (e.g. `git -C ../../.. merge team/" + t["id"] + "/<agent>`) or pushing touches the shared history: " + (when agent == lead then "Lampson asks the person to approve it first." otherwise "only the lead does it (Lampson asks the person to approve it) — hand your branch over to " + me["reports_to"] + ".") + " Don't edit files of other agents' copies." otherwise "")
+        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note; when you review a task in review, move it to done if it passes or back to doing with what to fix — if it is not yours to move, tell its owner), add the tasks you break work into. Never work on a task someone else owns. Give each task to someone who can do it (see what each member can do above); if a task needs a tool you don't have, hand it over instead of trying. Each turn starts with what changed in the team since your last turn. A teammate who hasn't answered is usually still in the middle of a turn: wait for their reply instead of asking again or giving their task to someone else — reassign only if they say they are blocked. Your final reply in a turn is not seen by anyone: to tell someone something, `send` it; to record progress, update the board." + chain + (when t["worktrees"] then "\nGit: if the project uses git, you work in your OWN working copy (it is your root for files and bash), on branch team/" + t["id"] + "/" + agent + ", and your commits carry your name. Use relative paths: absolute paths into the project point to the main checkout, not to your copy. Commit your work there and say which branch when you hand it over. The main checkout is ../../.. — merging into it (e.g. `git -C ../../.. merge team/" + t["id"] + "/<agent>`) or pushing touches the shared history: " + (when agent == lead then "Lampson asks the person to approve it first." otherwise "only the lead does it (Lampson asks the person to approve it) — hand your branch over to " + me["reports_to"] + ".") + " Don't edit files of other agents' copies." otherwise "")
     give out
 
 -- ---------- registro ----------
@@ -201,7 +236,10 @@ export task log(scope, actor, kind, ref, txt)
     require file(".lampson/*")
     require time
     open()
-    give sql_exec("INSERT INTO ledger (scope, at, actor, kind, ref, text) VALUES (?, ?, ?, ?, ?, ?)", [scope, now(), actor, kind, ref, slice(text(txt), 0, 400)])["last_id"]
+    let id be sql_exec("INSERT INTO ledger (scope, at, actor, kind, ref, text) VALUES (?, ?, ?, ?, ?, ?)", [scope, now(), actor, kind, ref, slice(text(txt), 0, 400)])["last_id"]
+    -- la vista en vivo lo recibe en el momento (mensajes que viajan, tarjetas que se mueven)
+    bus_publish("team.ledger", {"scope": scope, "id": id, "at": now(), "actor": actor, "kind": kind, "ref": ref, "text": slice(text(txt), 0, 200)})
+    give id
 
 export task ledger(scope, after, limit)
     require db(".lampson/teams.db")
@@ -257,9 +295,18 @@ export task add_task(scope, actor, title, notes, owner, depends)
     each d in depends
         when task_get(scope, d) == nothing
             raise("depends on #" + text(d) + ", which does not exist")
-    let id be sql_exec("INSERT INTO tasks (scope, title, notes, owner, status, depends, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [scope, trim(text(title)), text(notes), owner, "todo", json_encode(depends), actor, now(), now()])["last_id"]
+    let id be sql_exec("INSERT INTO tasks (scope, title, notes, owner, status, depends, created_by, created_at, updated_at, objective) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [scope, trim(text(title)), text(notes), owner, "todo", json_encode(depends), actor, now(), now(), objective_of_scope(scope)])["last_id"]
     log(scope, actor, "added", "#" + text(id), trim(text(title)) + (when owner != "" then " → " + owner otherwise ""))
     give id
+
+-- el objetivo de una tarea nueva: el del scope (objective:<n>) o el abierto del equipo (team:<id>); si no hay, 0
+export task objective_of_scope(scope)
+    when starts_with(scope, "objective:")
+        give floor(number(slice(scope, 10, length(scope))))
+    when starts_with(scope, "team:")
+        let r be sql("SELECT id FROM objectives WHERE team = ? AND status IN ('active', 'waiting', 'paused') ORDER BY id DESC LIMIT 1", [slice(scope, 5, length(scope))])
+        give when length(r) == 0 then 0 otherwise r[0]["id"]
+    give 0
 
 -- tomar una tarea sin dueño: atómico (UPDATE condicional). Las dependencias tienen que estar hechas.
 export task claim(scope, actor, id)
@@ -377,6 +424,30 @@ export task record_spend(agent, tokens)
     sql_exec("INSERT INTO spend (day, agent, tokens) VALUES (?, ?, ?) ON CONFLICT(day, agent) DO UPDATE SET tokens = tokens + excluded.tokens", [today(), agent, floor(tokens)])
     give true
 
+-- un equipo borrado: su tablero, registro, mensajes y objetivos pasan a «<id>~<fecha>» (el historial sigue entero y
+-- la página de cada objetivo lo encuentra), así un equipo nuevo con el mismo nombre no hereda tareas ni mensajes
+export task archive(id)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    require time
+    open()
+    let a be id + "~" + format_time(now(), "%Y%m%d-%H%M%S")
+    sql_exec("UPDATE messages SET state = 'dropped' WHERE scope = ? AND state = 'pending'", ["team:" + id])
+    each tb in ["tasks", "ledger", "messages", "cursors", "rounds"]
+        sql_exec("UPDATE " + tb + " SET scope = ? WHERE scope = ?", ["team:" + a, "team:" + id])
+    sql_exec("UPDATE objectives SET team = ? WHERE team = ?", [a, id])
+    give a
+
+-- un agente que se borra: su gasto del día (si se vuelve a crear con el mismo nombre, arranca en cero)
+export task forget_spend(agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    sql_exec("DELETE FROM spend WHERE agent = ?", [agent])
+    give true
+
 export task spent_today(agent)
     require db(".lampson/teams.db")
     require file(".lampson")
@@ -391,7 +462,32 @@ export task over_budget(team, agent)
     require file(".lampson")
     require file(".lampson/*")
     require time
-    give team["budget_daily_tokens"] > 0 and spent_today(agent) >= team["budget_daily_tokens"]
+    when team["budget_daily_tokens"] <= 0 or spent_today(agent) < team["budget_daily_tokens"]
+        give false
+    -- con un objetivo abierto que todavía tiene presupuesto, manda ese presupuesto (lo aprobó la persona): el tope
+    -- diario es para las rondas sueltas. (Visto 2026-10-17: el CTO llegó al tope a mitad de O-5 y el equipo quedó
+    -- esperando su revisión con el objetivo «en curso» y nadie trabajando.)
+    let r be sql("SELECT id FROM objectives WHERE team = ? AND status = 'active' AND (budget_tokens <= 0 OR spent < budget_tokens) LIMIT 1", [team["id"]])
+    give length(r) == 0
+
+-- la conversación que usó cada asiento en cada objetivo: el primer turno de un asiento en un objetivo arranca una
+-- conversación nueva (lib/teamrun.syn → deliver_to), así no arrastra el contexto de los objetivos anteriores, y la
+-- página de un objetivo viejo sigue encontrando sus pasos
+export task seat_session(oid, agent, sid)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    sql_exec("INSERT OR IGNORE INTO obj_sessions (objective, agent, session) VALUES (?, ?, ?)", [oid, agent, sid])
+    give true
+
+export task seat_session_of(oid, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    let r be sql("SELECT session FROM obj_sessions WHERE objective = ? AND agent = ?", [oid, agent])
+    give when length(r) == 0 then "" otherwise r[0]["session"]
 
 -- ---------- rondas ----------
 -- ¿tiene `agent` algo que hacer en el equipo? tareas suyas abiertas, o novedades que son PARA él: una tarea que le
@@ -613,7 +709,7 @@ export task obj_create(agent, txt, opts)
         raise("an objective needs a text")
     let tid be lower(text(field(opts, "team", "")))
     let rs be floor(number(field(opts, "round_seconds", when tid != "" then 60 otherwise 20)))
-    let bt be floor(number(field(opts, "budget_tokens", 500000)))
+    let bt be floor(number(field(opts, "budget_tokens", 600000)))
     let id be sql_exec("INSERT INTO objectives (agent, text, round_seconds, budget_tokens, created_by, created_at, updated_at, team) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [agent, trim(text(txt)), max(5, rs), bt, text(field(opts, "created_by", "")), now(), now(), tid])["last_id"]
     log(obj_scope({"id": id, "team": tid}), text(field(opts, "created_by", "person")), "objective", "O-" + text(id), trim(text(txt)) + " → " + (when tid != "" then "team " + tid + " (led by " + agent + ")" otherwise agent))
     give id
@@ -644,6 +740,13 @@ export task team_turn_end(team_id, agent, tokens)
     require file(".lampson/*")
     require time
     open()
+    -- el turno que cruza el tope diario del asiento queda en el registro (una vez): la persona ve quién gasta de más
+    -- y puede revisar cómo lo configuró. Si hay un objetivo con presupuesto, el asiento sigue (over_budget)
+    let tm be get(team_id)
+    let cap be when tm == nothing then 0 otherwise tm["budget_daily_tokens"]
+    let after be spent_today(agent)
+    when cap > 0 and after - floor(tokens) < cap and after >= cap
+        log("team:" + team_id, agent, "over cap", "", text(after) + " of " + text(cap) + " daily tokens" + (when over_budget(tm, agent) then " — no more turns today" otherwise " — keeps working: the open objective still has budget"))
     each o in sql("SELECT * FROM objectives WHERE team = ? AND status IN ('active', 'waiting')", [team_id])
         sql_exec("UPDATE objectives SET spent = spent + ?, updated_at = ? WHERE id = ?", [floor(tokens), now(), o["id"]])
         when o["agent"] == agent
@@ -736,9 +839,9 @@ export task obj_cancel(id, who)
 -- la cabeza de un turno del objetivo: la presentación, lo que respondió la persona o la ronda
 export task obj_head(o)
     when o["turns"] == 0 and field(o, "team", "") != ""
-        give "[objective O-" + text(o["id"]) + " for team " + o["team"] + "] " + o["text"] + "\n\nYou lead this objective with your team. How:\n- Break it into tasks on the team board (`board` add, with owner = who should do it, and depends when one needs another) and `send` each teammate what you need from them. They work in parallel in their own copies; follow up every turn with what changed.\n- Keep the person informed with `objective` (action report) at milestones. Before anything that leaves the workspace or can't be undone (merge into main, push, release, publish, buy, send), `objective` action request_approval and wait — Lampson also asks the person before any merge or push.\n- When everything is delivered and verified, `objective` action done with the result (what was done, by whom, where, how to check). If it can't be done, action fail with why."
+        give "[objective O-" + text(o["id"]) + " for team " + o["team"] + "] " + o["text"] + "\n\nYou lead this objective with your team. How:\n- Break it into tasks on the team board (`board` add, with owner = who should do it, and depends when one needs another) and `send` each teammate what you need from them. They work in parallel in their own copies; follow up every turn with what changed.\n- Keep the person informed with `objective` (action report) at milestones. Before anything that leaves the workspace or can't be undone (merge into main, push, release, publish, buy, send), `objective` action request_approval and wait — Lampson also asks the person before any merge or push.\n- When everything is delivered and verified, `objective` action done with a closing report for the person, who didn't follow the work. Write it in their language, in three short labeled parts: what was achieved (and by whom), what is in the project now (files, branches, commits — exact paths), and what is left or worth doing next. If it can't be done, action fail with why."
     when o["turns"] == 0
-        give "[objective O-" + text(o["id"]) + "] " + o["text"] + "\n\nWork on this on your own until it is done. How:\n- First plan it: break it into tasks on your board (`board` add), then work through them (claim → doing → done).\n- Each turn, move the work forward and end the turn; you'll get the next turn automatically. Nobody reads your final reply: report with `objective` (action report) when you reach something worth telling.\n- Need a decision or information only the person has? `objective` action ask. Before anything that leaves this workspace or can't be undone (merge into main, push, deploy, buy, book, send an email), `objective` action request_approval and wait for the answer — never do it without an approval.\n- When it is done, `objective` action done with the result (what you did, where, how to check it). If it can't be done, action fail with why."
+        give "[objective O-" + text(o["id"]) + "] " + o["text"] + "\n\nWork on this on your own until it is done. How:\n- First plan it: break it into tasks on your board (`board` add), then work through them (claim → doing → done).\n- Each turn, move the work forward and end the turn; you'll get the next turn automatically. Nobody reads your final reply: report with `objective` (action report) when you reach something worth telling.\n- Need a decision or information only the person has? `objective` action ask. Before anything that leaves this workspace or can't be undone (merge into main, push, deploy, buy, book, send an email), `objective` action request_approval and wait for the answer — never do it without an approval.\n- When it is done, `objective` action done with a closing report for the person, in their language, in three short labeled parts: what was achieved, what is in the project now (files, branches — exact paths) and what is left or worth doing next. If it can't be done, action fail with why."
     when o["reply"] != ""
         give o["reply"]
     give "[round] Keep working on O-" + text(o["id"]) + ": " + o["text"]
@@ -760,7 +863,7 @@ export task obj_turn_text(o)
 
 export let OBJECTIVE_SPEC be {
     "name": "objective",
-    "description": "The objective you are working on. report: tell the person where you are (message). ask: ask the person something only they can answer (message) — no more turns until they answer. request_approval: ask permission before anything that leaves this workspace or can't be undone (merge into main, push, deploy, buy, book…) — describe exactly what (message); wait for the answer. done: finish it with the result (message: what you did, where, how to check). fail: give up with why (message). show: the objective and its status.",
+    "description": "The objective you are working on. report: tell the person where you are (message). ask: ask the person something only they can answer (message) — no more turns until they answer. request_approval: ask permission before anything that leaves this workspace or can't be undone (merge into main, push, deploy, buy, book…) — describe exactly what (message); wait for the answer. done: finish it with a closing report (message, in three short labeled parts: what was achieved, what is in the project now — exact paths —, what is left or worth doing next). fail: give up with why (message). show: the objective and its status.",
     "parameters": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["report", "ask", "request_approval", "done", "fail", "show"]},
         "message": {"type": "string"}
@@ -804,6 +907,11 @@ export task objective_tool(action, message, _agent, _scope)
         log(sc, o["agent"], when act == "ask" then "asked" otherwise "approval requested", ref, msg)
         give "sent to the person — end your turn now; their answer opens your next turn"
     when act == "done" or act == "fail"
+        -- al cerrar con éxito, lo que quedó «en revisión» ya se revisó (si no, el líder no cerraría): pasa a hecho
+        when act == "done"
+            each t in sql("SELECT id FROM tasks WHERE scope = ? AND objective = ? AND status = 'review'", [sc, id])
+                sql_exec("UPDATE tasks SET status = 'done', updated_at = ? WHERE id = ?", [now(), t["id"]])
+                log(sc, o["agent"], "updated", "#" + text(t["id"]), "review → done (closed with " + ref + ")")
         obj_set(id, {"status": when act == "done" then "done" otherwise "failed", "result": msg})
         log(sc, o["agent"], when act == "done" then "done" otherwise "failed", ref, msg)
         give ref + " is " + (when act == "done" then "done" otherwise "failed") + " — end your turn"

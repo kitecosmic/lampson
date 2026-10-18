@@ -28,9 +28,9 @@ const Flow = (() => {
 
   function create(root) {
     root.classList.add('flow');
-    root.innerHTML = `<div class="fl-pane"><svg class="fl-edges"><g class="fl-e"></g><path class="fl-ghost" d=""/></svg><div class="fl-nodes"></div><div class="fl-tools"></div></div>
+    root.innerHTML = `<div class="fl-pane"><svg class="fl-edges"><g class="fl-e"></g><g class="fl-fx"></g><path class="fl-ghost" d=""/></svg><div class="fl-nodes"></div><svg class="fl-edges fl-top"><g class="fl-fx2"></g></svg><div class="fl-tools"></div></div>
       <div class="fl-ctrl"><button type="button" data-z="in" title="acercar">+</button><button type="button" data-z="out" title="alejar">−</button><button type="button" data-z="fit" title="encuadrar todo">⤢</button><button type="button" data-z="tidy" title="ordenar automáticamente">ordenar</button></div>`;
-    const pane = root.querySelector('.fl-pane'), eg = root.querySelector('.fl-e'), ghost = root.querySelector('.fl-ghost'), nodesEl = root.querySelector('.fl-nodes'), tools = root.querySelector('.fl-tools');
+    const pane = root.querySelector('.fl-pane'), eg = root.querySelector('.fl-e'), fx = root.querySelector('.fl-fx'), fxTop = root.querySelector('.fl-fx2'), ghost = root.querySelector('.fl-ghost'), nodesEl = root.querySelector('.fl-nodes'), tools = root.querySelector('.fl-tools');
     const st = { x: 0, y: 0, k: 1, pos: {}, opts: null, fitted: false, selEdge: null, key: '' };
     const apply = () => { pane.style.transform = `translate(${st.x}px,${st.y}px) scale(${st.k})`; root.style.backgroundPosition = `${st.x}px ${st.y}px`; root.style.backgroundSize = `${20 * st.k}px ${20 * st.k}px`; };
     const toPane = (cx, cy) => { const r = root.getBoundingClientRect(); return { x: (cx - r.left - st.x) / st.k, y: (cy - r.top - st.y) / st.k }; };
@@ -63,6 +63,8 @@ const Flow = (() => {
       return { d: `M${a.x},${a.y} C${out},${a.y} ${out},${b.y} ${b.x},${b.y}`, mx: out - 12, my: (a.y + b.y) / 2 };
     }
     const ekey = (e) => e.kind + ':' + e.from + '>' + e.to;
+    // una curva cúbica «M a C c1 c2 b» al revés (para que la partícula salga del que manda)
+    const reversePath = (d) => { const n = d.match(/-?[\d.]+/g).map(Number); return `M${n[6]},${n[7]} C${n[4]},${n[5]} ${n[2]},${n[3]} ${n[0]},${n[1]}`; };
     function drawEdges() {
       const o = st.opts; if (!o) return;
       eg.innerHTML = o.edges.filter((e) => st.pos[e.from] && st.pos[e.to]).map((e) => { const p = edgePath(e), k = ekey(e);
@@ -143,9 +145,9 @@ const Flow = (() => {
         o.nodes.forEach((n) => { if (!st.pos[n.id]) st.pos[n.id] = n.at || auto[n.id]; });
         if (st.key) save(st.key, st.pos);
         root.classList.toggle('editable', !!o.editable);
-        nodesEl.innerHTML = o.nodes.map((n) => `<div class="fl-node${n.working ? ' working' : ''}${n.missing ? ' missing' : ''}${n.lead ? ' lead' : ''}${n.loose ? ' loose' : ''}${o.selected === n.id ? ' sel' : ''}" data-id="${escH(n.id)}">
+        nodesEl.innerHTML = o.nodes.map((n) => `<div class="fl-node${n.working ? ' working' : ''}${n.missing ? ' missing' : ''}${n.lead ? ' lead' : ''}${n.loose ? ' loose' : ''}${n.cls ? ' ' + escH(n.cls) : ''}${o.selected === n.id ? ' sel' : ''}" data-id="${escH(n.id)}">
           <div class="fl-top"><span class="fl-av">${escH(n.avatar || n.title.slice(0, 1))}</span><b>${escH(n.title)}</b>${n.lead ? '<span class="fl-lead">líder</span>' : ''}<span class="fl-pip"></span></div>
-          <p class="fl-desc">${escH(n.desc || '')}</p><span class="fl-meta">${escH(n.meta || '')}</span>
+          ${n.html !== undefined ? n.html : `<p class="fl-desc">${escH(n.desc || '')}</p><span class="fl-meta">${escH(n.meta || '')}</span>`}
           ${o.editable ? '<span class="fl-h top" aria-hidden="true"></span><span class="fl-h bottom" title="arrastrá hasta otro asiento: te reporta · soltalo en el vacío: un asiento nuevo"></span>' : ''}</div>`).join('');
         nodesEl.querySelectorAll('.fl-node').forEach(bindNode);
         placeNodes(); drawEdges();
@@ -154,6 +156,25 @@ const Flow = (() => {
       },
       fit,
       freeSpot,
+      // algo que viaja de un nodo a otro (la vista en vivo de un objetivo): por la línea que los une, si la hay; si no,
+      // por una curva directa. La línea se enciende del color de quien manda y corre como un flujo mientras el sobre
+      // (glyph: SVG centrado en 0,0) la recorre; al llegar, una onda en el destino. Vive en su propia capa (fl-fx),
+      // que el repintado no borra. opts: {color, glyph, dur (s)}
+      particle(from, to, opts = {}) {
+        if (!st.pos[from] || !st.pos[to] || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const e = (st.opts.edges || []).find((x) => (x.from === from && x.to === to) || (x.from === to && x.to === from));
+        let d;
+        if (e) { d = edgePath(e).d; if (e.from !== from) d = reversePath(d); }
+        else { const a = anchor(from, 'bottom'), b = anchor(to, 'top'); d = `M${a.x},${a.y} C${a.x},${(a.y + b.y) / 2} ${b.x},${(a.y + b.y) / 2} ${b.x},${b.y}`; }
+        const dur = opts.dur || 1.6, end = d.match(/-?[\d.]+/g).map(Number).slice(-2);
+        // la línea encendida va debajo de las tarjetas; el sobre y la onda, encima (si no, la tarjeta lo tapa a la mitad)
+        const ns = 'http://www.w3.org/2000/svg', g = document.createElementNS(ns, 'g'), top = document.createElementNS(ns, 'g');
+        [g, top].forEach((x) => { x.setAttribute('class', 'fl-particle'); if (opts.color) x.style.setProperty('--flow', opts.color); x.style.setProperty('--dur', dur + 's'); });
+        g.innerHTML = `<path class="glow" d="${d}"/><path class="trail" d="${d}"/>`;
+        top.innerHTML = `<circle class="ripple" cx="${end[0]}" cy="${end[1]}" r="4"/>
+          <g class="glyph">${opts.glyph || '<circle r="6"/>'}<animateMotion dur="${dur}s" fill="freeze" path="${d}" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.25 1"/></g>`;
+        fx.appendChild(g); fxTop.appendChild(top); setTimeout(() => { g.remove(); top.remove(); }, dur * 1000 + 1200);
+      },
       // al unir: si el que pasa a reportar quedó arriba (o a la par) de su jefe, va debajo de él — la línea no da vueltas
       placeUnder(child, boss) {
         const c = st.pos[child], b = st.pos[boss]; if (!c || !b || c.y >= b.y + NH + 20) return false;

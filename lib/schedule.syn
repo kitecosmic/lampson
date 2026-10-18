@@ -1,6 +1,9 @@
 -- lib/schedule.syn — tareas programadas: "cada 6 h", "todos los días a las 9", "lunes 8:30"
 --
 -- Qué se programa (action.type):
+--   objective → una RUTINA de un equipo: {team, text, budget_tokens?, round_seconds?}. Cada vez que le toca crea un
+--            objetivo normal para el líder del equipo (created_by = "rutina:<id de la tarea>": así se ven sus
+--            ejecuciones). Si la ejecución anterior sigue abierta, esta se saltea — no se amontonan objetivos.
 --   plugin → una tool de un plugin ENCENDIDO: {plugin, tool, args}. Encenderlo ya fue la autorización.
 --   bash   → un comando fijo desde el workspace: {command, timeout}. Aprobado UNA vez, al crear la tarea.
 --   prompt → una corrida completa del agente con un texto: {prompt, agent}. Sin humano al lado: corre con el
@@ -28,6 +31,7 @@ use "./permission.syn" as permission
 use "./tools/common.syn" as c
 use "./tools/memo.syn" as memo
 use "./settings.syn" as settings
+use "./teams.syn" as teams
 
 export let FILE be ".lampson/schedules.json"
 export let LOG_DIR be ".lampson/schedules"
@@ -380,11 +384,18 @@ task slug(name)
 -- valida y normaliza la acción → {ok, action, error}
 task check_action(action)
     when action == nothing or not contains(action, "type")
-        give {"ok": false, "error": "action needs a type: plugin | bash | prompt"}
+        give {"ok": false, "error": "action needs a type: objective | plugin | bash | prompt"}
     let kind be lower(text(action["type"]))
     when kind == "lamp"
         -- compat: "lamp" era el nombre de "plugin" hasta 2026-09 (tareas guardadas, JSON escrito a mano)
         set kind to "plugin"
+    when kind == "objective"
+        let tid be lower(text(when contains(action, "team") then action["team"] otherwise ""))
+        when tid == "" or teams.get(tid) == nothing
+            give {"ok": false, "error": "action objective needs the id of a team of this project (got '" + tid + "')"}
+        when not contains(action, "text") or trim(text(action["text"])) == ""
+            give {"ok": false, "error": "action objective needs the text of the objective"}
+        give {"ok": true, "action": {"type": "objective", "team": tid, "text": trim(text(action["text"])), "budget_tokens": floor(number(when contains(action, "budget_tokens") and action["budget_tokens"] != nothing then action["budget_tokens"] otherwise 600000)), "round_seconds": floor(number(when contains(action, "round_seconds") and action["round_seconds"] != nothing then action["round_seconds"] otherwise 60))}}
     when kind == "plugin"
         let pname be plugin_of(action)
         when pname == "" or not contains(action, "tool")
@@ -409,7 +420,7 @@ task check_action(action)
         when not contains(["build", "plan", "review", "explore"], agent)
             give {"ok": false, "error": "agent must be build | plan | review | explore"}
         give {"ok": true, "action": {"type": "prompt", "prompt": text(action["prompt"]), "agent": agent}}
-    give {"ok": false, "error": "unknown action type '" + kind + "' (plugin | bash | prompt)"}
+    give {"ok": false, "error": "unknown action type '" + kind + "' (objective | plugin | bash | prompt)"}
 
 -- crear: spec = {name, when, action, permission?, approval_timeout?, notify?} → la tarea (raise si es inválida)
 export task add(spec)
@@ -466,6 +477,9 @@ task is_plugin_action(a)
     give a["type"] == "plugin" or a["type"] == "lamp"
 
 task default_name(action)
+    when action["type"] == "objective"
+        let o be replace(action["text"], "\n", " ")
+        give when length(o) > 40 then slice(o, 0, 40) + "…" otherwise o
     when is_plugin_action(action)
         give plugin_of(action) + " " + action["tool"]
     when action["type"] == "bash"
@@ -561,6 +575,8 @@ export task run_simple(t)
     require file("workspace")
     require file("workspace/*")
     let a be t["action"]
+    when a["type"] == "objective"
+        give run_routine(t)
     when is_plugin_action(a)
         give plugins.call(plugins.tool_name(plugin_of(a), a["tool"]), a["args"])
     when a["type"] == "bash"
@@ -653,8 +669,30 @@ export task log_tail(id, n)
     recover err
         give ""
 
+-- una ejecución de una rutina: un objetivo para el líder del equipo, salvo que la anterior siga abierta
+export let ROUTINE_PREFIX be "rutina:"
+export task run_routine(t)
+    require db(".lampson/teams.db")
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let a be t["action"]
+    let tm be teams.get(a["team"])
+    when tm == nothing
+        give "ERROR: team '" + a["team"] + "' no longer exists in this project"
+    let mine be ROUTINE_PREFIX + t["id"]
+    let still be where(teams.obj_list(), (o) => o["created_by"] == mine and contains(["active", "waiting", "paused"], o["status"]))
+    when length(still) > 0
+        give "SKIPPED: the previous run (O-" + text(still[0]["id"]) + ") is still open"
+    let id be teams.obj_create(teams.lead_of(tm), a["text"], {"team": tm["id"], "budget_tokens": a["budget_tokens"], "round_seconds": a["round_seconds"], "created_by": mine})
+    give "O-" + text(id) + " → team " + tm["id"]
+
 -- descripción de la acción (una línea) para previews y listados
 export task describe_action(a)
+    when a["type"] == "objective"
+        give "objective for team " + a["team"] + ": " + one_line(a["text"], 140)
     when is_plugin_action(a)
         give "plugin " + plugin_of(a) + "." + a["tool"] + (when length(keys(a["args"])) > 0 then " " + one_line(json_encode(a["args"]), 80) otherwise "")
     when a["type"] == "bash"

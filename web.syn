@@ -152,6 +152,13 @@ mcp.start_all(8)
 share {"id": text(now())} as "lampson:run"
 share {"kind": "web"} as "lampson:ui"
 
+-- la pantalla de equipos (public/teams.html) en cualquiera de sus rutas; abierta por el puerto de este proceso, al hub
+task teams_page(request, slug, rest)
+    let h be headers of request
+    when env("LAMPSON_WS", "") != "" and not contains(h, "x-forwarded-host")
+        give redirect("http://127.0.0.1:8080/w/" + slug + rest)
+    give html(read_file("public/teams.html"))
+
 serve on 8080
     -- el proxy del hub (y nada más) conecta por loopback: sus X-Forwarded-* traen la origin real (check_client).
     -- Acá y no como flag de start_ws: el web.syn se copia al arrancar, y un hub viejo en memoria lo lanzaba sin el
@@ -458,7 +465,7 @@ serve on 8080
         private
         stream
             state_set("lampson:last_used", now())
-            let sub be bus_subscribe(["proc.*", "subagent.*", "mcp.*", "approval.*", "schedule.*"], {"max_queue": 512})
+            let sub be bus_subscribe(["proc.*", "subagent.*", "mcp.*", "approval.*", "schedule.*", "team.*"], {"max_queue": 512})
             let open be true
             while open
                 let ev be bus_recv(sub, 25)
@@ -893,15 +900,18 @@ serve on 8080
     -- ---------- EQUIPOS Y OBJETIVOS: su pantalla propia (public/teams.html) y la API privada que la alimenta ----------
     route "GET /w/:slug/equipos"
         private
-        let h be headers of request
-        when env("LAMPSON_WS", "") != "" and not contains(h, "x-forwarded-host")
-            give redirect("http://127.0.0.1:8080/w/" + params.slug + "/equipos")
-        give html(read_file("public/teams.html"))
+        give teams_page(request, params.slug, "/equipos")
+    route "GET /w/:slug/equipos/*rest"
+        private
+        give teams_page(request, params.slug, "/equipos/" + params.rest)
+    route "GET /w/:slug/objetivos/*rest"
+        private
+        give teams_page(request, params.slug, "/objetivos/" + params.rest)
 
     route "GET /w/:slug/api/objectives" requires auth
         private
-        let rows be apply(teams.obj_list(), (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "updated_at": o["updated_at"], "working": mailbox.working(o["agent"], teams.obj_scope(o))})
-        give {"objectives": rows, "teams": apply(teams.all(), (t) => {"id": t["id"], "lead": teams.lead_of(t), "description": t["description"]}), "agents": apply(where(runtime.names(), (n) => not runtime.get(n)["builtin"]), (n) => {"id": n, "description": runtime.get(n)["description"]})}
+        let rows be apply(teams.obj_list(), (o) => {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "updated_at": o["updated_at"], "created_at": o["created_at"], "created_by": o["created_by"], "working": mailbox.working(o["agent"], teams.obj_scope(o))})
+        give {"objectives": rows, "teams": apply(teams.all(), (t) => {"id": t["id"], "name": t["name"], "lead": teams.lead_of(t), "description": t["description"]}), "agents": apply(where(runtime.names(), (n) => not runtime.get(n)["builtin"]), (n) => {"id": n, "description": runtime.get(n)["description"]})}
 
     route "GET /w/:slug/api/objectives/:id" requires auth
         private
@@ -942,6 +952,14 @@ serve on 8080
         when not r["ok"]
             give fail(400, r["error"])
         give api.teams_view()
+
+    route "POST /w/:slug/api/teams/delete" requires auth
+        private
+        expect body {id: text}
+        let r be api.delete_team(json of request)
+        when not r["ok"]
+            give fail(400, r["error"])
+        give r
 
     route "GET /w/:slug/api/keys" requires auth
         private

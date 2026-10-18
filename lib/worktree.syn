@@ -61,6 +61,35 @@ export task ensure(team_id, agent, author)
     git(["config", "--worktree", "user.email", author["email"]], c.ROOT + "/" + rel)
     give {"ok": true, "root": rel, "branch": branch, "error": ""}
 
+-- el asiento de un equipo que se borra: su copia se va (lo que tenía sin commitear queda en un commit «wip»); su rama
+-- se borra si ya está en la rama principal, y si no, se renombra a archive/<equipo>/<agente>-<fecha>: el trabajo no se
+-- pierde, pero un equipo nuevo con el mismo nombre arranca de cero. → {copy, branch} (qué pasó con cada una)
+export task retire(team_id, agent)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let rel be DIR + "/" + agent
+    let branch be "team/" + team_id + "/" + agent
+    let out be {"copy": "", "branch": ""}
+    when not is_repo()
+        give out
+    when file_exists(c.ROOT + "/" + rel + "/.git")
+        let st be git(["status", "--porcelain"], c.ROOT + "/" + rel)
+        when st["ok"] and st["out"] != ""
+            git(["add", "-A"], c.ROOT + "/" + rel)
+            git(["commit", "-m", "wip: lo que quedó sin commitear al borrar el equipo " + team_id], c.ROOT + "/" + rel)
+        set out["copy"] to when git(["worktree", "remove", "--force", rel], c.ROOT)["ok"] then "removed" otherwise "kept"
+    git(["worktree", "prune"], c.ROOT)
+    when git(["rev-parse", "--verify", "refs/heads/" + branch], c.ROOT)["ok"]
+        when git(["merge-base", "--is-ancestor", branch, "HEAD"], c.ROOT)["ok"]
+            git(["branch", "-D", branch], c.ROOT)
+            set out["branch"] to "deleted (already merged)"
+        otherwise
+            let arch be "archive/" + team_id + "/" + agent + "-" + format_time(now(), "%Y%m%d-%H%M")
+            set out["branch"] to when git(["branch", "-m", branch, arch], c.ROOT)["ok"] then arch otherwise "kept " + branch
+    give out
+
 -- la rama principal del proyecto (la de la copia de la persona)
 export task main_branch()
     require exec

@@ -5,6 +5,8 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const STATUS = { active: 'trabajando', waiting: 'te espera', done: 'hecho', failed: 'falló', cancelled: 'cancelado', paused: 'sin presupuesto' };
 const short = (slug) => slug.replace(/-[0-9a-f]{8}$/, '');
+// la página de un objetivo en su proyecto: dentro de su equipo, o la de un agente solo
+const objUrl = (w, o) => '/w/' + esc(w.slug) + (o.team ? '/equipos/' + encodeURIComponent(o.team) + '/objetivos/' : '/objetivos/') + o.id;
 let data = [];
 
 async function post(path, body) {
@@ -26,7 +28,7 @@ function renderAttention() {
     for (const o of w.objectives.filter((o) => o.status === 'waiting')) {
       const ap = o.question_kind === 'approval'; const k = w.slug + ':' + o.id;
       html += `<div class="ask ${ap ? 'approval' : ''}"><span class="who">${esc(short(w.slug))} · ${esc(o.agent)} ${ap ? 'pide aprobación' : 'pregunta'}</span>
-        <div class="q"><a class="ref" href="/w/${esc(w.slug)}/equipos?o=${o.id}">${esc(o.ref)}</a> ${esc(o.question)}</div>
+        <div class="q"><a class="ref" href="${objUrl(w, o)}">${esc(o.ref)}</a> ${esc(o.question)}</div>
         <div class="acts">${ap ? `<input data-k="${esc(k)}" placeholder="nota (opcional)"><button class="ok" data-ok="${esc(k)}">Aprobar</button><button class="no" data-no="${esc(k)}">Denegar</button>`
           : `<input data-k="${esc(k)}" placeholder="tu respuesta"><button class="primary" data-ans="${esc(k)}">Responder</button>`}</div></div>`;
     }
@@ -60,7 +62,7 @@ function firstSentence(t) {
   return out.length > 150 ? out.slice(0, 147).replace(/\s+\S*$/, '') + '…' : out;
 }
 function objLine(w, o) {
-  return `<a class="oline" href="/w/${esc(w.slug)}/equipos?o=${o.id}"><span class="st ${o.status}">${STATUS[o.status] || o.status}</span><span class="otext">${esc(firstSentence(o.text))}</span></a>`;
+  return `<a class="oline" href="${objUrl(w, o)}"><span class="st ${o.status}">${STATUS[o.status] || o.status}</span><span class="otext">${esc(firstSentence(o.text))}</span></a>`;
 }
 function teamCard(w, t) {
   const mine = w.objectives.filter((o) => o.team === t.id);
@@ -71,7 +73,7 @@ function teamCard(w, t) {
     ${t.description ? `<p class="tdesc">${esc(t.description)}</p>` : ''}
     <div class="roles">${roles ? roles.map((r, i) => `<span class="role${i === 0 ? ' lead' : ''}"${i === 0 ? ' title="lo lidera"' : ''}>${esc(r)}</span>`).join('') : `<span class="role">${t.members} agente${t.members === 1 ? '' : 's'}</span><span class="role lead">lo lidera ${esc(t.lead)}</span>`}</div>
     <div class="tnow">${now.length ? now.map((o) => objLine(w, o) + (o.progress && o.status === 'active' ? `<p class="oprog">${esc(firstSentence(o.progress))}</p>` : '')).join('') : '<p class="tidle">Nada en curso. Dale un objetivo y el equipo se reparte el trabajo.</p>'}</div>
-    <div class="tacts"><a class="btn${now.length ? '' : ' primary'}" href="/w/${esc(w.slug)}/equipos?tab=objectives&objetivo=${encodeURIComponent(t.id)}">Darle un objetivo</a><a class="lnk" href="/w/${esc(w.slug)}/equipos?tab=teams">Ver el equipo</a></div>
+    <div class="tacts"><a class="btn${now.length ? '' : ' primary'}" href="/w/${esc(w.slug)}/equipos/${encodeURIComponent(t.id)}/objetivos/nuevo">Darle un objetivo</a><a class="lnk" href="/w/${esc(w.slug)}/equipos/${encodeURIComponent(t.id)}">Ver el equipo</a></div>
     ${done.length ? `<details class="tdone" data-key="${esc(key)}"${doneOpen.has(key) ? ' open' : ''}><summary>${done.length} objetivo${done.length === 1 ? '' : 's'} terminado${done.length === 1 ? '' : 's'}</summary>${done.map((o) => objLine(w, o)).join('')}</details>` : ''}
   </article>`;
 }

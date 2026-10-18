@@ -15,11 +15,7 @@
 </head>
 <body>
 <header class="tbar">
-  <nav class="crumbs" aria-label="dónde estás"><a href="/">Proyectos</a><span class="sep">›</span><a id="crProj" href="#" title="volver al proyecto"></a><span class="sep">›</span><span class="here">Equipos y objetivos</span></nav>
-  <nav class="tabs" id="tabs">
-    <button data-tab="objectives" class="on">Objetivos</button>
-    <button data-tab="teams">Equipos</button>
-  </nav>
+  <nav class="crumbs" id="crumbs" aria-label="dónde estás"></nav>
   <span class="spacer"></span>
   <a class="alllink" href="/equipos" title="equipos y objetivos de todos tus proyectos">todos los equipos</a>
   <span class="live" id="live" title="actualizado en vivo">en vivo</span>
@@ -29,33 +25,24 @@
 <!-- lo que espera a la persona: aprobaciones y preguntas de los objetivos (siempre visible) -->
 <section class="attention" id="attention" hidden></section>
 
-<main class="view" id="v-objectives">
-  <aside class="col list">
-    <div class="colhead"><span>Objetivos</span><button id="newObj" class="primary">+ nuevo</button></div>
-    <form class="newform" id="objForm" hidden>
-      <label>Agente <select id="fAgent"></select></label>
-      <label>¿Qué tiene que lograr?<textarea id="fText" rows="5" placeholder="Agregá a la API filtrar por estado, con tests. Trabajá en tu rama y pedí aprobación antes de mergear."></textarea></label>
-      <div class="row2">
-        <label>Ronda (s)<input id="fRound" type="number" min="5" value="20"></label>
-        <label>Presupuesto (tokens)<input id="fBudget" type="number" min="0" step="10000" value="500000"></label>
-      </div>
-      <div class="row2"><button type="submit" class="primary">Empezar</button><button type="button" id="fCancel">Cancelar</button></div>
-      <p class="ferr" id="fErr"></p>
-    </form>
-    <ul class="items" id="objList"></ul>
-  </aside>
-  <section class="col detail" id="objDetail">
-    <div class="empty">Elegí un objetivo, o creá uno con <b>+ nuevo</b>: un agente lo trabaja solo, en rondas, y te pide aprobación antes de cualquier cosa irreversible.</div>
-  </section>
-  <aside class="col timeline">
-    <div class="colhead"><span>Registro</span></div>
-    <ol class="log" id="objLog"></ol>
-  </aside>
-</main>
-
-<!-- equipos: las tarjetas de los equipos del proyecto (y «+ nuevo equipo»); el lienzo, al crear o editar uno -->
-<main class="view teamsview" id="v-teams" hidden>
-  <section class="tlist" id="tlist"></section>
+<!-- una página por nivel, cada una con su URL (js/teams.js lee la ruta):
+     /w/<p>/equipos                         los equipos del proyecto (y los objetivos de un agente solo)
+     /w/<p>/equipos/nuevo                   plantillas → el lienzo del equipo nuevo
+     /w/<p>/equipos/<equipo>                sus objetivos y rutinas
+     /w/<p>/equipos/<equipo>/editar         el lienzo
+     /w/<p>/equipos/<equipo>/objetivos/nuevo · /rutinas/nueva   el formulario
+     /w/<p>/equipos/<equipo>/objetivos/<n>  un objetivo (o una ejecución de una rutina)
+     /w/<p>/equipos/<equipo>/rutinas/<id>   una rutina y sus ejecuciones
+     /w/<p>/objetivos/<n>                   un objetivo de un agente solo -->
+<main class="view teamsview" id="v-teams">
+  <section class="tlist" id="tlist" hidden></section>
+  <section class="tlist" id="tpage" hidden></section>
+  <section class="tlist" id="rpage" hidden></section>
+  <div class="opage" id="opage" hidden>
+    <section class="odetail" id="objDetail"></section>
+    <aside class="odrawer" id="objDrawer" hidden><div class="odhead"><b id="odTitle">Registro</b><button type="button" class="iclose" id="odClose" title="cerrar">✕</button></div>
+      <ol class="log" id="objLog"></ol><div class="odseat" id="odSeat" hidden></div></aside>
+  </div>
   <div class="tedit" id="tedit" hidden>
     <div class="tsub editing" id="tsub"></div>
     <div class="canvas" id="canvas">
@@ -65,9 +52,11 @@
     </div>
   </div>
   <div class="ov ov-wizard" id="wizard" hidden></div>
+  <div class="ov ov-wizard" id="objNew" hidden></div>
 </main>
 
 <script src="/js/flow.js"></script>
 <script src="/js/teams.js"></script>
+<script src="/js/objlive.js"></script>
 </body>
 </html>

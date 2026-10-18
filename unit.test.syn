@@ -1672,6 +1672,7 @@ test "plugin orders: cotiza con promos, valida, guarda el pedido, baja el stock 
 
 -- ---------- equipos (lib/teams.syn) ----------
 use "./lib/teams.syn" as teams
+use "./lib/api.syn" as api
 
 task team_fixture()
     db_open(teams.DB)
@@ -1720,6 +1721,29 @@ test "equipos: el grafo es una regla — a quién le puede escribir cada uno"
     write_file(runtime.PROJECT_DIR + "/ttcmo.agent.json", json_encode({"id": "ttcmo", "system": "Eres ttcmo.", "tools": ["read"], "permission": "strict"}))
     let p be where(teams.pending(), (m) => m["scope"] == "team:t-test")
     assert(length(p) == 1 and p[0]["sender"] == "ttdev" and p[0]["recipient"] == "ttcto")
+
+test "rutinas: una tarea programada le da un objetivo al equipo; si la ejecución anterior sigue abierta, se saltea"
+    team_fixture()
+    let r be schedule.add({"name": "test rutina", "when": "daily 09:00", "action": {"type": "objective", "team": "t-test", "text": "Armá el resumen de la semana"}})
+    assert_eq(r["action"]["type"], "objective")
+    assert(contains(schedule.describe_action(r["action"]), "objective for team t-test"))
+    let mine be "rutina:" + r["id"]
+    let out be schedule.run_simple(r)
+    assert(starts_with(out, "O-") and contains(out, "team t-test"), out)
+    let runs be where(teams.obj_list(), (o) => o["created_by"] == mine)
+    assert(length(runs) == 1 and runs[0]["team"] == "t-test" and runs[0]["agent"] == "ttceo" and runs[0]["status"] == "active", "una ejecución: un objetivo del líder")
+    assert(starts_with(schedule.run_simple(r), "SKIPPED"), "la anterior sigue abierta: no se amontonan")
+    teams.obj_cancel(runs[0]["id"], "person")
+    assert(starts_with(schedule.run_simple(r), "O-"), "cerrada la anterior, la rutina vuelve a crear")
+    each o in where(teams.obj_list(), (x) => x["created_by"] == mine and x["status"] == "active")
+        teams.obj_cancel(o["id"], "person")
+    let bad be ""
+    try
+        schedule.add({"when": "daily 09:00", "action": {"type": "objective", "team": "no-existe", "text": "x"}})
+    recover err
+        set bad to text(err)
+    assert(contains(bad, "id of a team"), bad)
+    schedule.remove(r["id"])
 
 test "equipos: un miembro tiene send y board, su rol en el prompt, y opts sabe quién es"
     team_fixture()
@@ -1863,6 +1887,13 @@ test "worktree: en un repo, cada agente tiene su copia, su rama y su autor (y .l
     assert(contains(read_file("workspace/.git/info/exclude"), "/.lampson/"))
     assert(worktree.ensure("t", "dev", {"name": "Dev (Lampson)", "email": "dev@lampson.local"})["ok"], "la segunda vez la reusa")
     assert(not contains(run("git", ["status", "--porcelain"], 30, {"cwd": "workspace"})["stdout"], ".lampson/"), "las copias no ensucian la copia principal")
+    -- al borrar el equipo: la copia se va y lo que no llegó a main (incluso sin commitear) queda en una rama archive/
+    write_file("workspace/.lampson/worktrees/dev/nuevo.txt", "trabajo a medias")
+    let rt be worktree.retire("t", "dev")
+    assert(rt["copy"] == "removed" and starts_with(rt["branch"], "archive/t/dev-"), json_encode(rt))
+    assert(not file_exists("workspace/.lampson/worktrees/dev/.git"), "la copia se fue")
+    assert(contains(run("git", ["show", rt["branch"] + ":nuevo.txt"], 30, {"cwd": "workspace"})["stdout"], "trabajo a medias"), "el trabajo quedó en la rama archivada")
+    assert(run("git", ["rev-parse", "--verify", "refs/heads/team/t/dev"], 30, {"cwd": "workspace"})["exit_code"] != 0, "la rama del asiento quedó libre")
 
 test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del equipo y suma el gasto de todos"
     let t be team_fixture()
@@ -1877,6 +1908,15 @@ test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del
     assert_eq(teams.objective_tool("report", "repartido", "ttceo", "team:t-test"), "reported")
     assert(contains(teams.objective_tool("report", "x", "ttdev", "team:t-test"), "don't lead"))
     assert(length(where(teams.ledger("team:t-test", 0, 50), (r) => r["kind"] == "report")) == 1, "el informe va al registro del equipo")
+    -- las tareas del tablero del equipo saben de qué objetivo son; la vista del objetivo muestra solo las suyas y quién
+    -- trabajó (los asientos, con su sesión en la conversación del equipo)
+    sql_exec("UPDATE tasks SET objective = 0 WHERE scope = 'team:t-test'")
+    assert(contains(board("ttceo", {"action": "add", "title": "login de la v2", "owner": "ttdev"}), "#"))
+    let mine be where(teams.tasks("team:t-test"), (x) => x["title"] == "login de la v2")
+    assert(length(mine) == 1 and mine[0]["objective"] == id, "la tarea nueva es del objetivo abierto del equipo")
+    let v be api.objective_view(teams.obj_get(id))
+    assert(length(v["tasks"]) == 1 and v["tasks"][0]["title"] == "login de la v2", "solo las tareas de este objetivo")
+    assert(length(v["seats"]) == 4 and length(where(v["seats"], (x) => x["lead"])) == 1 and where(v["seats"], (x) => x["lead"])[0]["agent"] == "ttceo", "los asientos, con el líder marcado")
     teams.team_turn_end("t-test", "ttdev", 300)
     teams.team_turn_end("t-test", "ttceo", 200)
     let o2 be teams.obj_get(id)
@@ -1886,6 +1926,22 @@ test "objetivos de equipo: lo lidera el primero sin jefe, vive en el tablero del
         rm_file(runtime.PROJECT_DIR + "/" + a + ".agent.json")
     rm_file(teams.DIR + "/t-test.team.json")
 
+
+test "equipos: borrar uno cancela sus objetivos en curso, borra su archivo y sus agentes (si no los usa otro equipo)"
+    let t be team_fixture()
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    let id be teams.obj_create("ttceo", "algo", {"team": "t-test", "created_by": "test"})
+    teams.add_task("team:t-test", "ttceo", "tarea vieja", "", "ttdev", [])
+    assert(not api.delete_team({"id": "no-existe"})["ok"])
+    let r be api.delete_team({"id": "t-test", "agents": true})
+    assert(r["ok"] and r["cancelled"] == ["O-" + text(id)], json_encode(r))
+    assert_eq(teams.obj_get(id)["status"], "cancelled")
+    assert(not file_exists(teams.DIR + "/t-test.team.json"), "el archivo del equipo se fue")
+    assert_eq(teams.get("t-test"), nothing)
+    assert(length(r["agents"]) == 4 and not file_exists(runtime.PROJECT_DIR + "/ttceo.agent.json"), "sus agentes también")
+    -- un equipo nuevo con el mismo nombre arranca de cero: el tablero viejo quedó archivado con su objetivo
+    assert_eq(length(teams.tasks("team:t-test")), 0, "el tablero viejo no lo hereda nadie")
+    assert(length(teams.tasks("team:" + r["archived"])) == 1 and teams.obj_get(id)["team"] == r["archived"], "el historial sigue, archivado")
 
 test "workspaces: /w/<nombre> sin el hash resuelve al workspace si hay uno solo con ese nombre"
     let reg be wsp.all()

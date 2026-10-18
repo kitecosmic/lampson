@@ -23,6 +23,8 @@ use "./runtime.syn" as runtime
 use "./apikeys.syn" as apikeys
 use "./mailbox.syn" as mailbox
 use "./teams.syn" as teams
+use "./schedule.syn" as schedule
+use "./worktree.syn" as worktree
 
 
 -- la key del header Authorization (o nothing)
@@ -71,6 +73,10 @@ export task agents_for(rec)
         when apikeys.allows(rec, id)
             set out to append(out, {"id": id, "description": runtime.get(id)["description"]})
     give out
+
+-- la sesión de un asiento en un objetivo: la que quedó anotada; si no hay (objetivos de antes), la del thread
+task pick_session(own, thread_sid)
+    give when own != "" then own otherwise thread_sid
 
 task field(m, k, fallback)
     when contains(m, k)
@@ -160,10 +166,28 @@ export task objective_view(o)
     require db(".lampson/teams.db")
     require file(".lampson")
     require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
     let scope be teams.obj_scope(o)
-    let ts be apply(teams.tasks(scope), (t) => {"id": t["id"], "title": t["title"], "status": t["status"], "owner": t["owner"], "notes": t["notes"], "depends": json_decode(t["depends"])})
-    let lg be apply(teams.ledger(scope, 0, 100), (r) => {"id": r["id"], "at": r["at"], "actor": r["actor"], "kind": r["kind"], "ref": r["ref"], "text": r["text"]})
-    give {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "result": o["result"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "round_seconds": o["round_seconds"], "created_at": o["created_at"], "updated_at": o["updated_at"], "tasks": ts, "ledger": lg}
+    let team_obj be field(o, "team", "") != ""
+    -- el tablero y el registro de un equipo son de todos sus objetivos: acá, solo lo de este (sus tareas; el registro
+    -- de mientras estuvo abierto)
+    let mine be when team_obj then where(teams.tasks(scope), (t) => field(t, "objective", 0) == o["id"]) otherwise teams.tasks(scope)
+    let ts be apply(mine, (t) => {"id": t["id"], "title": t["title"], "status": t["status"], "owner": t["owner"], "notes": t["notes"], "depends": json_decode(t["depends"])})
+    let closed be not contains(["active", "waiting", "paused"], o["status"])
+    let rows be when team_obj then where(teams.ledger(scope, 0, 400), (r) => r["at"] >= o["created_at"] - 2 and (not closed or r["at"] <= o["updated_at"] + 60)) otherwise teams.ledger(scope, 0, 150)
+    let lg be apply(slice(rows, 0, min(150, length(rows))), (r) => {"id": r["id"], "at": r["at"], "actor": r["actor"], "kind": r["kind"], "ref": r["ref"], "text": r["text"]})
+    -- quién trabajó y dónde quedó cada paso: la sesión de cada asiento en la conversación del objetivo (la pantalla lee
+    -- su traza con /api/trace y la recorta a la ventana del objetivo)
+    let seats be []
+    when team_obj
+        let tm be teams.get(o["team"])
+        when tm != nothing
+            each m in tm["members"]
+                set seats to append(seats, {"agent": m["agent"], "role": m["role"], "lead": m["agent"] == o["agent"], "today": teams.spent_today(m["agent"]), "cap": tm["budget_daily_tokens"], "session": pick_session(teams.seat_session_of(o["id"], m["agent"]), runtime.thread_session(m["agent"], scope))})
+    otherwise
+        set seats to [{"agent": o["agent"], "role": o["agent"], "lead": true, "session": runtime.thread_session(o["agent"], "objective:" + text(o["id"]))}]
+    give {"id": o["id"], "ref": "O-" + text(o["id"]), "agent": o["agent"], "team": o["team"], "text": o["text"], "status": o["status"], "progress": o["progress"], "question": o["question"], "question_kind": o["question_kind"], "result": o["result"], "turns": o["turns"], "spent": o["spent"], "budget_tokens": o["budget_tokens"], "round_seconds": o["round_seconds"], "created_at": o["created_at"], "updated_at": o["updated_at"], "created_by": o["created_by"], "tasks": ts, "ledger": lg, "seats": seats}
 
 -- POST /v1/objectives: {agent, text, round_seconds?, budget_tokens?} → {ok, id} / {ok: false, status, error}
 export task create_objective(body, rec)
@@ -193,7 +217,7 @@ export task create_objective(body, rec)
         give {"ok": false, "status": 403, "error": "this API key can't use agent '" + agent + "'"}
     when trim(text(field(body, "text", ""))) == ""
         give {"ok": false, "status": 400, "error": "text is required"}
-    let opts be {"budget_tokens": field(body, "budget_tokens", 500000), "created_by": "api:" + rec["name"], "team": tid}
+    let opts be {"budget_tokens": field(body, "budget_tokens", 600000), "created_by": "api:" + rec["name"], "team": tid}
     when field(body, "round_seconds", nothing) != nothing
         set opts["round_seconds"] to body["round_seconds"]
     let id be teams.obj_create(agent, field(body, "text", ""), opts)
@@ -237,6 +261,60 @@ export task teams_view()
 -- guardar un equipo desde la pantalla: el archivo del equipo y los de sus agentes (los que vienen). Cada agente
 -- conserva lo que su archivo ya tenía y pisa solo lo que se editó. → {ok, error}
 export let TOOL_PRESETS be {"code": ["read", "write", "edit", "ls", "find", "grep", "bash", "todo"], "read": ["read", "ls", "find", "grep", "bash"], "none": []}
+
+-- borrar un equipo: {id, agents?}. Se cancelan sus objetivos en curso y se borran sus rutinas (sin equipo no tienen a
+-- quién darle el trabajo); con agents=true (lo que manda la pantalla), también los archivos de sus agentes, salvo el
+-- que está en otro equipo: se crearon para este y sueltos solo confunden. Lo que hizo
+-- queda: el historial de sus objetivos y sus ramas de git. → {ok, cancelled, routines, agents} / {ok: false, error}
+export task delete_team(body)
+    require db(".lampson/teams.db")
+    require time
+    require exec
+    require env("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    let id be lower(text(field(body, "id", "")))
+    let team be teams.get(id)
+    when team == nothing
+        give {"ok": false, "error": "no team '" + id + "'"}
+    let cancelled be []
+    each o in teams.obj_list()
+        when o["team"] == id and contains(["active", "waiting", "paused"], o["status"])
+            teams.obj_cancel(o["id"], "person")
+            set cancelled to append(cancelled, "O-" + text(o["id"]))
+    let routines be []
+    each t in schedule.all()
+        let a be field(t, "action", nothing)
+        when a != nothing and type_of(a) == "map" and field(a, "type", "") == "objective" and field(a, "team", "") == id
+            schedule.remove(t["id"])
+            set routines to append(routines, t["id"])
+    let others be []
+    each t in teams.all()
+        when t["id"] != id
+            each m in t["members"]
+                set others to append(others, m["agent"])
+    teams.log("team:" + id, "person", "team deleted", "", text(length(cancelled)) + " objectives cancelled, " + text(length(routines)) + " routines removed")
+    -- que un equipo nuevo con el mismo nombre arranque de cero: tablero y registro archivados, conversaciones olvidadas,
+    -- y la copia de git de cada asiento propio retirada (su trabajo sin mergear queda en una rama archive/…)
+    let archived be teams.archive(id)
+    let gone be []
+    let branches be []
+    each m in team["members"]
+        runtime.forget_thread(m["agent"], "team:" + id)
+        when not contains(others, m["agent"])
+            let w be worktree.retire(id, m["agent"])
+            when starts_with(w["branch"], "archive/")
+                set branches to append(branches, w["branch"])
+            when field(body, "agents", false) == true
+                let path be runtime.PROJECT_DIR + "/" + m["agent"] + runtime.SUFFIX
+                when file_exists(path)
+                    delete_file(path)
+                    set gone to append(gone, m["agent"])
+                teams.forget_spend(m["agent"])
+    delete_file(teams.DIR + "/" + id + ".team.json")
+    give {"ok": true, "cancelled": cancelled, "routines": routines, "agents": gone, "archived": archived, "branches": branches}
 
 export task save_team(body)
     require db(".lampson/teams.db")

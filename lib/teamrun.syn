@@ -43,7 +43,18 @@ export task deliver_to(team, agent, sender, head)
     when spec == nothing
         teams.log("team:" + team["id"], "lampson", "error", "", "no agent file for '" + agent + "' — create .lampson/agents/" + agent + ".agent.json")
         give false
-    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head), "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
+    -- su primer turno en un objetivo: conversación nueva (el tablero, el registro y git ya cuentan lo anterior)
+    let oid be teams.objective_of_scope("team:" + team["id"])
+    when oid != 0 and teams.seat_session_of(oid, agent) == ""
+        runtime.forget_thread(agent, "team:" + team["id"])
+    -- quién está en medio de un turno: sus mensajes le llegan cuando termina. (Visto 2026-10-17: el CEO le preguntó
+    -- tres veces al CMO, que estaba documentando, no le contestó, y le pasó su tarea al CTO: los dos hicieron lo mismo.)
+    let busy be []
+    each m in team["members"]
+        when m["agent"] != agent and mailbox.working(m["agent"], "team:" + team["id"])
+            set busy to append(busy, m["agent"])
+    let now_line be when length(busy) == 0 then "" otherwise "\nWorking right now (your messages reach them when their turn ends — wait for them, don't reassign their tasks): " + join(busy, ", ")
+    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head) + now_line, "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
     mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, false)})
     give true
 
