@@ -16,6 +16,15 @@
 //           (default console.warn) and in lampson.warnings.
 //           `lampsonTools: false` → no tool of Lampson's own exists in that process (bash, read, write, fetch…),
 //           not even for the built-in agents: your agents get only the tools you give them.
+//           Your own tools in Synsema: one file per tool in <workspace>/.lampson/tools/ (or `tools: "./tools"`,
+//           inside the workspace) — `export task <file name>(…)`, an `intent:` line and its `require`s, which are
+//           all it can touch. List the name in the agent's "tools". See lampson.org/docs/sdk.
+//
+//   lampson.tool("order_status", { description, inputSchema, execute: async (args, ctx) => … })   local mode
+//           a function of YOUR app as a tool (the AI SDK shape: zod, a JSON Schema or jsonSchema()). It runs in your
+//           process; Lampson asks for it over stdio. `ctx` = {from, thread, agent, session, meta, channel} of the
+//           message — set by your app, never seen or written by the model. List the name in the agent's "tools".
+//           lampson.tools({ order_status: tool({...}), ... }) registers several (an AI SDK tools object as is).
 //
 //   new Lampson({ agent: "support", ... })   the agent that answers when a message does not say `agent`
 //           (without it, the workspace default: "build", Lampson's coding agent, with all of Lampson's tools)
@@ -120,6 +129,39 @@ class HttpTransport {
 
 // ---------- local mode: `lampson run --stdio` as a child process ----------
 
+// ---------- your app's functions as tools (local mode) ----------
+
+const TOOL_NAME = /^[a-z][a-z0-9_]{0,39}$/;
+const TAKEN = ['read', 'write', 'edit', 'ls', 'find', 'grep', 'lsp', 'fetch', 'bash', 'process', 'memory', 'todo', 'skill', 'mcp', 'plugin', 'schedule', 'computer_use', 'delegate', 'send', 'board', 'objective'];
+
+// a JSON Schema from what the AI SDK world passes: jsonSchema(...) wrappers, zod (v4: z.toJSONSchema, v3 needs
+// zod-to-json-schema in the app) or a plain JSON Schema object
+function toJsonSchema(s, name) {
+  if (s == null) return { type: 'object', properties: {} };
+  if (s.jsonSchema && typeof s.jsonSchema === 'object') return s.jsonSchema;
+  if (typeof s.toJSONSchema === 'function') return s.toJSONSchema();
+  if (s._zod || s._def) {
+    const { createRequire } = require('module');
+    const req = createRequire(path.join(process.cwd(), 'noop.js'));
+    try { const z = req('zod'); if (typeof z.toJSONSchema === 'function') return z.toJSONSchema(s); } catch {}
+    try { return req('zod-to-json-schema').zodToJsonSchema(s); } catch {}
+    throw new TypeError('tool ' + name + ': cannot turn this zod schema into JSON Schema (zod 4 has z.toJSONSchema; with zod 3 install zod-to-json-schema), or pass `parameters` as a JSON Schema');
+  }
+  if (typeof s === 'object') return s;
+  throw new TypeError('tool ' + name + ': inputSchema/parameters must be a zod schema or a JSON Schema object');
+}
+
+function toolSpec(name, def) {
+  if (!TOOL_NAME.test(name || '')) throw new TypeError('tool name "' + name + '": lowercase letters, digits and _ (max 40), starting with a letter');
+  if (TAKEN.includes(name)) throw new TypeError('tool name "' + name + '" is a name Lampson already uses');
+  if (!def || typeof def.execute !== 'function') throw new TypeError('tool ' + name + ': needs execute(args, ctx)');
+  const schema = def.inputSchema || def.parameters;
+  return {
+    wire: { name, description: String(def.description || ''), parameters: toJsonSchema(schema, name), timeout: def.timeout },
+    schema, execute: def.execute,
+  };
+}
+
 function killTree(child) {
   try {
     if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
@@ -128,7 +170,7 @@ function killTree(child) {
 }
 
 class LocalTransport {
-  constructor({ workspace, home, env, lampsonTools, spawn: spawnSpec }, onWarning) {
+  constructor({ workspace, home, env, lampsonTools, tools, spawn: spawnSpec }, onWarning) {
     if (!workspace && !spawnSpec) throw new TypeError('local.workspace is required (the project folder the agents work in)');
     let command, args, cwd;
     if (spawnSpec) {
@@ -145,8 +187,15 @@ class LocalTransport {
     // inside the project (2026-10-18)
     if (home) childEnv.LAMPSON_HOME = path.resolve(home);
     if (lampsonTools === false) childEnv.LAMPSON_BUILTIN_TOOLS = 'off';
+    if (tools) {
+      // the tools folder lives in the project (Lampson only reads inside it): pass it relative to the workspace
+      const rel = path.relative(path.resolve(workspace || '.'), path.resolve(tools)).split(path.sep).join('/');
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new TypeError('local.tools must be a folder inside local.workspace, got ' + tools);
+      childEnv.LAMPSON_TOOLS_DIR = rel;
+    }
     this.warnings = [];
     this.onWarning = onWarning;
+    this.tools = new Map();     // name → { wire, schema, execute }
     this.child = spawn(command, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.pending = new Map();   // id → { onEvent, done }
     this.seq = 0;
@@ -172,6 +221,8 @@ class LocalTransport {
       return;
     }
     if (m.kind === 'warning') this.warn(m.data);
+    if (m.kind === 'tool_request') { this.runTool(m.data || {}); return; }
+    if (m.kind === 'tools') { for (const e of (m.data && m.data.errors) || []) this.warn(e); return; }
     const p = this.pending.get(m.id);
     if (!p) return;
     p.onEvent(m);
@@ -184,8 +235,37 @@ class LocalTransport {
   }
   warn(w) {
     if (this.warnings.includes(w)) return;      // ready lists them all; each ask repeats its agent's
+    // "tool 'x' is not available" for a tool this app registers (ready can come before lampson.tool()) is not real
+    const mt = /tool '([a-z0-9_]+)' is not available: no Lampson tool/.exec(w);
+    if (mt && this.tools.has(mt[1])) return;
     this.warnings.push(w);
     if (this.onWarning) this.onWarning(w);
+  }
+  setTools(list) {
+    for (const t of list) this.tools.set(t.wire.name, t);
+    // a warning about a tool that now exists is no longer true
+    this.warnings = this.warnings.filter(w => { const mt = /tool '([a-z0-9_]+)' is not available: no Lampson tool/.exec(w); return !(mt && this.tools.has(mt[1])); });
+    if (this.exited) throw new LampsonError('lampson is not running');
+    // no pending entry: the answer ("tools") only carries errors, handled in onLine
+    this.child.stdin.write(JSON.stringify({ id: 't' + (++this.seq), op: 'tools', tools: [...this.tools.values()].map(t => t.wire) }) + '\n');
+  }
+  async runTool({ call_id, name, args, ctx }) {
+    const reply = r => { if (!this.exited) this.child.stdin.write(JSON.stringify(Object.assign({ op: 'tool_result', call_id }, r)) + '\n'); };
+    const t = this.tools.get(name);
+    if (!t) return reply({ error: 'the app has no tool ' + name });
+    try {
+      let input = args || {};
+      // a zod inputSchema validates what the model wrote before your code sees it
+      if (t.schema && typeof t.schema.safeParse === 'function') {
+        const v = t.schema.safeParse(input);
+        if (!v.success) return reply({ error: 'invalid arguments for ' + name + ': ' + ((v.error && v.error.message) || 'schema mismatch') });
+        input = v.data;
+      }
+      const out = await t.execute(input, Object.freeze(Object.assign({}, ctx || {})));
+      reply({ output: out === undefined ? null : out });
+    } catch (e) {
+      reply({ error: (e && e.message) || String(e) });
+    }
   }
   onExit(code, err) {
     this.exited = { code, err };
@@ -242,7 +322,7 @@ class LocalTransport {
 
 class Lampson {
   /**
-   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, lampsonTools?, spawn? } };
+   * @param {object} opts  { url, key } for server mode, or { local: { workspace, home?, env?, lampsonTools?, tools?, spawn? } };
    *                        agent? — the default agent; onWarning?(message) — default console.warn
    */
   constructor(opts = {}) {
@@ -266,6 +346,21 @@ class Lampson {
     const env = envelope(this.withAgent(msg));
     if (env.callback) throw new TypeError('stream does not take a callback (use ask)');
     yield* this.transport.stream(env);
+  }
+  /**
+   * Local mode: a function of your app as a tool. The AI SDK shape: { description, inputSchema (zod or JSON Schema)
+   * or parameters, execute(args, ctx), timeout? (s, default 60) }. List its name in the agent's "tools".
+   */
+  tool(name, def) {
+    if (this.mode !== 'local') throw new LampsonError('lampson.tool() needs local mode for now (in server mode, write the tool in Synsema: .lampson/tools/<name>.syn)');
+    this.transport.setTools([toolSpec(name, def)]);
+    return this;
+  }
+  /** Several at once: { name: { description, inputSchema, execute } } — an AI SDK tools object works as is. */
+  tools(map) {
+    if (this.mode !== 'local') throw new LampsonError('lampson.tools() needs local mode for now (in server mode, write the tools in Synsema: .lampson/tools/)');
+    this.transport.setTools(Object.entries(map || {}).map(([n, d]) => toolSpec(n, d)));
+    return this;
   }
   /** Local mode: tools some agent lists but will not have (plugin off, typo), one message each. */
   get warnings() { return this.transport.warnings || []; }

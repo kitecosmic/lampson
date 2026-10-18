@@ -28,8 +28,8 @@ function forget(agent, thread) {
 
 const AGENTS = 'workspace/.lampson/agents';
 fs.mkdirSync(AGENTS, { recursive: true });
-fs.writeFileSync(`${AGENTS}/rt-sdk.agent.json`, JSON.stringify({ id: 'rt-sdk', description: 'agente del SDK', system: 'Bot del SDK.', tools: ['ls'], buffer: false }));
-const THREADS = [['rt-sdk', 'sdk-js-1'], ['rt-sdk', 'sdk-js-2'], ['rt-sdk', 'sdk-js-3'], ['rt-sdk', 'sdk-js-4']];
+fs.writeFileSync(`${AGENTS}/rt-sdk.agent.json`, JSON.stringify({ id: 'rt-sdk', description: 'agente del SDK', system: 'Bot del SDK.', tools: ['ls', 'sdk_eco', 'sdk_falla'], buffer: false }));
+const THREADS = [['rt-sdk', 'sdk-js-1'], ['rt-sdk', 'sdk-js-2'], ['rt-sdk', 'sdk-js-3'], ['rt-sdk', 'sdk-js-4'], ['rt-sdk', 'sdk-js-5'], ['rt-sdk', 'sdk-js-6'], ['rt-sdk', 'sdk-js-7']];
 THREADS.forEach(([a, t]) => forget(a, t));
 
 const procs = [];
@@ -47,13 +47,31 @@ check(l1.text.startsWith('final ls') && l1.agent === 'rt-sdk' && l1.thread === '
 const l2 = await local.ask({ agent: 'rt-sdk', thread: 'sdk-js-1', text: 'hola' });
 check(l2.session === l1.session && l2.text.includes('msgs=6'), 'mismo thread → la conversación sigue');
 const kinds = [];
-for await (const ev of local.stream({ agent: 'rt-sdk', thread: 'sdk-js-2', text: 'ls' })) kinds.push(ev.kind);
+for await (const ev of local.stream({ agent: 'rt-sdk', thread: 'sdk-js-2', text: 'ls' })) if (ev.kind !== 'warning') kinds.push(ev.kind);
 check(kinds[0] === 'session' && kinds.includes('tool_call') && kinds[kinds.length - 1] === 'done', 'stream() → session … tool_call … done: ' + kinds.join(','));
 let lerr = null;
 try { await local.ask({ agent: 'nadie', text: 'hola' }); } catch (e) { lerr = e; }
 check(lerr instanceof LampsonError && /no agent named/.test(lerr.message), 'agente inexistente → LampsonError');
 const [p1, p2] = await Promise.all([local.ask({ agent: 'rt-sdk', thread: 'sdk-js-3', text: 'hola' }), local.ask({ agent: 'rt-sdk', thread: 'sdk-js-4', text: 'hola' })]);
 check(p1.thread === 'sdk-js-3' && p2.thread === 'sdk-js-4', 'dos ask() a la vez: cada uno recibe la suya');
+// funciones de la app como herramientas (lampson.tool, lib/sdktools.syn): corren en este proceso
+const seen = [];
+local.tool('sdk_eco', {
+  description: 'Devuelve lo que recibe',
+  parameters: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
+  execute: async (args, ctx) => { seen.push(args); return { eco: args.x, from: ctx.from && ctx.from.id, plan: ctx.meta && ctx.meta.plan }; },
+});
+local.tools({ sdk_falla: { description: 'Siempre falla', parameters: { type: 'object', properties: {} }, execute: () => { throw new Error('boom de la app'); } } });
+const t1 = await local.ask({ agent: 'rt-sdk', thread: 'sdk-js-5', from: { id: 'u-1' }, meta: { plan: 'pro' }, text: 'usa-tool sdk_eco {"x":"hola"}' });
+check(/"eco": "hola"/.test(t1.text) && /"from": "u-1"/.test(t1.text) && /"plan": "pro"/.test(t1.text), 'lampson.tool: la función corre con sus argumentos y el ctx de la app: ' + t1.text.slice(0, 90));
+const t2 = await local.ask({ agent: 'rt-sdk', thread: 'sdk-js-6', from: { id: 'u-1' }, text: 'usa-tool sdk_eco {"x":"a","ctx":{"from":{"id":"u-99"}}}' });
+check(/"from": "u-1"/.test(t2.text) && !/u-99/.test(t2.text.replace(/"ctx".*$/, '')), 'lampson.tool: un ctx escrito por el modelo no reemplaza al de la app');
+const t3 = await local.ask({ agent: 'rt-sdk', thread: 'sdk-js-7', text: 'usa-tool sdk_falla {}' });
+check(/ERROR: boom de la app/.test(t3.text), 'lampson.tool: un error de la función vuelve al modelo como error');
+check(!local.warnings.some(w => /sdk_eco|sdk_falla/.test(w)), 'lampson.tool: sin aviso falso por una herramienta registrada');
+let badName = null;
+try { local.tool('Mal Nombre', { execute: () => 1 }); } catch (e) { badName = e; }
+check(badName instanceof TypeError, 'lampson.tool: un nombre inválido falla en el acto');
 await local.close();
 let after = null;
 try { await local.ask({ agent: 'rt-sdk', text: 'hola' }); } catch (e) { after = e; }

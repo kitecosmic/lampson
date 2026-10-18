@@ -1,0 +1,73 @@
+-- lib/sdktools.syn — herramientas que son funciones de la app (JS / Python), registradas con lampson.tool() del SDK
+--
+-- Solo en `lampson run --stdio` (el modo local del SDK): la función corre DENTRO del proceso de la app, con su base
+-- de datos, su auth y sus tipos. Lampson pone lo suyo: qué agente la tiene (la lista de tools del agente), aprobación
+-- ("approve" del agente), plazo y el registro de la llamada. Lo que hace la función adentro es de la app: no hay techo
+-- de Synsema (para eso, una herramienta .syn — lib/apptools.syn).
+--
+-- Protocolo (run.syn):
+--   SDK → Lampson  {"op": "tools", "tools": [{name, description, parameters, timeout?}]}   reemplaza la lista entera
+--   Lampson → SDK  {"id": "", "kind": "tool_request", "data": {call_id, name, args, ctx}}
+--   SDK → Lampson  {"op": "tool_result", "call_id", "output"} | {…, "error"}
+-- La lista vive en el blackboard ("sdk:tools"): la escribe el hilo principal y la leen los StdioJob. La respuesta
+-- vuelve por el bus ("sdktool.result"); cada llamada espera la suya por call_id.
+
+use "./apptools.syn" as apptools
+
+export let MARK be "sdktool"
+let DEFAULT_TIMEOUT be 60
+let MAX_TIMEOUT be 600
+
+-- valida y normaliza lo que mandó el SDK → {tools, errors}
+export task normalize(raw)
+    let out be []
+    let errors be []
+    when type_of(raw) != "list"
+        give {"tools": [], "errors": ["tools must be a list"]}
+    each t in raw
+        let n be when type_of(t) == "map" then text(get(t, "name", "")) otherwise ""
+        when not matches(n, "[a-z][a-z0-9_]{0,39}")
+            set errors to append(errors, "tool name '" + n + "': lowercase letters, digits and _ (max 40), starting with a letter")
+        otherwise when contains(apptools.TAKEN, n) or starts_with(n, "plugin_") or starts_with(n, "mcp_")
+            set errors to append(errors, "tool name '" + n + "' is a name Lampson already uses")
+        otherwise
+            let ps be get(t, "parameters", {})
+            let tmo be number(get(t, "timeout", DEFAULT_TIMEOUT), DEFAULT_TIMEOUT)
+            set out to append(out, {"name": n, "description": text(get(t, "description", "")), "parameters": when type_of(ps) == "map" then ps otherwise {"type": "object", "properties": {}}, "timeout": when tmo <= 0 then DEFAULT_TIMEOUT otherwise (when tmo > MAX_TIMEOUT then MAX_TIMEOUT otherwise tmo)})
+    give {"tools": out, "errors": errors}
+
+export task all()
+    observe "sdk:tools" as st
+    when st == nothing or type_of(st) != "map"
+        give []
+    give st["tools"]
+
+export task names()
+    give apply((t) => t["name"], all())
+
+export task catalog(allowed_names)
+    give apply((t) => {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}, where(all(), (t) => contains(allowed_names, t["name"])))
+
+-- pedirle la llamada a la app y esperar su respuesta (o el plazo)
+export task call(name, args, ctx)
+    require time
+    require random
+    let f be where(all(), (t) => t["name"] == name)
+    when length(f) == 0
+        give "ERROR: the app has no tool '" + name + "' registered (lampson.tool)"
+    let cid be token()
+    let sub be bus_subscribe(["sdktool.result"], {"max_queue": 1000, "on_full": "drop_oldest"})
+    bus_publish("stdio.out", {"id": "", "kind": "tool_request", "data": {"call_id": cid, "name": name, "args": when args == nothing then {} otherwise args, "ctx": when ctx == nothing then {} otherwise ctx}})
+    let deadline be now() + f[0]["timeout"]
+    let res be nothing
+    while res == nothing and now() < deadline
+        let ev be bus_recv(sub, deadline - now())
+        when ev != nothing and type_of(ev["data"]) == "map" and get(ev["data"], "call_id", "") == cid
+            set res to ev["data"]
+    bus_unsubscribe(sub)
+    when res == nothing
+        give "ERROR: the app did not answer tool '" + name + "' within " + text(f[0]["timeout"]) + "s"
+    when get(res, "error", nothing) != nothing
+        give "ERROR: " + text(res["error"])
+    let o be get(res, "output", nothing)
+    give when o == nothing then "(no output)" otherwise (when type_of(o) == "text" then o otherwise json_encode(o))

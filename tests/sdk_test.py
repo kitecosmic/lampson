@@ -64,8 +64,8 @@ def forget(agent, thread):
 AGENTS = "workspace/.lampson/agents"
 os.makedirs(AGENTS, exist_ok=True)
 with open(AGENTS + "/rt-sdkpy.agent.json", "w", encoding="utf-8") as f:
-    json.dump({"id": "rt-sdkpy", "description": "agente del SDK de Python", "system": "Bot del SDK.", "tools": ["ls"], "buffer": False}, f)
-THREADS = [("rt-sdkpy", t) for t in ("py-1", "py-2", "py-3")]
+    json.dump({"id": "rt-sdkpy", "description": "agente del SDK de Python", "system": "Bot del SDK.", "tools": ["ls", "py_eco"], "buffer": False}, f)
+THREADS = [("rt-sdkpy", t) for t in ("py-1", "py-2", "py-3", "py-4")]
 for a, t in THREADS:
     forget(a, t)
 procs = []
@@ -80,7 +80,7 @@ with Lampson(local={"spawn": {"command": "synsema", "args": ["run", "run.syn"], 
     check(l1["text"].startswith("final ls") and l1["thread"] == "py-1", "ask() → respuesta: " + l1["text"][:40])
     l2 = local.ask(agent="rt-sdkpy", thread="py-1", text="hola")
     check(l2["session"] == l1["session"] and "msgs=6" in l2["text"], "mismo thread → la conversación sigue")
-    kinds = [ev["kind"] for ev in local.stream(agent="rt-sdkpy", thread="py-2", text="ls")]
+    kinds = [ev["kind"] for ev in local.stream(agent="rt-sdkpy", thread="py-2", text="ls") if ev["kind"] != "warning"]
     check(kinds[0] == "session" and "tool_call" in kinds and kinds[-1] == "done", "stream() → session … tool_call … done: " + ",".join(kinds))
     try:
         local.ask(agent="nadie", text="hola")
@@ -88,6 +88,15 @@ with Lampson(local={"spawn": {"command": "synsema", "args": ["run", "run.syn"], 
     except LampsonError as e:
         err = e
     check(err is not None and "no agent named" in str(err), "agente inexistente → LampsonError")
+    # funciones de la app como herramientas (@lampson.tool, lib/sdktools.syn): corren en este proceso
+
+    @local.tool
+    def py_eco(x: str, veces: int = 1, ctx: dict = None) -> dict:
+        """Devuelve lo que recibe."""
+        return {"eco": x * veces, "from": (ctx or {}).get("from", {}).get("id")}
+    t1 = local.ask(agent="rt-sdkpy", thread="py-4", text='usa-tool py_eco {"x":"ja","veces":2}', **{"from": {"id": "u-7"}})
+    check('"eco": "jaja"' in t1["text"] and '"from": "u-7"' in t1["text"], "@lampson.tool: la función corre con sus argumentos y el ctx de la app: " + t1["text"][:80])
+    check(not any("py_eco" in w for w in local.warnings), "@lampson.tool: sin aviso por una herramienta registrada")
 try:
     local.ask(agent="rt-sdkpy", text="hola")
     after = None

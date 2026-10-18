@@ -40,6 +40,8 @@ use "./session.syn" as session
 use "./trace.syn" as trace
 use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
+use "./apptools.syn" as apptools
+use "./sdktools.syn" as sdktools
 use "./tools/proc.syn" as proc
 use "./scope.syn" as scope
 use "./teams.syn" as teams
@@ -274,6 +276,14 @@ task registry_full(spec)
     each m in plugins.names(false)
         when allowed(spec["tools"], m)
             set reg[m] to "plugin"
+    -- herramientas de la app (lib/apptools.syn): un archivo .syn por herramienta en .lampson/tools/ del proyecto
+    each m in apptools.names()
+        when allowed(spec["tools"], m)
+            set reg[m] to apptools.MARK
+    -- funciones de la app registradas con lampson.tool() (lib/sdktools.syn; solo con el SDK en modo local)
+    each m in sdktools.names()
+        when allowed(spec["tools"], m) and not contains(reg, m)
+            set reg[m] to sdktools.MARK
     -- equipos (lib/teams.syn): un miembro coordina con send y board; fuera de un equipo, solo si los lista
     when team_tools(spec)
         set reg["send"] to teams.send_tool
@@ -300,6 +310,9 @@ task catalog_full(spec)
     when contains(names, "delegate")
         set cat to append(cat, agents.DELEGATE_SPEC)
     let extra be where(mcp.catalog(false) + plugins.catalog(false), (s) => allowed(spec["tools"], s["name"]))
+    set extra to extra + apptools.catalog(where(apptools.names(), (n) => allowed(spec["tools"], n)))
+    let app_tools be apptools.names()
+    set extra to extra + sdktools.catalog(where(sdktools.names(), (n) => allowed(spec["tools"], n) and not contains(app_tools, n)))
     when team_tools(spec)
         set extra to extra + [teams.SEND_SPEC, teams.BOARD_SPEC]
     give cat + extra
@@ -332,7 +345,7 @@ export task registry_of(spec)
         give reg
     let out be {}
     each k in keys(reg)
-        when external(k)
+        when external(k) or reg[k] == apptools.MARK or reg[k] == sdktools.MARK
             set out[k] to reg[k]
     give out
 
@@ -352,7 +365,8 @@ export task catalog_of(spec)
     let cat be catalog_full(spec)
     when not builtin_off()
         give cat
-    give where(cat, (s) => external(s["name"]))
+    let keep be keys(registry_of(spec))
+    give where(cat, (s) => contains(keep, s["name"]))
 
 -- las tools que el agente lista y no va a tener (plugin apagado o inexistente, MCP caído, nombre mal escrito) →
 -- un aviso por tool. Sin esto el agente arranca sin su herramienta y nadie se entera (2026-10-18, prueba del SDK)
@@ -381,10 +395,14 @@ export task missing(spec)
                 let pn be split(rest, "_")[0]
                 let found be where(plugins.all(), (l) => l["name"] == pn)
                 set why to when length(found) == 0 then "there is no plugin '" + pn + "'" otherwise (when found[0]["error"] != nothing then "plugin '" + pn + "' is broken: " + text(found[0]["error"]) otherwise (when not found[0]["enabled"] then "plugin '" + pn + "' is off (turn it on: lampson plugin on " + pn + ")" otherwise "plugin '" + pn + "' has no such tool"))
-            otherwise when builtin_off() and not external(t)
+            otherwise when apptools.get(t) != nothing
+                set why to "tool file " + apptools.dir() + "/" + t + ".syn: " + text(apptools.get(t)["error"])
+            otherwise when builtin_off() and (t == "delegate" or contains(apply((s) => s["name"], tools.CATALOG), t))
                 set why to "Lampson's own tools are off in this process (lampsonTools: false)"
             otherwise when starts_with(t, "mcp_")
                 set why to "no MCP server provides it (is the server configured and running?)"
+            when why == "not a known tool"
+                set why to "no Lampson tool, plugin, MCP server or app tool (" + apptools.dir() + "/" + t + ".syn, or lampson.tool() in the SDK) has that name"
             set out to append(out, "agent '" + spec["id"] + "': tool '" + t + "' is not available: " + why)
     give out
 
@@ -434,8 +452,15 @@ export task opts_for(id, mode, ask_fn)
         set opts["budget_tokens"] to spec["budget_tokens"]
     when length(keys(spec["scopes"])) > 0
         set opts["scopes"] to spec["scopes"]
-    when length(keys(spec["approve"])) > 0
-        set opts["approve"] to spec["approve"]
+    -- una herramienta de la app que declara `require spend(…)` pide aprobación siempre, salvo que el agente diga otra cosa
+    let appr be spec["approve"]
+    each k in keys(opts["registry"])
+        when opts["registry"][k] == apptools.MARK and not contains(appr, k)
+            let at be apptools.get(k)
+            when at != nothing and at["spend"]
+                set appr[k] to "ask"
+    when length(keys(appr)) > 0
+        set opts["approve"] to appr
     -- buzón de subagentes: los integrados siempre (igual que antes); uno del proyecto solo si puede delegar
     when spec["builtin"] or contains(spec["tools"], "delegate")
         set opts to loop.with_inbox(opts, agents.parent_inbox, "")
@@ -466,7 +491,8 @@ export task system_for(id, cfg)
     require secret("LAMPSON_*")
     let spec be spec_or_raise(id)
     -- los plugins traen su proceso: las instrucciones de los que tienen tools en el catálogo de este agente
-    let extra be plugins.instructions(apply(catalog_of(spec), (s) => s["name"]))
+    let tnames be apply(catalog_of(spec), (s) => s["name"])
+    let extra be plugins.instructions(tnames) + apptools.instructions(tnames)
     -- su equipo: rol, a quién reporta, a quién le puede escribir, cómo se usa el tablero (lib/teams.syn)
     when not spec["builtin"]
         set extra to extra + teams.instructions(spec["id"])
@@ -622,6 +648,11 @@ export task open(sobre, hooks)
             set copts["registry"] to reg
             set copts["catalog"] to where(copts["catalog"], (s) => s["name"] != "board" and s["name"] != "objective") + [teams.BOARD_SPEC, teams.OBJECTIVE_SPEC]
         set ctx["opts"] to copts
+    -- contexto de confianza para las herramientas de la app (lib/apptools.syn): lo pone quien manda el sobre, el
+    -- modelo no lo ve ni lo escribe
+    let aopts be ctx["opts"]
+    set aopts["tool_ctx"] to {"from": field(sobre, "from", {}), "thread": thread, "agent": ctx["agent"], "session": sid, "meta": field(sobre, "meta", {}), "channel": text(field(sobre, "channel", ""))}
+    set ctx["opts"] to aopts
     -- sesión actual (blackboard): la tool todo guarda su lista por sesión (lib/tools/todo.syn)
     share {"id": sid} as "lampson:session"
     give {"ctx": ctx, "session": sid, "thread": thread, "messages": messages, "mode": ctx["opts"]["permission_mode"], "note": note}

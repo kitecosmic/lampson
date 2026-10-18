@@ -8,6 +8,7 @@
 --   "escribe X"    → write("scratch_mock.txt", X) → edit → read → final
 --   "peligro"      → bash("rm -rf /tmp/x") (debe pedir aprobación / denegarse) → final
 --   "alucina"      → tool inexistente "hack" → final
+--   "usa-tool X {…}" → tool X con esos argumentos → final con su resultado
 --   otro           → texto final directo
 -- Cada respuesta también refleja cuántos mensajes recibió (útil para asertar el historial).
 
@@ -94,6 +95,13 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("mcp_proveedor_ask", {"message": "ls", "thread": "a2a-1"})])
             give reply_text("final a2a · el proveedor dijo: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
+        -- "usa-tool <nombre> <json>": llama a esa tool con esos argumentos y responde con lo que devolvió (herramientas
+        -- de la app: lib/apptools.syn y lib/sdktools.syn)
+        when starts_with(q, "usa-tool ")
+            when tools_seen == 0
+                let ut be split(slice(q, 9, length(q)), " ")
+                give reply_tools([tool_call(ut[0], json_decode(join(slice(ut, 1, length(ut)), " ")))])
+            give reply_text("final usa-tool · " + slice(msgs[length(msgs) - 1]["content"], 0, 120))
         -- "riesgo-suave": un bash que PIDE aprobación (`| sh` está en DANGEROUS) pero solo imprime: para aprobarlo en tests
         when starts_with(q, "riesgo-suave")
             when tools_seen == 0

@@ -47,6 +47,7 @@ use "./lib/apikeys.syn" as apikeys
 use "./lib/mcp_server.syn" as mcp_server
 use "./lib/approvals.syn" as approvals
 use "./lib/plugins.syn" as plugins
+use "./lib/sdktools.syn" as sdktools
 use "./lib/channels.syn" as channels
 
 -- `lampson key add|list|remove`: API keys de la API /v1 de este workspace (lib/apikeys.syn, lib/api.syn)
@@ -371,7 +372,10 @@ task stdio_ask(req, rid)
     let ss be when contains(req, "session") and req["session"] != nothing then text(req["session"]) otherwise ""
     -- la fila es por conversación: (agente, thread), o la sesión; sin ninguno, el pedido solo (va en paralelo)
     let key be when th != "" then agent_id + "\n" + th otherwise (when ss != "" then agent_id + "\nsession:" + ss otherwise "req:" + rid)
-    let sobre be {"to": agent_id, "thread": th, "session": ss, "from": {"id": "", "name": "", "kind": "human"}, "text": msg, "images": when contains(req, "images") and type_of(req["images"]) == "list" then req["images"] otherwise [], "channel": "sdk", "meta": when contains(req, "meta") and type_of(req["meta"]) == "map" then req["meta"] otherwise {}}
+    -- from: quien escribe, tal como lo dice la app (el SDK lo documenta; las herramientas de la app lo reciben en ctx)
+    let rf be when contains(req, "from") and type_of(req["from"]) == "map" then req["from"] otherwise {}
+    let from be {"id": text(get(rf, "id", "")), "name": text(get(rf, "name", "")), "kind": text(get(rf, "kind", "human"))}
+    let sobre be {"to": agent_id, "thread": th, "session": ss, "from": from, "text": msg, "images": when contains(req, "images") and type_of(req["images"]) == "list" then req["images"] otherwise [], "channel": "sdk", "meta": when contains(req, "meta") and type_of(req["meta"]) == "map" then req["meta"] otherwise {}}
     give {"ok": true, "key": key, "warnings": runtime.missing(spec), "job": {"id": rid, "to": agent_id, "thread": th, "mode": mode, "key": key, "sobre": sobre}}
 
 when env("LAMPSON_RUN_STDIO", "") == "1"
@@ -434,6 +438,13 @@ when env("LAMPSON_RUN_STDIO", "") == "1"
                     let op be when contains(req, "op") and req["op"] != nothing then lower(text(req["op"])) otherwise "ask"
                     when op == "ping"
                         stdio_out({"id": rid, "kind": "pong"})
+                    otherwise when op == "tools"
+                        -- funciones de la app (lampson.tool() del SDK, lib/sdktools.syn): reemplaza la lista entera
+                        let nt be sdktools.normalize(when contains(req, "tools") then req["tools"] otherwise [])
+                        share {"tools": nt["tools"]} as "sdk:tools"
+                        stdio_out({"id": rid, "kind": "tools", "data": {"tools": apply((t) => t["name"], nt["tools"]), "errors": nt["errors"]}})
+                    otherwise when op == "tool_result"
+                        bus_publish("sdktool.result", req)
                     otherwise when op == "agents"
                         stdio_out({"id": rid, "kind": "agents", "data": apply((n) => {"id": n, "description": runtime.get(n)["description"]}, runtime.names())})
                     otherwise when op == "ask"
@@ -451,7 +462,7 @@ when env("LAMPSON_RUN_STDIO", "") == "1"
                             set running to running + 1
                             spawn StdioJob with spec_json = json_encode(a["job"])
                     otherwise
-                        stdio_out({"id": rid, "kind": "error", "data": "unknown op '" + op + "' (ask, agents, ping)"})
+                        stdio_out({"id": rid, "kind": "error", "data": "unknown op '" + op + "' (ask, agents, tools, tool_result, ping)"})
     exit(0)
 
 let json_out be env("LAMPSON_RUN_JSON", "") == "1"

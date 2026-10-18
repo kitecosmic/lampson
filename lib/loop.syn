@@ -24,6 +24,8 @@ use "./provider.syn" as provider
 use "./permission.syn" as permission
 use "./mcp.syn" as mcp
 use "./plugins.syn" as plugins
+use "./apptools.syn" as apptools
+use "./sdktools.syn" as sdktools
 use "./tools/todo.syn" as todo
 use "./scope.syn" as scope
 use "./worktree.syn" as worktree
@@ -361,6 +363,13 @@ task execute(tc, opts, on_event)
         -- tools de plugins: un proceso hijo por llamada (lib/plugins.syn)
         otherwise when registry[name] == "plugin"
             set out to text(plugins.call(name, args))
+        -- herramientas de la app (lib/apptools.syn): un proceso Synsema bajo los require del archivo, con el contexto
+        -- del sobre (opts.tool_ctx) aparte de los argumentos que escribió el modelo
+        otherwise when registry[name] == apptools.MARK
+            set out to text(apptools.call(name, args, when contains(opts, "tool_ctx") then opts["tool_ctx"] otherwise {}))
+        -- funciones de la app (lib/sdktools.syn): se las pide al SDK por stdio y espera su respuesta
+        otherwise when registry[name] == sdktools.MARK
+            set out to text(sdktools.call(name, args, when contains(opts, "tool_ctx") then opts["tool_ctx"] otherwise {}))
         -- equipos: send/board saben quién llama por opts.agent_id (el modelo no lo elige: se pisa lo que mande)
         otherwise when name == "send" or name == "board" or name == "objective"
             let targs be args

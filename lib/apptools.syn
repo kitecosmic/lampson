@@ -1,0 +1,273 @@
+-- lib/apptools.syn — herramientas de una app escritas en Synsema: una carpeta, un archivo por herramienta
+--
+--   <proyecto>/.lampson/tools/            (o LAMPSON_TOOLS_DIR, relativa al proyecto: la opción `tools` del SDK)
+--     README.md              cuándo usarlas: va al prompt de los agentes que las tienen
+--     estado_pedido.syn      1 archivo = 1 herramienta = `export task estado_pedido(…)`; el nombre del archivo es el
+--     _comun.syn             nombre de la tool. Los que empiezan con _ son ayudantes (`use "./_comun.syn"`), no tools
+--
+-- Del archivo sale todo, sin manifiesto (`synsema code outline --json`, sin ejecutarlo): la descripción es su
+-- `intent:`, los parámetros los de la firma (un default la vuelve opcional), y su techo son sus `require` de arriba
+-- — lo que el archivo no declara, Synsema se lo niega. `synsema test` corre sus `test`.
+--
+-- Una llamada = `synsema run -` con cwd = la carpeta de las tools: el archivo tal cual por stdin y, DEBAJO (así los
+-- números de línea de un error son los del archivo), una línea que lee los argumentos y otra que llama a su task
+-- con `call` (los permisos del programa = sus `require`; call_tool exigiría que el task los repita). No se escribe
+-- nada en la carpeta del dev. Por qué así (2026-10-18, Synsema 0.6.44): un módulo importado con `use` no puede tener
+-- `require` arriba, y `use` solo acepta rutas relativas al archivo que importa, dentro de su carpeta.
+--
+-- Contexto de confianza: la herramienta que declara `require env("LAMPSON_CTX")` recibe ahí {from, thread, agent,
+-- session, meta, channel} del sobre — lo pone la app, el modelo no lo ve ni lo escribe. Sus argumentos sí los escribe
+-- el modelo: validarlos siempre.
+--
+-- Autorización: estar en la carpeta (el commit del dev) y en la lista de tools del agente. Pasan en cualquier modo;
+-- "approve": "ask" en el agente las hace pedir, y una que declara `require spend(…)` pide siempre (runtime.opts_for).
+
+export let MARK be "apptool"
+let DEFAULT_DIR be ".lampson/tools"
+let CACHE be ".lampson/apptools.json"
+let TIMEOUT be 60
+let MAX_OUT be 60000
+let MAX_README be 12000
+-- nombres que ya usa Lampson: una herramienta del dev no puede pisarlos
+export let TAKEN be ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill", "mcp", "plugin", "schedule", "computer_use", "delegate", "send", "board", "objective"]
+
+-- la carpeta, relativa al cwd del proceso (workspace/… es el proyecto). LAMPSON_TOOLS_DIR no puede salir del proyecto.
+export task dir()
+    require env("LAMPSON_*")
+    let d be trim(replace(env("LAMPSON_TOOLS_DIR", ""), "\\", "/"))
+    when d == "" or starts_with(d, "/") or contains(d, ":") or contains(split(d, "/"), "..")
+        give "workspace/" + DEFAULT_DIR
+    while ends_with(d, "/")
+        set d to slice(d, 0, length(d) - 1)
+    give "workspace/" + d
+
+task synsema_exe()
+    require env("LAMPSON_*")
+    give env("LAMPSON_SYNSEMA", "synsema")
+
+-- un proceso con plazo → {code, out, err}; stdin opcional (texto que se manda y se cierra)
+task run_proc(argv, cwd, envs, stdin_text, t)
+    require exec
+    require time
+    let p be proc_spawn(synsema_exe(), argv, {"cwd": cwd, "env": envs, "on_full": "drop_oldest"})
+    when stdin_text != nothing
+        proc_send(p, stdin_text)
+    proc_close_stdin(p)
+    let deadline be now() + t
+    let out be []
+    let errs be []
+    let code be nothing
+    let timed_out be false
+    while code == nothing and not timed_out
+        let left be deadline - now()
+        when left <= 0
+            set timed_out to true
+        otherwise
+            let ev be proc_recv(p, when left < 0.2 then 0.2 otherwise left)
+            when ev == nothing
+                set timed_out to now() >= deadline
+            otherwise when ev["type"] == "exit"
+                set code to ev["data"]["exit_code"]
+            otherwise when ev["type"] == "stderr"
+                set errs to append(errs, ev["data"])
+            otherwise
+                set out to append(out, ev["data"])
+    proc_close(p)
+    give {"code": code, "timed_out": timed_out, "out": join(out, "\n"), "err": join(errs, "\n")}
+
+-- parámetros de la firma, leídos del archivo: "id, incluir_items = false" → [{name, optional, type}]
+task signature(src, name)
+    let out be []
+    let m be regex_capture(src, "export\\s+task\\s+" + name + "\\s*\\(([^)]*)\\)")
+    when m == nothing
+        give out
+    each raw in split(m[0], ",")
+        let p be trim(raw)
+        when p != ""
+            let parts be split(p, "=")
+            let pn be trim(parts[0])
+            let dv be when length(parts) > 1 then trim(join(slice(parts, 1, length(parts)), "=")) otherwise ""
+            let ty be when dv == "true" or dv == "false" then "boolean" otherwise (when starts_with(dv, "\"") then "string" otherwise (when matches(dv, "-?[0-9]+(\\.[0-9]+)?") then "number" otherwise (when starts_with(dv, "[") then "array" otherwise (when starts_with(dv, "{") then "object" otherwise ""))))
+            set out to append(out, {"name": pn, "optional": length(parts) > 1, "type": ty})
+    give out
+
+-- una entrada a partir de su archivo → {name, file, description, params, requires, ctx, spend, error}
+task load_one(d, file)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let name be slice(file, 0, length(file) - 4)
+    let e be {"name": name, "file": file, "description": "", "params": [], "requires": [], "ctx": false, "spend": false, "error": nothing}
+    when not matches(name, "[a-z][a-z0-9_]{0,39}")
+        set e["error"] to "the file name is the tool name: lowercase letters, digits and _ (max 40), starting with a letter"
+        give e
+    when contains(TAKEN, name) or starts_with(name, "plugin_") or starts_with(name, "mcp_")
+        set e["error"] to "'" + name + "' is a name Lampson already uses: rename the file"
+        give e
+    let r be run_proc(["code", "outline", file, "--json"], d, {}, nothing, 20)
+    let doc be json_decode(r["out"], nothing)
+    when doc == nothing or type_of(doc) != "map" or length(field_list(doc, "files")) == 0
+        set e["error"] to "synsema code outline failed: " + trim(r["err"] + " " + r["out"])
+        give e
+    let f be doc["files"][0]
+    when f["parse_error"] != nothing
+        set e["error"] to "does not parse (line " + text(f["parse_error"]["line"]) + "): " + text(f["parse_error"]["message"])
+        give e
+    let sym be where(field_list(f, "symbols"), (s) => s["kind"] == "task" and s["name"] == name)
+    when length(sym) == 0 or not sym[0]["exported"]
+        set e["error"] to "needs `export task " + name + "(…)` — the task with the file's name is the tool"
+        give e
+    when f["intent"] == nothing or trim(text(f["intent"])) == ""
+        set e["error"] to "needs an `intent: \"…\"` line: it is the description the model sees"
+        give e
+    set e["description"] to text(f["intent"])
+    set e["requires"] to apply((q) => {"cap": text(q["cap"]), "scope": when q["scope"] == nothing then "" otherwise text(q["scope"])}, field_list(f, "requires"))
+    set e["ctx"] to length(where(e["requires"], (q) => q["cap"] == "env" and (q["scope"] == "LAMPSON_CTX" or q["scope"] == "LAMPSON_*" or q["scope"] == "*"))) > 0
+    set e["spend"] to length(where(e["requires"], (q) => q["cap"] == "spend")) > 0
+    let src be ""
+    try
+        set src to read_file(d + "/" + file)
+    recover err
+        set src to ""
+    set e["params"] to signature(src, name)
+    give e
+
+task field_list(m, k)
+    when type_of(m) == "map" and contains(m, k) and type_of(m[k]) == "list"
+        give m[k]
+    give []
+
+-- todas las herramientas de la carpeta (también las rotas, con su error). Caché en disco por nombre+tamaño+fecha.
+export task scan()
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let d be dir()
+    let files be []
+    try
+        each e in list_dir(d)
+            when not e["is_dir"] and ends_with(e["name"], ".syn") and not starts_with(e["name"], "_")
+                set files to append(files, e["name"])
+    recover err
+        give []
+    when length(files) == 0
+        give []
+    set files to sort(files)
+    let sig be d
+    each fl in sort(apply((e) => e["name"], where(list_dir(d), (e) => not e["is_dir"])))
+        let fi be file_info(d + "/" + fl)
+        set sig to sig + "|" + fl + ":" + text(fi["size"]) + ":" + text(fi["modified"])
+    try
+        let c be json_decode(read_file(CACHE))
+        when c["sig"] == sig
+            give c["tools"]
+    recover err
+        set sig to sig
+    let out be apply((fl) => load_one(d, fl), files)
+    try
+        write_file(CACHE, json_encode({"sig": sig, "tools": out}))
+    recover err
+        set sig to sig
+    give out
+
+export task names()
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    give apply((e) => e["name"], where(scan(), (e) => e["error"] == nothing))
+
+export task get(name)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let f be where(scan(), (e) => e["name"] == name)
+    give when length(f) == 0 then nothing otherwise f[0]
+
+-- el esquema que ve el modelo: sin tipos en la firma (Synsema 0.6.44 no los tiene), el tipo sale del default si hay
+task schema(e)
+    let props be {}
+    let req be []
+    each p in e["params"]
+        set props[p["name"]] to when p["type"] != "" then {"type": p["type"]} otherwise {}
+        when not p["optional"]
+            set req to append(req, p["name"])
+    give {"type": "object", "properties": props, "required": req}
+
+-- techo legible: "net(api.mitienda.com), env(LAMPSON_CTX)" — lo que puede tocar, para el catálogo y los avisos
+export task ceiling(e)
+    when length(e["requires"]) == 0
+        give "nothing outside itself"
+    give join(apply((q) => q["cap"] + (when q["scope"] != "" then "(" + q["scope"] + ")" otherwise ""), e["requires"]), ", ")
+
+export task catalog(allowed_names)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let out be []
+    each e in scan()
+        when e["error"] == nothing and contains(allowed_names, e["name"])
+            set out to append(out, {"name": e["name"], "description": e["description"], "parameters": schema(e)})
+    give out
+
+-- el README de la carpeta, para el prompt de un agente que tiene alguna de estas tools
+export task instructions(tool_names)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let mine be where(names(), (n) => contains(tool_names, n))
+    when length(mine) == 0
+        give ""
+    try
+        let t be read_file(dir() + "/README.md")
+        give "\n\n# Your app's tools\n" + slice(t, 0, MAX_README)
+    recover err
+        give ""
+
+-- ejecutar una: el archivo por stdin + leer args + llamar; cwd = la carpeta (sus file(...) son relativos a ella)
+export task call(name, args, ctx)
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let e be get(name)
+    when e == nothing
+        give "ERROR: no tool named '" + name + "'"
+    when e["error"] != nothing
+        give "ERROR: tool '" + name + "' is broken: " + e["error"]
+    let d be dir()
+    let src be read_file(d + "/" + e["file"])
+    let prog be src + "\n\nrequire env(\"LAMPSON_TOOL_ARGS\")\nlet __lampson_r be call(" + name + ", json_decode(env(\"LAMPSON_TOOL_ARGS\")))\nprint(when type_of(__lampson_r) == \"text\" then __lampson_r otherwise json_encode(__lampson_r))\n"
+    let envs be {"LAMPSON_TOOL_ARGS": json_encode(when args == nothing then {} otherwise args)}
+    when e["ctx"]
+        set envs["LAMPSON_CTX"] to json_encode(when ctx == nothing then {} otherwise ctx)
+    let r be run_proc(["run", "-"], d, envs, prog, TIMEOUT)
+    let out be trim(r["out"] + (when trim(r["err"]) != "" then "\n" + r["err"] otherwise ""))
+    when r["timed_out"]
+        give "ERROR: tool '" + name + "' timed out after " + text(TIMEOUT) + "s (killed). Output so far:\n" + slice(out, 0, MAX_OUT)
+    when r["code"] != 0
+        give "ERROR: " + regex_replace(slice(out, 0, MAX_OUT), "<stdin>", e["file"])
+    give when out == "" then "(no output)" otherwise slice(out, 0, MAX_OUT)
