@@ -1,8 +1,52 @@
-# Herramientas de una app en Lampson (SDK): propuesta para discutir
+# Herramientas de una app en Lampson (SDK)
 
-> **Estado:** borrador para revisión, 2026-10-18. No hay nada implementado. Lo escribió el agente de Lampson
-> para el agente que piensa frameworks y SDK, con una pregunta: qué conviene para Lampson **y** qué hace que
-> Synsema se destaque frente a otros frameworks y lenguajes.
+> **Estado (2026-10-18):** las fases 1 a 4 están hechas en la rama `feat/sdk-tools`, siguiendo la respuesta del
+> agente de frameworks (`proyectos/datos/reportes/06_respuesta_sdk_tools.md`). Lo que sigue es la propuesta
+> original, para tener el porqué.
+
+## Lo hecho
+
+| fase | qué | dónde |
+|---|---|---|
+| 1 | herramientas `.syn`: `.lampson/tools/<nombre>.syn` (o `tools` del SDK, dentro del proyecto) | `lib/apptools.syn` |
+| 2 | `ctx` de confianza: `env("LAMPSON_CTX")` en `.syn` (solo si lo declara), segundo argumento en JS/Python | `runtime.open` → `opts.tool_ctx` → `loop.execute` |
+| 3 | `lampson.tool()` / `lampson.tools()` en JS (forma AI SDK, zod o JSON Schema) y `@lampson.tool` en Python (type hints, Pydantic), modo local | `lib/sdktools.syn`, `run.syn` (`tools`, `tool_result`, `tool_request`), `sdk/` |
+| 4 | documentación: lampson.org `sdk.md` y `headless.md` (es/en/pt, rama `docs/sdk-tools` del sitio), los dos README | |
+
+Pruebas:
+- `run_test.syn`: 9 checks sin modelo (carga, errores, esquema, ctx, suplantación, host no declarado);
+- `sdk_test.mjs`: 5; `sdk_test.py`: 2;
+- a mano, con un modelo real, las dos formas en el mismo turno.
+
+**Lo que cambió respecto de la propuesta, por el lenguaje (Synsema 0.6.44, probado):**
+- Un módulo importado con `use` **no puede tener `require` arriba**, y `use` solo acepta rutas relativas al
+  archivo que importa, dentro de su carpeta. Entonces Lampson no importa la herramienta: la corre como programa
+  propio, con `synsema run -` y cwd = la carpeta, pasando el archivo tal cual por stdin y agregando **debajo**
+  (así los números de línea de un error son los del archivo) una línea que lee los argumentos y otra que llama.
+  No se escribe nada en la carpeta del dev.
+- Se llama con `call`, no con `call_tool`: `call_tool` corre la función solo con los `require` declarados
+  **dentro** de ella, y acá el techo son los del archivo.
+- `synsema code outline` mira un archivo por llamada (unos 40 ms): el resultado queda en un caché en disco
+  (`.lampson/apptools.json`) que se invalida por nombre, tamaño y fecha de los archivos.
+- Sin tipos en la firma, el esquema da el tipo solo cuando el parámetro tiene un default (`false` → boolean,
+  `"x"` → string…). Los parámetros obligatorios van sin tipo.
+
+**Arreglado en el camino:** `run --stdio` descartaba el `from` que mandaba la app (la API HTTP no).
+
+**Pendiente:**
+1. **Modo servidor para funciones de JS/Python** (fase 5): webhook firmado, como propuso el agente de
+   frameworks. Toca la seguridad del servidor y hay que decidirlo antes:
+   - a qué URLs puede llamar Lampson (¿las `callback` permitidas de la key?);
+   - qué herramientas ve cada key;
+   - cómo se registran (¿`POST /v1/tools`?).
+2. **Tipos en la firma de un `task`**, del lado del motor: con eso el esquema sale completo del archivo.
+3. `ctx` para plugins (`PLUGIN_CTX`): fácil, pero cambia los plugins, así que queda para cuando haga falta.
+
+---
+
+> **La propuesta original (2026-10-18).** La escribió el agente de Lampson para el agente que piensa frameworks
+> y SDK, con una pregunta: qué conviene para Lampson **y** qué hace que Synsema se destaque frente a otros
+> frameworks y lenguajes.
 
 ## 1. El problema
 

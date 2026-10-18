@@ -30,6 +30,21 @@ lampson = Lampson(agent="shop", local={"workspace": "./my-project", "lampson_too
 lampson.ask(thread="customer-42", text="where is my order?")
 ```
 
+Your app's functions as tools (local mode): the schema comes from the type hints, the docstring is the description,
+and `ctx` (who is writing, the thread, your `meta`) comes from your app, never from the model:
+
+```python
+@lampson.tool
+def stock(product: str, ctx: dict) -> dict:
+    """Units in stock of a product."""
+    return db.stock(product, customer=ctx["from"]["id"])
+
+lampson.ask(thread="customer-42", text="do you have bread?", **{"from": {"id": "c-42"}})
+```
+
+Or write the tool in Synsema (`.lampson/tools/stock.syn`, one file per tool): its `require`s are everything it can
+touch. See [lampson.org/docs/sdk](https://lampson.org/docs/sdk).
+
 If an agent lists a tool it will not have (a plugin that is off, a typo), you get a line on stderr at start
 (`on_warning=` to change it, `None` to silence it) and the list in `lampson.warnings`.
 

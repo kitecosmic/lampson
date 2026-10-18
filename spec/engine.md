@@ -367,6 +367,9 @@ Dos modos, los mismos métodos (`ask`, `stream`, `agents`, `job`, `close`, `veri
         herramientas de una app van por otro camino (`spec/sdk-tools.md`).
       - SDK `agent` (agente por defecto del cliente) y `lampsonTools: false` → `LAMPSON_BUILTIN_TOOLS=off`: el
         proceso no ofrece ninguna tool propia de Lampson, tampoco a `build` (`runtime.registry_of`/`catalog_of`).
+- [x] Herramientas de la app (rama `feat/sdk-tools`, `spec/sdk-tools.md`): archivos `.syn` en `.lampson/tools/` con
+      su techo (`lib/apptools.syn`), funciones de JS/Python con `lampson.tool()` en modo local (`lib/sdktools.syn`)
+      y `ctx` de confianza aparte de los argumentos. Pendiente: modo servidor (webhook firmado).
 
 ### Fase 6 — Equipos de agentes (rama `feat/teams`, desde `main` @ cdcd54d)
 
