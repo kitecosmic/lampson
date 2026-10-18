@@ -107,7 +107,7 @@ check(after is not None, "después de cerrar (with), ask() falla con LampsonErro
 print("SDK Python, modo servidor: API /v1 de un web.syn real")
 procs.append(subprocess.Popen(["synsema", "serve", "web.syn", "--port", "47997", "--bind", "127.0.0.1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 check(wait_up("http://127.0.0.1:47997/w/test/api/health"), "web.syn arriba en :47997")
-made = subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="add", LAMPSON_KEY_AGENTS="rt-sdkpy", LAMPSON_KEY_NAME="sdk-py-test"), capture_output=True, text=True, encoding="utf-8")
+made = subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="add", LAMPSON_KEY_AGENTS="rt-sdkpy", LAMPSON_KEY_NAME="sdk-py-test", LAMPSON_KEY_CALLBACKS="http://127.0.0.1:9/"), capture_output=True, text=True, encoding="utf-8")
 key = (re.search(r"lk_[A-Za-z0-9_-]+", made.stdout) or [None])[0] if re.search(r"lk_[A-Za-z0-9_-]+", made.stdout) else None
 kid = re.search(r"\((k[A-Za-z0-9_-]+)\)", made.stdout)
 kid = kid.group(1) if kid else None

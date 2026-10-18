@@ -106,7 +106,7 @@ export task parse(body, rec)
     when cb != "" and not (starts_with(cb, "https://") or starts_with(cb, "http://"))
         give {"ok": false, "status": 400, "error": "callback must be an http(s) URL"}
     when cb != "" and not apikeys.callback_allowed(rec, cb)
-        give {"ok": false, "status": 403, "error": "this API key cannot send callbacks to " + cb + " (allowed: " + join(rec["callbacks"], ", ") + ")"}
+        give {"ok": false, "status": 403, "error": "this API key cannot send callbacks to " + cb + (when length(field(rec, "callbacks", [])) > 0 then " (allowed: " + join(rec["callbacks"], ", ") + ")" otherwise " (a key without a callback list only reaches public hosts: add one with `lampson key add --callback URL`)")}
     let images be field(body, "images", [])
     when type_of(images) != "list"
         set images to []

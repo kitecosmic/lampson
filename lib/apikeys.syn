@@ -6,10 +6,15 @@
 --
 --   create(name, agents) → {id, key, name, agents}      agents: ["tienda"] o ["*"] (todos los elegibles)
 --   create_with(name, agents, {rate, callbacks})        rate = pedidos/minuto (default 120; 0 = sin límite);
---                                                      callbacks = prefijos de URL permitidos ([] = cualquiera)
+--                                                      callbacks = URLs permitidas: mismo esquema, host y puerto, y
+--                                                      el path como prefijo ([] = cualquier host PÚBLICO)
+--                                                      → también {secret}: con él se firman SUS callbacks
+--   signing_secret(id) → el secreto de esa key ("" en keys de antes de 2026-10-18: usan LAMPSON_WEBHOOK_SECRET)
 --   check(key) → registro sin hash | nothing           (y anota last_used)
 --   allows(rec, agent) → bool
 --   list() / remove(id)
+
+use "./tools/url.syn" as urls
 
 export let FILE be ".lampson/api_keys.json"
 export let PREFIX be "lk_"
@@ -54,18 +59,40 @@ export task create_with(name, agents, opts)
     let cbs be when contains(opts, "callbacks") and opts["callbacks"] != nothing then opts["callbacks"] otherwise []
     let key be PREFIX + token(24)
     let id be "k" + slice(token(16), 0, 8)
-    let rec be {"id": id, "name": text(name), "agents": ag, "hash": hash_of(key), "created": format_time(now()), "last_used": nothing, "rate": rate, "callbacks": cbs}
+    -- un secreto por key para firmar sus callbacks: con uno global, una app que comparte este Lampson podía firmar una
+    -- callback falsa hacia otra (2026-10-18). Se guarda en claro (hace falta para firmar), como el webhook global
+    let secret be "whsec_" + token(24)
+    let rec be {"id": id, "name": text(name), "agents": ag, "hash": hash_of(key), "created": format_time(now()), "last_used": nothing, "rate": rate, "callbacks": cbs, "secret": secret}
     store(append(load(), rec))
-    give {"id": id, "key": key, "name": rec["name"], "agents": ag, "rate": rate, "callbacks": cbs}
+    give {"id": id, "key": key, "name": rec["name"], "agents": ag, "rate": rate, "callbacks": cbs, "secret": secret}
 
 -- ¿esta key puede pedir un callback a esta URL? sin lista = cualquiera; con lista = solo esos prefijos
+-- ¿esta key puede mandar una callback a `url`? Con lista: mismo esquema, host y puerto, y el path de la lista como
+-- prefijo de carpeta ("https://app.com/hooks" deja /hooks y /hooks/x, no /hooks-x). Sin lista: cualquier host público
+-- — nunca loopback, red privada ni metadatos de la nube. Antes (hasta 2026-10-18) era starts_with sobre la URL
+-- entera: "https://app.com" dejaba pasar "https://app.com.evil.net", y sin lista, cualquier URL (SSRF).
 export task callback_allowed(rec, url)
-    when not contains(rec, "callbacks") or length(rec["callbacks"]) == 0
-        give true
-    each pre in rec["callbacks"]
-        when starts_with(url, pre)
-            give true
+    let u be urls.parse(url)
+    when not u["ok"]
+        give false
+    let cbs be when contains(rec, "callbacks") then rec["callbacks"] otherwise []
+    when length(cbs) == 0
+        give urls.host_class(u["host"]) == "public"
+    each pre in cbs
+        let p be urls.parse(pre)
+        when p["ok"] and p["scheme"] == u["scheme"] and p["host"] == u["host"] and p["port"] == u["port"]
+            let base be p["path"]
+            while ends_with(base, "/")
+                set base to slice(base, 0, length(base) - 1)
+            when base == "" or u["path"] == base or starts_with(u["path"], base + "/")
+                give true
     give false
+
+export task signing_secret(id)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    let f be where(load(), (k) => k["id"] == id)
+    give when length(f) > 0 and contains(f[0], "secret") then text(f[0]["secret"]) otherwise ""
 
 export task list()
     require file.read(".lampson")

@@ -82,6 +82,8 @@ when key_cmd != ""
         print("")
         print("  " + k["key"])
         print("")
+        print("  Firma de sus callbacks (X-Lampson-Signature, verifySignature del SDK): " + k["secret"])
+        print("")
         print("  API (apps, bots):     " + api_base + "/messages")
         print("  MCP (otros agentes):  " + api_base + "/mcp      con el header Authorization: Bearer <la key>")
         when pub == ""
