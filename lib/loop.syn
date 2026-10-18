@@ -437,6 +437,14 @@ export task run_turn(cfg, messages, opts, on_event)
                 set nudged to true
                 set msgs to noted["msgs"]
                 emit(on_event, "inbox", "presupuesto de tokens al 80% (" + text(spent) + "/" + text(floor(budget)) + "): el harness le pidió al modelo que cierre", tag)
+        -- pocos pasos antes del límite, un aviso (una vez): que deje las cosas en orden antes de que se corte — guardar
+        -- lo hecho y, en un equipo, contar dónde quedó (visto 2026-10-18: el Dev llegó a 25 pasos a mitad de una tarea,
+        -- sin commit ni aviso, y el equipo quedó esperándolo)
+        when max_steps > 8 and steps == max_steps - 3
+            let wrap be append_to_last_tool(msgs, "[SYSTEM NOTICE — 3 tool calls left in this turn] Finish the step you are on and leave your work in order: save/commit what you have, and if you are in a team, update the board and `send` your status (what is done, what is left). If the work isn't finished, you get a new turn to continue where you left off.")
+            when wrap["ok"]
+                set msgs to wrap["msgs"]
+                emit(on_event, "inbox", "quedan 3 pasos en este turno: el harness le pidió que deje todo en orden", tag)
         let over_budget be spent >= budget * 0.95
         let last_step be steps == max_steps or over_budget
         let cat be when last_step then [] otherwise catalog

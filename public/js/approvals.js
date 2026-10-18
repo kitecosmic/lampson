@@ -10,7 +10,7 @@ async function loadApprovals() {
   if (!list.length) { box.innerHTML = '<div class="p none" style="cursor:default">ninguna pendiente</div>'; }
   for (const a of list) {
     const d = document.createElement('div'); d.className = 'p appr'; const src = a.source === 'chat' ? 'chat' : ('⏰ ' + a.source.replace(/^schedule:?/, ''));
-    d.innerHTML = `<span class="st ${a.status === 'pending' ? 'busy' : ''}"></span><span class="nm">${esc(src)}</span><span class="cm">${a.status === 'pending' ? 'vence ' + esc(fmtWhen(a.expires_at)) : esc(a.status)}</span><span class="msg">${esc(a.message)}</span><span class="why">${esc(a.why)}</span>`
+    d.innerHTML = `<span class="st ${a.status === 'pending' ? 'busy' : ''}"></span><span class="nm">${esc(src)}</span><span class="cm">${a.status === 'pending' ? 'vence ' + esc(fmtWhen(a.expires_at)) : esc(a.status)}</span><span class="msg">${a.preview && a.preview.count ? esc(`${a.preview.branch} → ${a.preview.into} · ${a.preview.count} commit${a.preview.count === 1 ? '' : 's'} · ${a.preview.files.length} archivo${a.preview.files.length === 1 ? '' : 's'}${a.preview.conflicts ? ' · choca' : ''}\n`) : ''}${esc(a.message)}</span><span class="why">${esc(a.why)}</span>`
       + (a.status === 'pending' ? `<span class="btns"><button class="primary" data-ok="1">Permitir</button><button data-ok="0">Denegar</button></span>` : '');
     d.querySelectorAll('button').forEach(b => b.onclick = async () => { d.querySelectorAll('button').forEach(x => x.disabled = true); await api(BASE + '/api/approve', { id: a.id, decision: b.dataset.ok === '1' }); setTimeout(loadApprovals, 600); });
     box.appendChild(d);

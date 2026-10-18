@@ -99,6 +99,85 @@ export task main_branch()
     let r be git(["rev-parse", "--abbrev-ref", "HEAD"], c.ROOT)
     give when r["ok"] then r["out"] otherwise "main"
 
+-- lo que pasa si la persona aprueba un merge o un push que toca la historia compartida (la tarjeta de aprobación lo
+-- muestra en vez del comando crudo): qué rama entra a cuál, sus commits, los archivos que cambian, si es un avance
+-- directo (ff) y si choca con lo que ya hay (conflicts). → nothing si el comando no es un merge ni un push
+export task preview(command)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let cmd be " " + replace(text(command), "\n", " ") + " "
+    when not is_repo()
+        give nothing
+    let into be main_branch()
+    when matches(lower(cmd), ".*\\bgit\\b.*\\bpush\\b.*")
+        let up be git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], c.ROOT)
+        when not up["ok"]
+            give {"kind": "push", "branch": into, "into": "", "commits": [], "count": 0, "files": [], "ff": true, "conflicts": false}
+        let p be with_diff({"kind": "push", "branch": into, "into": up["out"]}, up["out"], "HEAD")
+        set p["ff"] to git(["merge-base", "--is-ancestor", up["out"], "HEAD"], c.ROOT)["ok"]
+        set p["conflicts"] to false
+        give p
+    when not matches(lower(cmd), ".*\\bgit\\b.*\\bmerge\\b.*")
+        give nothing
+    let refs be regex_find_all(cmd, "team/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+    let br be when length(refs) > 0 then refs[0] otherwise merge_ref(cmd)
+    when br == ""
+        give nothing
+    when not git(["rev-parse", "--verify", "--quiet", br], c.ROOT)["ok"]
+        give {"kind": "merge", "branch": br, "into": into, "commits": [], "count": 0, "files": [], "ff": false, "conflicts": false, "missing": true}
+    let out be with_diff({"kind": "merge", "branch": br, "into": into}, "HEAD", br)
+    set out["ff"] to git(["merge-base", "--is-ancestor", "HEAD", br], c.ROOT)["ok"]
+    let base be git(["merge-base", "HEAD", br], c.ROOT)
+    set out["conflicts"] to when base["ok"] then contains(git(["merge-tree", base["out"], "HEAD", br], c.ROOT)["out"], "<<<<<<<") otherwise false
+    give out
+
+-- la rama que nombra `git merge …` (sin opciones ni el texto entre comillas de -m)
+task merge_ref(cmd)
+    let words be split(regex_replace(regex_replace(cmd, "\"[^\"]*\"|'[^']*'", " "), "\\s+", " "), " ")
+    let seen be false
+    let skip be false
+    each w in words
+        when skip
+            set skip to false
+        otherwise when not seen
+            set seen to w == "merge"
+        otherwise when contains(["&&", ";", "|", "||"], w)
+            give ""
+        otherwise when contains(["-m", "-s", "-X", "-F"], w)
+            set skip to true
+        otherwise when w != "" and not starts_with(w, "-")
+            give w
+    give ""
+
+-- commits (de a a b) y archivos que cambian (desde donde se separaron)
+task with_diff(o, a, b)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/*")
+    let out be o
+    let commits be []
+    let lg be git(["log", "--no-merges", "--format=%h%x09%an%x09%s", "-n", "12", a + ".." + b], c.ROOT)
+    when lg["ok"]
+        each line in split(lg["out"], "\n")
+            let p be split(line, "\t")
+            when length(p) >= 3
+                set commits to append(commits, {"sha": p[0], "author": regex_replace(p[1], " \\(Lampson\\)$", ""), "subject": p[2]})
+    let cnt be git(["rev-list", "--count", a + ".." + b], c.ROOT)
+    let files be []
+    let ds be git(["diff", "--numstat", a + "..." + b], c.ROOT)
+    when ds["ok"]
+        each line in split(ds["out"], "\n")
+            let p be split(line, "\t")
+            when length(p) >= 3
+                set files to append(files, {"path": p[2], "add": when p[0] == "-" then 0 otherwise int(p[0]), "del": when p[1] == "-" then 0 otherwise int(p[1])})
+    set out["commits"] to commits
+    set out["count"] to when cnt["ok"] then int(cnt["out"]) otherwise length(commits)
+    set out["files"] to files
+    give out
+
 -- las tools que operan en la copia del agente, y cómo se traducen sus args
 export let FILE_TOOLS be ["read", "write", "edit", "ls", "find", "grep"]
 

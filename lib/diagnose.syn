@@ -1,0 +1,142 @@
+-- lib/diagnose.syn — ¿por qué está trabado un objetivo de equipo? (la pantalla «Revisar qué pasa»)
+--
+-- Dos niveles:
+--   * facts(o): lo que se ve sin IA, sacado del tablero, el registro y la traza de cada asiento — quién está
+--     bloqueado y por qué, quién contestó en su respuesta final (que nadie lee), quién se quedó sin pasos, si el
+--     equipo cree que alguien no tiene presupuesto cuando sí lo tiene, hace cuánto no se mueve nada
+--   * analysis(o): el mismo expediente al modelo configurado, que devuelve qué pasó y qué hacer, con acciones de una
+--     lista cerrada (escribirle a un asiento, mover una tarea) que la persona aplica con un botón
+-- (Visto 2026-10-18 con un modelo flojo: el Dev respondió «voy avanzando» en su respuesta final, nadie lo leyó, el
+-- CEO creyó que estaba sin presupuesto y le pidió a la persona esperar a mañana: todo quedó bloqueado.)
+use "./teams.syn" as teams
+use "./trace.syn" as trace
+use "./mailbox.syn" as mailbox
+use "./runtime.syn" as runtime
+use "./provider.syn" as provider
+
+task field(m, k, fallback)
+    when contains(m, k) and m[k] != nothing
+        give m[k]
+    give fallback
+
+-- el último turno de una sesión, leído de su traza: {calls: [nombres], said, stopped, at}
+export task last_turn(sid)
+    require file(".lampson")
+    require file(".lampson/*")
+    let out be {"calls": [], "said": "", "stopped": "", "trigger": ""}
+    when sid == ""
+        give out
+    let lines be split(trace.tail(sid, 160), "\n")
+    let start be -1
+    let i be 0
+    each line in lines
+        when contains(line, "s  USER  ")
+            set start to i
+        set i to i + 1
+    when start < 0
+        give out
+    let k be 0
+    each line in lines
+        when k >= start
+            let body be regex_replace(line, "^\\S+ \\+\\s*[0-9.]+s\\s+", "")
+            let kind be split(body, " ")[0]
+            let txt be trim(slice(body, length(kind), length(body)))
+            when kind == "USER"
+                set out["trigger"] to slice(regex_replace(txt, "^\\[[^\\]]*\\]\\s*", ""), 0, 160)
+            when kind == "CALL"
+                set out["calls"] to append(out["calls"], split(txt, " ")[0])
+            when kind == "SAY"
+                set out["said"] to slice(replace(txt, " ⏎ ", "\n"), 0, 700)
+            when kind == "END"
+                let parts be split(txt, " · ")
+                set out["stopped"] to trim(parts[length(parts) - 1])
+        set k to k + 1
+    give out
+
+-- lo que se ve sin IA. → [{kind, agent, task, text}] (kind: quiet, blocked, waits, unsent, cut, budget_belief, over)
+export task facts(o)
+    require db(".lampson/teams.db")
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let out be []
+    let tm be teams.get(o["team"])
+    when tm == nothing
+        give out
+    let scope be "team:" + tm["id"]
+    let ts be where(teams.tasks(scope), (t) => field(t, "objective", 0) == o["id"])
+    let busy be where(tm["members"], (m) => mailbox.working(m["agent"], scope))
+    let quiet be teams.quiet_for(scope)
+    when length(busy) == 0 and quiet >= 300 and o["status"] == "active"
+        set out to append(out, {"kind": "quiet", "agent": "", "task": 0, "text": "nobody is working and nothing has moved for " + text(floor(quiet / 60)) + " min"})
+    let left be when o["budget_tokens"] > 0 then o["budget_tokens"] - o["spent"] otherwise 1
+    each t in ts
+        when t["status"] == "blocked"
+            set out to append(out, {"kind": "blocked", "agent": t["owner"], "task": t["id"], "text": "#" + text(t["id"]) + " is blocked: " + slice(t["notes"], 0, 240)})
+            -- el equipo cree que alguien se quedó sin presupuesto, pero con el objetivo con presupuesto sigue pudiendo
+            when left > 0 and matches(lower(t["notes"]), ".*(cap|presupuesto|budget|tokens|sin servicio|fuera de servicio).*")
+                set out to append(out, {"kind": "budget_belief", "agent": t["owner"], "task": t["id"], "text": "#" + text(t["id"]) + " waits for " + t["owner"] + " to have budget, but while this objective has budget left (" + text(left) + " tokens) every seat keeps getting turns, even past its daily cap"})
+        when t["status"] == "todo"
+            each d in json_decode(field(t, "depends", "[]"))
+                let x be teams.task_get(scope, floor(number(d)))
+                when x != nothing and x["status"] == "blocked"
+                    set out to append(out, {"kind": "waits", "agent": t["owner"], "task": t["id"], "text": "#" + text(t["id"]) + " waits for #" + text(x["id"]) + ", which is blocked"})
+    each m in tm["members"]
+        let sid be teams.seat_session_of(o["id"], m["agent"])
+        let lt be last_turn(sid)
+        let mine be where(ts, (t) => t["owner"] == m["agent"] and t["status"] != "done")
+        when lt["said"] != "" and not contains(lt["calls"], "send") and lt["stopped"] == "done" and length(mine) > 0 and length(trim(lt["said"])) > 80
+            set out to append(out, {"kind": "unsent", "agent": m["agent"], "task": mine[0]["id"], "text": m["agent"] + " answered in its final reply, which nobody reads (it didn't `send` it): «" + slice(lt["said"], 0, 400) + "»"})
+        when lt["stopped"] == "max_steps" or lt["stopped"] == "budget"
+            set out to append(out, {"kind": "cut", "agent": m["agent"], "task": when length(mine) > 0 then mine[0]["id"] otherwise 0, "text": m["agent"] + "'s last turn was cut (" + lt["stopped"] + ")" + (when lt["said"] != "" then ": «" + slice(lt["said"], 0, 300) + "»" otherwise "")})
+    give out
+
+-- el expediente para el modelo: el pedido, el equipo, el tablero, lo último del registro, el último turno de cada uno
+task dossier(o, fs)
+    require db(".lampson/teams.db")
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let tm be teams.get(o["team"])
+    let scope be "team:" + tm["id"]
+    let ts be where(teams.tasks(scope), (t) => field(t, "objective", 0) == o["id"])
+    let seats be []
+    each m in tm["members"]
+        let lt be last_turn(teams.seat_session_of(o["id"], m["agent"]))
+        set seats to append(seats, "- " + m["agent"] + " (" + m["role"] + (when m["reports_to"] != "" then ", reports to " + m["reports_to"] otherwise ", lead") + ")" + (when mailbox.working(m["agent"], scope) then " — WORKING NOW" otherwise "") + " · today " + text(teams.spent_today(m["agent"])) + " of " + text(teams.cap_of(tm, m["agent"])) + " tokens" + "\n  last turn: woken by «" + lt["trigger"] + "» · tools: " + (when length(lt["calls"]) == 0 then "none" otherwise join(lt["calls"], ", ")) + " · ended: " + lt["stopped"] + (when lt["said"] != "" then "\n  its final reply (nobody reads it): «" + slice(lt["said"], 0, 500) + "»" otherwise ""))
+    let rows be teams.ledger(scope, 0, 400)
+    let mine be where(rows, (r) => r["at"] >= o["created_at"] - 2)
+    let lg be slice(mine, max(0, length(mine) - 40), length(mine))
+    give "OBJECTIVE O-" + text(o["id"]) + " [" + o["status"] + "] spent " + text(o["spent"]) + " of " + text(o["budget_tokens"]) + " tokens\n" + o["text"] + "\n\nSEATS\n" + join(seats, "\n") + "\n\nBOARD\n" + join(apply(ts, (t) => "#" + text(t["id"]) + " [" + t["status"] + "] " + t["title"] + " — " + t["owner"] + (when t["depends"] != "[]" then " · depends on " + t["depends"] otherwise "") + (when t["notes"] != "" then "\n  notes: " + slice(t["notes"], 0, 300) otherwise "")), "\n") + "\n\nLAST RECORD ENTRIES\n" + join(apply(lg, (r) => format_time(r["at"], "%H:%M") + " " + r["actor"] + " " + r["kind"] + (when r["ref"] != "" then " " + r["ref"] otherwise "") + (when r["text"] != "" then ": " + slice(r["text"], 0, 260) otherwise "")), "\n") + "\n\nWHAT LAMPSON ALREADY SEES\n" + join(apply(fs, (f) => "- " + f["text"]), "\n") + "\n\nHOW THE TEAM RUNTIME WORKS\n- A seat only gets a turn when a message reaches it (`send`), when the lead's objective round comes, or when Lampson continues a turn that was cut. A seat's final reply is NOT delivered to anyone.\n- The daily cap does NOT stop a seat while the objective still has budget.\n- The person can send a message to any seat, and move tasks on the board."
+
+-- el análisis con el modelo configurado. → {ok, summary, actions: [{kind: message|task, agent?, text?, task?, status?, why}]}
+export task analysis(o)
+    require db(".lampson/teams.db")
+    require net
+    require time
+    require env("LAMPSON_*")
+    require secret("LAMPSON_*")
+    require file(".lampson")
+    require file(".lampson/*")
+    require file.read("workspace")
+    require file.read("workspace/*")
+    let fs be facts(o)
+    let cfg be provider.config()
+    let brief be "You are diagnosing why a team of AI agents is stuck on an objective. Read the dossier and answer ONLY with JSON, no prose around it:\n{\"summary\": \"<3 to 6 short sentences, in the same language as the objective text, for the person who owns the team: what happened, why it is stuck, what to do>\", \"actions\": [{\"kind\": \"message\", \"agent\": \"<seat id>\", \"text\": \"<the message the person sends that seat, in the objective's language, concrete: what is true, what to do now, who to tell>\", \"why\": \"<one line>\"}, {\"kind\": \"task\", \"task\": <id>, \"status\": \"todo|doing|review|done|blocked\", \"why\": \"<one line>\"}]}\nAt most 3 actions, the smallest set that gets the work moving again. Prefer messaging the seat that has to act. Don't invent facts that aren't in the dossier.\nA message action is sent BY the person TO that seat, as the person's instruction to the team: never write it as a summary or a question for the person. If the team is waiting for a decision only the person can make (an approval, a choice), don't propose a message or a task move for it: say in the summary what they have to decide and where (the approval waiting for them, or the objective's question). Move a task only when that move lets someone start real work; never to «reflect» who has the ball.\n\n" + dossier(o, fs)
+    let r be provider.chat_retry(cfg, [{"role": "system", "content": "You are a precise operations analyst. You answer with JSON only."}, {"role": "user", "content": brief}], [], 2)
+    when r["error"] != nothing
+        give {"ok": false, "error": text(r["error"]), "facts": fs}
+    let raw be text(r["text"])
+    let found be regex_find_all(raw, "(?s)\\{.*\\}")
+    when length(found) == 0
+        give {"ok": true, "summary": trim(raw), "actions": [], "facts": fs, "model": cfg["model"]}
+    try
+        let j be json_decode(found[0])
+        let acts be where(field(j, "actions", []), (x) => type_of(x) == "map" and (field(x, "kind", "") == "message" or field(x, "kind", "") == "task"))
+        give {"ok": true, "summary": text(field(j, "summary", "")), "actions": slice(acts, 0, 3), "facts": fs, "model": cfg["model"]}
+    recover err
+        give {"ok": true, "summary": trim(raw), "actions": [], "facts": fs, "model": cfg["model"]}

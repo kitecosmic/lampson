@@ -98,6 +98,10 @@ function tickerLine(r, roleOf) {
   if (r.kind === 'updated') return `${who} movió ${esc(r.ref)}${x ? ' · ' + x : ''}`;
   if (r.kind === 'report') return `${who} informó: «${x}»`;
   if (r.kind === 'over cap') return `${who} pasó su tope diario: ${esc(overText(r))}`;
+  if (r.kind === 'continued') return `${esc(roleOf(String(r.text).split(':')[0]))} llegó al límite de pasos de un turno: sigue donde quedó`;
+  if (r.kind === 'stuck') return `${esc(roleOf(String(r.text).split(':')[0]))} se cortó varias veces seguidas: le avisamos a su jefe`;
+  if (r.kind === 'tokens') return `le diste más tokens por hoy a ${esc(roleOf(String(r.text).split(':')[0]))}`;
+  if (r.kind === 'handed off') return `${who} le pasó el trabajo a <b>${esc(teamName(String(r.text).split(':')[0].trim()))}</b> (${esc(r.ref)})`;
   return `${who} ${esc(KIND[r.kind] || r.kind)} ${esc(r.ref || '')}${x ? ': «' + x + '»' : ''}`;
 }
 function kanbanHtml(o, roleOf, seatsBusy) {
@@ -162,6 +166,43 @@ function sendFly(from, to) {
   LIVE.flow.particle(from, to, { color: colorOf(from), glyph: ENVELOPE, dur: 1.5 });
   setTimeout(() => hit(to, 'recv'), 1500);
 }
+// el trabajo sale a otro equipo: el sobre deja el lienzo por una puerta con su nombre, y un aviso lleva al objetivo
+// nuevo en unos segundos (o enseguida, con «ver ahora»; «quedarme acá» o pasar el mouse por encima lo frena)
+function handoffFly(o, r) {
+  const tid = String(r.text || '').split(':')[0].trim(), nid = +String(r.ref || '').replace('O-', ''); if (!tid || !nid) return;
+  const stage = $('#lvStage'), n = nodeEl(o.agent);
+  if (stage && n && !reduced()) {
+    const door = document.createElement('div'); door.className = 'lvdoor'; door.style.setProperty('--seat', colorOf(o.agent));
+    door.innerHTML = `${ICON_PASS}<span>${esc(teamName(tid))}</span>`; stage.appendChild(door);
+    const a = n.getBoundingClientRect(), b = door.getBoundingClientRect();
+    const env = document.createElement('div'); env.className = 'lvenv'; env.style.setProperty('--seat', colorOf(o.agent));
+    env.innerHTML = `<svg viewBox="-12 -9 24 18" aria-hidden="true">${ENVELOPE}</svg>`; document.body.appendChild(env);
+    const x0 = a.left + a.width / 2 - 14, y0 = a.top + a.height / 2 - 10, x1 = b.left + 10, y1 = b.top + b.height / 2 - 10, mx = (x0 + x1) / 2, my = Math.min(y0, y1) - 60;
+    const an = env.animate([{ transform: `translate(${x0}px,${y0}px) scale(.6)`, opacity: 0 }, { transform: `translate(${mx}px,${my}px) scale(1.2)`, opacity: 1, offset: 0.5 }, { transform: `translate(${x1}px,${y1}px) scale(.8)`, opacity: 0.2 }],
+      { duration: 1400, easing: 'cubic-bezier(.3,.7,.25,1)', fill: 'forwards' });
+    an.onfinish = () => { env.remove(); door.classList.add('got'); };
+    setTimeout(() => door.remove(), 15000);
+  }
+  handoffToast(o.id, tid, nid);
+}
+function handoffToast(from, tid, nid) {
+  document.querySelectorAll('.lvhand').forEach((x) => x.remove());
+  const href = url.obj(tid, nid), t = document.createElement('div'); let left = 6;
+  t.className = 'lvhand'; t.setAttribute('role', 'status');
+  t.innerHTML = `${ICON_PASS}<div class="hb"><b>Pasado a ${esc(teamName(tid))}</b><span>Ahora es O-${nid}, un objetivo de ese equipo. <span class="cd">Te llevo en ${left} s.</span></span></div>
+    <a class="btn primary" href="${esc(href)}">ver ahora</a><button type="button" class="lnk" data-stay>quedarme acá</button>`;
+  document.body.appendChild(t);
+  const stop = () => { clearInterval(iv); const cd = t.querySelector('.cd'); if (cd) cd.textContent = ''; };
+  const iv = setInterval(() => {
+    left -= 1;
+    if (left > 0) { t.querySelector('.cd').textContent = `Te llevo en ${left} s.`; return; }
+    clearInterval(iv); t.remove();
+    if (state.route.obj === from) go(href);   // solo si sigue mirando el objetivo de donde salió
+  }, 1000);
+  t.addEventListener('mouseenter', stop, { once: true });
+  t.querySelector('[data-stay]').onclick = () => { stop(); t.remove(); };
+  t.querySelector('a').onclick = (e) => { e.preventDefault(); e.stopPropagation(); stop(); t.remove(); go(href); };
+}
 function paintSeats(o) {
   const seats = o.seats || [];
   LIVE.members.forEach((m) => {
@@ -178,7 +219,7 @@ function paintSeats(o) {
     const tb = el.querySelector('.lvtasks'); if (tb && was.tasks !== th) tb.innerHTML = th;
     const over = overCap(o, s), ob = el.querySelector('.lvover');
     el.classList.toggle('over', over);
-    if (ob) { ob.hidden = !over; if (over) { ob.innerHTML = `${ICONS.warn}tope ${k(s.today)}/${k(s.cap)}`; ob.title = `Hoy lleva ${k(s.today)} tokens y su tope diario es ${k(s.cap)}. Mirá sus pasos para ver en qué se le fue.`; } }
+    if (ob) { ob.hidden = !over; if (over) { ob.innerHTML = `${ICONS.warn}tope ${k(s.today)}/${k(s.cap)}`; ob.title = `Hoy lleva ${k(s.today)} tokens y su tope diario es ${k(s.cap)}: tocá para darle más`; ob.onpointerdown = (e) => e.stopPropagation(); ob.onclick = (e) => { e.stopPropagation(); capPop(ob, LIVE.o, [s]); }; } }
     LIVE.view[m.agent] = { ...v, tasks: th };
   });
   // las líneas de quien trabaja corren despacio, del color de quien trabaja
@@ -208,11 +249,11 @@ function paintHead(o) {
   const rid = routineOf(o), rt = rid && state.routines.find((x) => x.id === rid);
   const html = `<span class="ref">${esc(o.ref)}</span><span class="st ${o.status}">${STATUS[o.status] || o.status}</span>
     <span class="crew">${busyN ? `<span class="pulse"></span>${busyN} trabajando` : 'nadie trabajando en este momento'}</span>
-    <span class="dmeta">${rt ? `⟳ <a data-nav href="${esc(url.routine(o.team, rid))}">${esc(rt.name)}</a> · ` : ''}${o.turns} ronda${o.turns === 1 ? '' : 's'} · <span id="lvTok" class="tok"></span>${o.budget_tokens ? ' de ' + k(o.budget_tokens) : ''} tokens</span>
+    <span class="dmeta">${rt ? `⟳ <a data-nav href="${esc(url.routine(o.team, rid))}">${esc(rt.name)}</a> · ` : ''}${o.turns} ronda${o.turns === 1 ? '' : 's'} · <span id="lvTok" class="tok"></span>${o.budget_tokens ? ' de ' + k(o.budget_tokens) : ''} tokens</span>${passLinksHtml(o)}
     ${o.budget_tokens ? `<span class="meter ${o.spent > o.budget_tokens * 0.8 ? 'hot' : ''}"><i id="lvMeter"></i></span>` : ''}
-    ${(() => { const ov = (o.seats || []).filter((s) => overCap(o, s)); return ov.length ? `<a class="lvwarn" data-nav href="${esc(url.edit(o.team))}" title="Pasaron su tope diario de tokens: mirá sus pasos para ver en qué se les fue y ajustá el equipo si hace falta">${ICONS.warn}${ov.map((s) => esc(s.role || s.agent)).join(', ')} ${ov.length === 1 ? 'pasó su' : 'pasaron su'} tope diario</a>` : ''; })()}
-    <span class="spacer"></span><button data-log>Registro</button>${o.status === 'paused' ? '<button data-resume>Seguir (más presupuesto)</button>' : ''}<button class="no" data-cancel>Cancelar</button>`;
-  if (LIVE.head !== html) { LIVE.head = html; $('#lvHead').innerHTML = html; bindObjButtons(o); const t = Math.round(LIVE.tok); if ($('#lvTok')) $('#lvTok').textContent = k(t); }
+    ${(() => { const ov = (o.seats || []).filter((s) => overCap(o, s)); return ov.length ? `<button type="button" class="lvwarn" data-capall title="Qué pasa y qué podés hacer">${ICONS.warn}${ov.map((s) => esc(s.role || s.agent)).join(', ')} ${ov.length === 1 ? 'pasó su' : 'pasaron su'} tope diario</button>` : ''; })()}
+    <span class="spacer"></span>${o.team ? '<button data-diag title="Qué está trabado y cómo destrabarlo">Revisar</button>' : ''}<button data-log>Registro</button>${o.status === 'paused' ? '<button data-resume>Seguir (más presupuesto)</button>' : ''}<button class="no" data-cancel>Cancelar</button>`;
+  if (LIVE.head !== html) { LIVE.head = html; $('#lvHead').innerHTML = html; bindObjButtons(o); const ca = $('#lvHead [data-capall]'); if (ca) ca.onclick = () => capPop(ca, LIVE.o, (LIVE.o.seats || []).filter((s) => overCap(LIVE.o, s))); const t = Math.round(LIVE.tok); if ($('#lvTok')) $('#lvTok').textContent = k(t); }
   tokTo(o);
 }
 function paintTicker(o) {
@@ -266,6 +307,7 @@ function onLedger(o, r) {
   if (r.kind === 'message') {
     const to = String(r.ref).replace('→', '').trim();
     if (Date.now() - (LIVE.sent[r.actor + '>' + to] || 0) > 15000) sendFly(r.actor, to);
+  } else if (r.kind === 'handed off') { handoffFly(o, r); soonReload(150);
   } else if (['added', 'claimed', 'updated'].includes(r.kind)) {
     const id = +String(r.ref || '').replace('#', ''); if (id) LIVE.flights.push({ agent: r.actor, id });
     soonReload(80);
@@ -283,7 +325,7 @@ async function renderLive(o) {
     LIVE.act = {}; LIVE.busy = {}; LIVE.pend = {}; LIVE.extra = []; LIVE.flights = []; LIVE.tok = 0; LIVE.lastSpent = null; LIVE.flown = new Set();
     LIVE.seenLedger = Math.max(0, ...(o.ledger || []).map((r) => r.id));
     el.classList.add('lvmode');
-    el.innerHTML = `<div class="lvhead" id="lvHead"></div><div class="lvask" id="lvAsk"></div>
+    el.innerHTML = `<div class="lvhead" id="lvHead"></div><div class="lvask" id="lvAsk"></div><div class="lvdiag" id="lvDiag" hidden></div>
       <div class="lvgrid"><section class="lvstage"><div class="lvlabel">El equipo, ahora</div><div id="lvStage"></div></section>
         <section class="lvboard"><div class="lvlabel">Tablero <span class="live2">● en vivo</span></div><div class="kanban" id="lvKanban"></div></section></div>
       <div class="lvticker" id="lvTicker"></div>`;
@@ -297,15 +339,15 @@ async function renderLive(o) {
   const seats = o.seats || [];
   const members = team ? team.members : seats.map((s) => ({ agent: s.agent, role: s.role, reports_to: '' }));
   LIVE.members = [...members].sort((a, b) => (b.agent === o.agent) - (a.agent === o.agent));
-  $('#lvAsk').innerHTML = `<p class="${state.askOpen ? '' : 'clamp'}"><b>Qué se pidió:</b> ${esc(o.text)}</p>${o.text.length > 160 ? `<button class="lnk" data-ask>${state.askOpen ? 'ver menos' : 'ver todo'}</button>` : ''}
-    ${o.status === 'waiting' ? `<div class="box q"><h5>${o.question_kind === 'approval' ? 'te pide aprobación' : 'te pregunta'}</h5><p>${esc(o.question)}</p><p class="ds">Respondé arriba, en la franja de lo que te espera.</p></div>` : ''}`;
+  $('#lvAsk').innerHTML = `<p class="${state.askOpen ? '' : 'clamp'}"><b>Qué se pidió:</b> ${esc(unescapeU(o.text))}</p>${o.text.length > 160 ? `<button class="lnk" data-ask>${state.askOpen ? 'ver menos' : 'ver todo'}</button>` : ''}
+    ${o.status === 'waiting' ? `<div class="box q"><h5>${o.pass_pending ? 'quiere pasarle el trabajo a otro equipo' : o.question_kind === 'approval' ? 'te pide aprobación' : 'te pregunta'}</h5><p>${questionHtml(o)}</p><p class="ds">Respondé arriba, en la franja de lo que te espera.</p></div>` : ''}`;
   // el equipo se dibuja solo si cambió quién está o cómo se une; lo demás se pinta encima
   const edges = members.filter((m) => m.reports_to && members.some((x) => x.agent === m.reports_to)).map((m) => ({ kind: 'reports', from: m.reports_to, to: m.agent }))
     .concat(((team && team.talks) || []).map(([x, y]) => ({ kind: 'talk', from: x, to: y })));
   const sig = members.map((m) => m.agent + '/' + (m.role || '')).join(',') + '|' + edges.map((e) => e.kind + e.from + e.to).join(',') + '|' + o.agent;
   if (LIVE.flowSig !== sig) {
     LIVE.flowSig = sig; LIVE.view = {};
-    const nodes = members.map((m) => ({ id: m.agent, title: m.role || m.agent, avatar: avatarOf(m.role || m.agent), lead: m.agent === o.agent, cls: 'lv', html: '<span class="lvover" hidden></span><div class="lvact"><span class="tx"></span></div><div class="lvtasks"></div>' }));
+    const nodes = members.map((m) => ({ id: m.agent, title: m.role || m.agent, avatar: avatarOf(m.role || m.agent), lead: m.agent === o.agent, cls: 'lv', html: '<button type="button" class="lvover" hidden></button><div class="lvact"><span class="tx"></span></div><div class="lvtasks"></div>' }));
     LIVE.flow.render({ nodes, edges, editable: false, storeKey: 'lampson.flow:' + BASE + ':' + (o.team || 'solo-' + o.agent), onSelect: (a) => { if (a) openDrawer('seat', a); } });
   }
   paintSeats(o);
@@ -313,12 +355,14 @@ async function renderLive(o) {
   // respaldo sin eventos: los mensajes nuevos que trae el sondeo (y que no llegaron en vivo) igual viajan
   const fresh = (o.ledger || []).filter((r) => r.id > LIVE.seenLedger && !LIVE.flown.has(r.id)).sort((a, b) => a.id - b.id);
   fresh.filter((r) => r.kind === 'message').forEach((r, i) => setTimeout(() => sendFly(r.actor, String(r.ref).replace('→', '').trim()), i * 350));
+  fresh.filter((r) => r.kind === 'handed off').forEach((r) => { LIVE.flown.add(r.id); handoffFly(o, r); });
   LIVE.seenLedger = Math.max(LIVE.seenLedger, ...(o.ledger || []).map((r) => r.id));
   // el tablero, solo si cambió (rehacerlo en cada pulso reinicia las ruedas)
   const busy = new Set(LIVE.members.filter((m) => busyOf(o, m.agent)).map((m) => m.agent)), kh = kanbanHtml(o, roleOf, busy);
   if (LIVE.kanban !== kh) { LIVE.kanban = kh; flipKanban($('#lvKanban'), kh); }
   flyCards();
   paintTicker(o);
+  diagBanner(o);
   if (state.drawer) renderDrawer(o);
 }
 // los botones del objetivo (en vivo y en el informe)
@@ -328,14 +372,17 @@ function bindObjButtons(o) {
   const rs = $('#objDetail [data-resume]'); if (rs) rs.onclick = () => reply(o.id, 'Seguí: te doy más presupuesto.', false);
   const ak = $('#objDetail [data-ask]'); if (ak) ak.onclick = () => { state.askOpen = !state.askOpen; loadObj(); };
   const lg = $('#objDetail [data-log]'); if (lg) lg.onclick = () => openDrawer('log');
+  const dg = $('#objDetail [data-diag]'); if (dg) dg.onclick = () => openDrawer('diag');
   state.objNow = o;
 }
 // el panel de la derecha: el registro completo, o los pasos de un asiento
-function openDrawer(kind, agent) { state.drawer = state.drawer && state.drawer.kind === kind && state.drawer.agent === agent ? null : { kind, agent }; if (state.objNow) renderDrawer(state.objNow); }
+function openDrawer(kind, agent) { state.drawer = state.drawer && state.drawer.kind === kind && state.drawer.agent === agent ? null : { kind, agent }; if (kind === 'diag') DIAG.drawn = null; if (state.objNow) renderDrawer(state.objNow); }
 async function renderDrawer(o) {
   const d = $('#objDrawer'); d.hidden = !state.drawer; if (!state.drawer) return;
   $('#odClose').onclick = () => { state.drawer = null; d.hidden = true; };
   if (state.drawer.kind === 'log') { $('#odTitle').textContent = 'Registro de ' + o.ref; $('#objLog').hidden = false; $('#odSeat').hidden = true; logHtml(o.ledger || [], $('#objLog')); return; }
+  if (state.drawer.kind === 'diag') { $('#odTitle').textContent = 'Revisar qué pasa · ' + o.ref; $('#objLog').hidden = true; $('#odSeat').hidden = false; renderDiag(o); return; }
+  DIAG.drawn = null;
   const a = state.drawer.agent, s = (o.seats || []).find((x) => x.agent === a);
   $('#odTitle').textContent = 'Pasos de ' + ((s && s.role) || a); $('#objLog').hidden = true; $('#odSeat').hidden = false;
   const seats = await loadSeatWork(o), w = seats.find((x) => x.agent === a);

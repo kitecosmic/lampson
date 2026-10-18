@@ -395,7 +395,7 @@ task check_action(action)
             give {"ok": false, "error": "action objective needs the id of a team of this project (got '" + tid + "')"}
         when not contains(action, "text") or trim(text(action["text"])) == ""
             give {"ok": false, "error": "action objective needs the text of the objective"}
-        give {"ok": true, "action": {"type": "objective", "team": tid, "text": trim(text(action["text"])), "budget_tokens": floor(number(when contains(action, "budget_tokens") and action["budget_tokens"] != nothing then action["budget_tokens"] otherwise 600000)), "round_seconds": floor(number(when contains(action, "round_seconds") and action["round_seconds"] != nothing then action["round_seconds"] otherwise 60))}}
+        give {"ok": true, "action": {"type": "objective", "team": tid, "text": trim(text(action["text"])), "budget_tokens": floor(number(when contains(action, "budget_tokens") and action["budget_tokens"] != nothing then action["budget_tokens"] otherwise 600000)), "round_seconds": floor(number(when contains(action, "round_seconds") and action["round_seconds"] != nothing then action["round_seconds"] otherwise 60)), "pass_ask": when contains(action, "pass_ask") then action["pass_ask"] == true otherwise false}}
     when kind == "plugin"
         let pname be plugin_of(action)
         when pname == "" or not contains(action, "tool")
@@ -686,7 +686,7 @@ export task run_routine(t)
     let still be where(teams.obj_list(), (o) => o["created_by"] == mine and contains(["active", "waiting", "paused"], o["status"]))
     when length(still) > 0
         give "SKIPPED: the previous run (O-" + text(still[0]["id"]) + ") is still open"
-    let id be teams.obj_create(teams.lead_of(tm), a["text"], {"team": tm["id"], "budget_tokens": a["budget_tokens"], "round_seconds": a["round_seconds"], "created_by": mine})
+    let id be teams.obj_create(teams.lead_of(tm), a["text"], {"team": tm["id"], "budget_tokens": a["budget_tokens"], "round_seconds": a["round_seconds"], "created_by": mine, "pass_ask": when contains(a, "pass_ask") then a["pass_ask"] == true otherwise false})
     give "O-" + text(id) + " → team " + tm["id"]
 
 -- descripción de la acción (una línea) para previews y listados

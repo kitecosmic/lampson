@@ -634,6 +634,7 @@ export task turn(o, messages, label, hooks)
     when starts_with(th, "team:")
         teams.record_spend(o["ctx"]["agent"], cost)
         teams.team_turn_end(slice(th, 5, length(th)), o["ctx"]["agent"], cost)
+        teams.seat_turn_end(slice(th, 5, length(th)), o["ctx"]["agent"], field(result, "stopped", "done"), field(result, "text", ""))
     when starts_with(th, "objective:")
         teams.obj_turn_end(floor(number(slice(th, 10, length(th)))), cost)
     save(o, result["messages"])
@@ -676,5 +677,10 @@ export task deliver(sobre, hooks)
     let images be field(sobre, "images", [])
     when length(images) > 0
         set umsg to {"role": "user", "content": msg, "images": images}
+    let t0 be now()
     let result be turn(o, append(o["messages"], umsg), msg, hooks)
+    -- en un equipo, la respuesta final no la lee nadie: si el asiento no mandó nada, se le reenvía a quien lo despertó
+    let th be text(o["thread"])
+    when starts_with(th, "team:")
+        teams.forward_final(slice(th, 5, length(th)), o["ctx"]["agent"], text(field(field(sobre, "meta", {}), "from", "")), field(result, "stopped", "done"), field(result, "text", ""), t0, msg)
     give {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": sid, "text": result["text"], "steps": result["steps"], "usage": result["usage"], "stopped": result["stopped"]}

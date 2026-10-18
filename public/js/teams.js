@@ -10,7 +10,7 @@ const BASE = (location.pathname.match(/^\/w\/[^/]+/) || [''])[0];
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const LANES = [['todo', 'por hacer'], ['doing', 'en curso'], ['review', 'en revisión'], ['done', 'hecho'], ['blocked', 'bloqueada']];
 const STATUS = { active: 'en curso', waiting: 'te espera', done: 'hecho', failed: 'falló', cancelled: 'cancelado', paused: 'sin presupuesto' };
-const KIND = { added: 'agregó', claimed: 'tomó', updated: 'movió', message: 'escribió', report: 'informó', asked: 'preguntó', 'approval requested': 'pide aprobación', approved: 'aprobó', denied: 'denegó', answered: 'respondió', done: 'terminó', failed: 'falló', cancelled: 'canceló', paused: 'pausado', budget: 'presupuesto', 'over cap': 'pasó su tope diario', objective: 'nuevo objetivo', error: 'error' };
+const KIND = { added: 'agregó', claimed: 'tomó', updated: 'movió', message: 'escribió', report: 'informó', asked: 'preguntó', 'approval requested': 'pide aprobación', approved: 'aprobó', denied: 'denegó', answered: 'respondió', done: 'terminó', failed: 'falló', cancelled: 'canceló', paused: 'pausado', budget: 'presupuesto', 'over cap': 'pasó su tope diario', objective: 'nuevo objetivo', 'handed off': 'pasó el trabajo a', continued: 'sigue donde quedó', stuck: 'se trabó', tokens: 'tokens', error: 'error' };
 const PRESETS = [['code', 'código (leer, editar, comandos)'], ['read', 'leer y correr comandos (no edita)'], ['none', 'ninguna (solo coordina)']];
 const ROUTINE = 'rutina:';   // created_by de las ejecuciones de una rutina (lib/schedule.syn → run_routine)
 const state = { approvals: [], teamsMeta: [], draft: null, sel: null, route: { page: 'list' }, team: null, objectives: [], agents: [], teams: [], routines: [], seen: new Set() };
@@ -69,7 +69,7 @@ document.addEventListener('click', (e) => {
   e.preventDefault(); go(a.getAttribute('href'));
 });
 const teamOf = (id) => state.teams.find((t) => t.id === id);
-const teamName = (id) => { const t = teamOf(id) || (state.teamsMeta || []).find((x) => x.id === id); return (t && t.name) || id; };
+const teamName = (id) => { const t = teamOf(id) || (state.teamsMeta || []).find((x) => x.id === id); return (t && t.name) || String(id).replace(/~.*$/, ''); };
 
 // las migas: Proyectos › proyecto › Equipos › equipo › (O-n | rutina | editar | nuevo)
 function renderCrumbs() {
@@ -94,6 +94,48 @@ setTheme(document.documentElement.getAttribute('data-theme') || 'dark');
 $('#theme').onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 
 // ---------- lo que espera a la persona ----------
+// ---------- lo que te espera: preguntas, aprobaciones, pases a otro equipo y merges ----------
+// Cada aviso dice quién (su rol y su equipo), qué quiere y, si es un merge, qué entra: la rama, sus commits, los
+// archivos y si choca (lib/worktree.syn → preview), así se aprueba sabiendo qué y no leyendo el comando.
+const ATTN_SVG = {
+  key: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="M11.3 11.7 20 3M16.5 6.5l2.5 2.5M14 9l2 2"/></svg>',
+  arrow: '<svg class="arr" viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h20M16 1.5 21 6l-5 4.5"/></svg>',
+};
+function seatOf(a) {
+  for (const t of state.teams) { const m = t.members.find((x) => x.agent === a); if (m) return { role: m.role || a, team: t }; }
+  return { role: a, team: null };
+}
+// por qué pide permiso, en palabras
+function whyText(why) {
+  const w = String(why || '').replace(/ · agent \S+$/, '');
+  let m;
+  if ((m = w.match(/dangerous pattern: (.+)$/))) return `Es un comando que puede borrar o cambiar cosas difíciles de recuperar (${m[1].trim()}).`;
+  if ((m = w.match(/asks before every (\S+) call/))) return `Este agente pide permiso antes de cada «${m[1]}».`;
+  if (/shared history/.test(w)) return 'Toca la historia compartida del proyecto: siempre lo aprobás vos.';
+  return w;
+}
+function mergeHtml(a) {
+  const p = a.preview;
+  if (!p) return `<pre class="av-cmd">${esc(a.message)}</pre>`;
+  if (p.missing) return `<p class="av-warn">La rama <code>${esc(p.branch)}</code> no existe: si lo aprobás, el comando va a fallar.</p><pre class="av-cmd">${esc(a.message)}</pre>`;
+  const add = p.files.reduce((n, f) => n + f.add, 0), del = p.files.reduce((n, f) => n + f.del, 0);
+  const badge = p.conflicts ? `<span class="av-badge bad">choca con ${esc(p.into)}</span>` : `<span class="av-badge ok">${p.ff ? 'avance directo' : 'sin conflictos'}</span>`;
+  const open = (state.attnOpen || new Set()).has(a.id);
+  return `<div class="av-merge">
+    <div class="av-flow"><code>${esc(p.branch)}</code>${ATTN_SVG.arrow}<code>${esc(p.into || 'remoto')}</code>${badge}</div>
+    ${p.count ? `<p class="av-stat">${p.count} commit${p.count === 1 ? '' : 's'} · ${p.files.length} archivo${p.files.length === 1 ? '' : 's'} <span class="add">+${add}</span> <span class="del">−${del}</span></p>
+    <ul class="av-commits">${p.commits.slice(0, 4).map((c) => `<li><span class="sha">${esc(c.sha)}</span><span class="sj">${esc(c.subject)}</span><span class="by">${esc(String(c.author).split(" · ")[0])}</span></li>`).join('')}${p.count > 4 ? `<li class="more">y ${p.count - 4} más</li>` : ''}</ul>
+    <details class="av-files" data-k="${esc(a.id)}"${open ? ' open' : ''}><summary>ver archivos y comando</summary><ul>${p.files.map((f) => `<li><span class="fp">${esc(f.path)}</span><span class="add">+${f.add}</span><span class="del">−${f.del}</span></li>`).join('')}</ul><pre class="av-cmd">${esc(a.message)}</pre></details>` : `<p class="av-stat">No trae nada nuevo: ${esc(p.into)} ya tiene todo lo de esta rama.</p>`}
+    ${p.conflicts ? '<p class="av-warn">Toca las mismas líneas que cambiaron en la rama principal: si lo aprobás, el merge se frena con conflictos y el agente tiene que resolverlos.</p>' : ''}
+  </div>`;
+}
+function avisoHtml(kind, { who, verb, meta, body, acts, id }) {
+  const icon = { ask: ICONS.say, ok: ATTN_SVG.key, pass: ICON_PASS, git: ICONS.git }[kind];
+  const fresh = !(state.attnSeen || (state.attnSeen = new Set())).has(id); state.attnSeen.add(id);
+  return `<article class="aviso k-${kind}${fresh ? ' fresh' : ''}"><span class="av-ico">${icon}</span><div class="av-body">
+    <header><span class="av-who"><b>${esc(who)}</b> ${verb}</span><span class="av-meta">${meta}</span></header>
+    ${body}<div class="av-acts">${acts}</div></div></article>`;
+}
 function renderAttention() {
   const waiting = state.objectives.filter((o) => o.status === 'waiting');
   const pend = state.approvals.filter((a) => a.status === 'pending');
@@ -101,25 +143,42 @@ function renderAttention() {
   box.hidden = waiting.length === 0 && pend.length === 0;
   const keep = {};
   box.querySelectorAll('input[data-id]').forEach((i) => (keep[i.dataset.id] = i.value));
-  box.innerHTML = waiting.map((o) => {
-    const ap = o.question_kind === 'approval';
-    return `<div class="ask ${ap ? 'approval' : ''}"><span class="who">${esc(o.agent)} ${ap ? 'pide aprobación' : 'pregunta'}</span>
-      <div class="q"><a class="ref" data-nav href="${esc(url.obj(o.team, o.id))}">${esc(o.ref)}</a> ${esc(o.question)}</div>
-      <div class="acts">${ap
-        ? `<input data-id="${o.id}" placeholder="nota (opcional)"><button class="ok" data-approve="${o.id}">Aprobar</button><button class="no" data-deny="${o.id}">Denegar</button>`
-        : `<input data-id="${o.id}" placeholder="tu respuesta"><button class="primary" data-answer="${o.id}">Responder</button>`}</div></div>`;
+  const focused = document.activeElement && box.contains(document.activeElement) ? document.activeElement.dataset.id : null;
+  const metaOf = (team, ref, href, at) => `${team ? esc(team.name || team.id) + ' · ' : ''}${ref ? `<a data-nav href="${esc(href)}">${esc(ref)}</a> · ` : ''}${ago(at)}`;
+  const html = waiting.map((o) => {
+    const s = seatOf(o.agent), ap = o.question_kind === 'approval', meta = metaOf(s.team || teamOf(o.team), o.ref, url.obj(o.team, o.id), o.updated_at);
+    if (o.pass_pending) {
+      const m = String(o.question || '').match(/^hand over to team (\S+):\n?([\s\S]*)$/) || [];
+      return avisoHtml('pass', { id: 'o' + o.id, who: s.role, verb: `quiere pasarle el trabajo a <b>${esc(teamName(m[1] || ''))}</b>`, meta,
+        body: `<p class="av-lbl">Lo que le va a pedir:</p><blockquote class="av-q">${reportHtml(m[2] || '')}</blockquote>`,
+        acts: `<input data-id="${o.id}" placeholder="nota para ${esc(s.role)} (opcional)"><button class="ok" data-approve="${o.id}">Pasárselo</button><button class="no" data-deny="${o.id}">No pasarlo</button>` });
+    }
+    return avisoHtml(ap ? 'ok' : 'ask', { id: 'o' + o.id, who: s.role, verb: ap ? 'te pide aprobación' : 'te pregunta', meta,
+      body: `<div class="av-q">${reportHtml(o.question)}</div>`,
+      acts: ap ? `<input data-id="${o.id}" placeholder="nota (opcional)"><button class="ok" data-approve="${o.id}">Aprobar</button><button class="no" data-deny="${o.id}">Denegar</button>`
+        : `<input data-id="${o.id}" placeholder="tu respuesta"><button class="primary" data-answer="${o.id}">Responder</button>` });
   }).join('') + pend.map((a) => {
-    const who = (String(a.why || '').match(/agent (\S+)/) || [])[1] || 'un agente';
-    return `<div class="ask approval"><span class="who">${esc(who)} pide aprobación</span><div class="q"><code>${esc(a.message)}</code><br><span class="ref">${esc(String(a.why || '').replace(/ · agent \S+$/, ''))}</span></div>
-      <div class="acts"><button class="ok" data-qok="${esc(a.id)}">Aprobar</button><button class="no" data-qno="${esc(a.id)}">Denegar</button></div></div>`;
+    const agent = (String(a.why || '').match(/agent (\S+)/) || [])[1], s = agent ? seatOf(agent) : { role: 'un agente', team: null };
+    const meta = metaOf(s.team, '', '', a.created), p = a.preview;
+    if (p) return avisoHtml('git', { id: a.id, who: s.role, verb: p.kind === 'push' ? `quiere subir <b>${esc(p.branch)}</b>` : `quiere llevar su trabajo a <b>${esc(p.into)}</b>`, meta,
+      body: mergeHtml(a), acts: `<button class="ok" data-qok="${esc(a.id)}">${p.kind === 'push' ? 'Aprobar push' : 'Aprobar merge'}</button><button class="no" data-qno="${esc(a.id)}">Denegar</button><span class="av-exp">vence ${esc(fmtWhen(a.expires_at))}</span>` });
+    return avisoHtml('ok', { id: a.id, who: s.role, verb: 'quiere correr un comando', meta,
+      body: `<pre class="av-cmd">${esc(a.message)}</pre><p class="av-why">${esc(whyText(a.why))}</p>`,
+      acts: `<button class="ok" data-qok="${esc(a.id)}">Aprobar</button><button class="no" data-qno="${esc(a.id)}">Denegar</button><span class="av-exp">vence ${esc(fmtWhen(a.expires_at))}</span>` });
   }).join('');
-  box.querySelectorAll('[data-qok]').forEach((b) => (b.onclick = async () => { await api('approve', { id: b.dataset.qok, decision: true }); refresh(); }));
-  box.querySelectorAll('[data-qno]').forEach((b) => (b.onclick = async () => { await api('approve', { id: b.dataset.qno, decision: false }); refresh(); }));
-  box.querySelectorAll('input[data-id]').forEach((i) => { if (keep[i.dataset.id]) i.value = keep[i.dataset.id]; });
+  // rehacerlo en cada pulso cortaría lo que estás escribiendo: solo si cambió
+  if (state.attnHtml === html) return;
+  state.attnHtml = html; box.innerHTML = html;
+  box.querySelectorAll('details[data-k]').forEach((d) => (d.ontoggle = () => { const s = state.attnOpen || (state.attnOpen = new Set()); if (d.open) s.add(d.dataset.k); else s.delete(d.dataset.k); }));
+  const act = (b, fn) => (b.onclick = async () => { b.closest('.aviso').classList.add('going'); b.closest('.av-acts').querySelectorAll('button').forEach((x) => (x.disabled = true)); await fn(); });
+  box.querySelectorAll('[data-qok]').forEach((b) => act(b, async () => { await api('approve', { id: b.dataset.qok, decision: true }); refresh(); }));
+  box.querySelectorAll('[data-qno]').forEach((b) => act(b, async () => { await api('approve', { id: b.dataset.qno, decision: false }); refresh(); }));
+  box.querySelectorAll('input[data-id]').forEach((i) => { if (keep[i.dataset.id]) i.value = keep[i.dataset.id]; if (focused === i.dataset.id) i.focus(); });
   const note = (id) => (box.querySelector(`input[data-id="${id}"]`) || {}).value || '';
-  box.querySelectorAll('[data-approve]').forEach((b) => (b.onclick = () => reply(+b.dataset.approve, note(b.dataset.approve), true)));
-  box.querySelectorAll('[data-deny]').forEach((b) => (b.onclick = () => reply(+b.dataset.deny, note(b.dataset.deny), false)));
-  box.querySelectorAll('[data-answer]').forEach((b) => (b.onclick = () => { const t = note(b.dataset.answer); if (t.trim()) reply(+b.dataset.answer, t, false); }));
+  box.querySelectorAll('[data-approve]').forEach((b) => act(b, () => reply(+b.dataset.approve, note(b.dataset.approve), true)));
+  box.querySelectorAll('[data-deny]').forEach((b) => act(b, () => reply(+b.dataset.deny, note(b.dataset.deny), false)));
+  box.querySelectorAll('[data-answer]').forEach((b) => (b.onclick = () => { const t = note(b.dataset.answer); if (!t.trim()) { box.querySelector(`input[data-id="${b.dataset.answer}"]`).focus(); return; } b.closest('.aviso').classList.add('going'); reply(+b.dataset.answer, t, false); }));
+  box.querySelectorAll('input[data-id]').forEach((i) => (i.onkeydown = (e) => { if (e.key === 'Enter') { const b = i.parentElement.querySelector('[data-answer], [data-approve]'); if (b) b.click(); } }));
 }
 async function reply(id, text, approved) { await api(`objectives/${id}/reply`, { text, approved }); refresh(); }
 
@@ -134,8 +193,8 @@ function objCardHtml(o, opts = {}) {
   const rid = routineOf(o), rt = rid && state.routines.find((x) => x.id === rid);
   const now = o.status === 'waiting' ? `<p class="oq">«${esc(firstSentence(o.question, 160))}»</p>` : o.progress && o.status === 'active' ? `<p class="oprog">Ahora: ${esc(firstSentence(o.progress, 150))}</p>` : '';
   return `<a class="ocard ${o.status}" data-nav href="${esc(url.obj(o.team, o.id))}">
-    <div class="oh"><span class="ref">${esc(o.ref)}</span><span class="st ${o.status}">${STATUS[o.status] || o.status}</span>${o.working ? '<span class="tw">● ahora</span>' : ''}${rt && !opts.inRoutine ? `<span class="from" title="una ejecución de esta rutina">⟳ ${esc(rt.name)}</span>` : ''}</div>
-    <p class="otext">${esc(firstSentence(o.text))}</p>${now}
+    <div class="oh"><span class="ref">${esc(o.ref)}</span><span class="st ${o.status}">${STATUS[o.status] || o.status}</span>${o.working ? '<span class="tw">● ahora</span>' : ''}${rt && !opts.inRoutine ? `<span class="from" title="una ejecución de esta rutina">⟳ ${esc(rt.name)}</span>` : ''}${String(o.created_by || '').startsWith('team:') ? `<span class="from" title="se lo pasó otro equipo">viene de ${esc(teamName(o.created_by.slice(5)))}</span>` : ''}</div>
+    <p class="otext">${esc(firstSentence(unescapeU(o.text)))}</p>${now}
     <div class="ometa">${o.turns} ronda${o.turns === 1 ? '' : 's'} · ${k(o.spent)} tokens · ${ago(o.updated_at)}</div></a>`;
 }
 const MARK = { done: ['✓', 'hecho'], failed: ['✕', 'falló'], cancelled: ['–', 'cancelado'], active: ['●', 'trabajando'], waiting: ['⚑', 'te espera'], paused: ['‖', 'sin presupuesto'] };
@@ -187,7 +246,8 @@ function objFormHtml(t, mode) {
   const f = state.form;
   return `<div class="wcard oform"><h2>${mode === 'repeat' ? 'Rutina nueva' : 'Objetivo nuevo'} <span class="for">para ${esc(t.name || t.id)}</span></h2>
     <div class="seg" role="tablist"><button type="button" data-mode="once" class="${mode === 'once' ? 'on' : ''}">Una vez</button><button type="button" data-mode="repeat" class="${mode === 'repeat' ? 'on' : ''}">Se repite</button></div>
-    <label class="big">¿Qué tiene que lograr?<textarea id="nText" rows="6" placeholder="${mode === 'repeat' ? 'Revisá las ventas de la semana y armá un resumen corto con lo que cambió y qué conviene hacer.' : 'Agregá a la API filtrar las tareas por estado, con tests. Trabajá en tu rama y pedí aprobación antes de mezclar.'}">${esc(f.text)}</textarea></label>
+    <label class="big">¿Qué tiene que lograr?<span class="mwrap"><textarea id="nText" rows="6" placeholder="${mode === 'repeat' ? 'Revisá las ventas de la semana y armá un resumen corto con lo que cambió y qué conviene hacer.' : 'Agregá a la API filtrar las tareas por estado, con tests. Trabajá en tu rama y pedí aprobación antes de mezclar.'}">${esc(f.text)}</textarea><span class="mlist" id="nMention" role="listbox" hidden></span></span></label>
+    <div id="nPass">${passBoxHtml(t, f)}</div>
     ${mode === 'repeat' ? `<div class="whenbox"><label>Cuándo <select id="nFreq"><option value="daily" ${f.freq === 'daily' ? 'selected' : ''}>todos los días</option><option value="days" ${f.freq === 'days' ? 'selected' : ''}>ciertos días de la semana</option><option value="every" ${f.freq === 'every' ? 'selected' : ''}>cada tantas horas</option></select></label>
       ${f.freq === 'every' ? `<label>Cada <span class="unit"><input id="nEvery" type="number" min="1" max="168" value="${f.every}"> h</span></label>` : `<label>A las <input id="nAt" type="time" value="${esc(f.at)}"></label>`}
       ${f.freq === 'days' ? `<div class="days">${DAYS.map(([v, l]) => `<label class="chip"><input type="checkbox" data-day="${v}" ${f.days.includes(v) ? 'checked' : ''}>${l}</label>`).join('')}</div>` : ''}
@@ -197,8 +257,65 @@ function objFormHtml(t, mode) {
     </div></details>
     <div class="wacts"><button type="button" id="nCancel">Cancelar</button><button type="button" class="primary" id="nGo">${mode === 'repeat' ? 'Crear rutina' : 'Empezar'}</button></div><p class="ferr" id="nErr"></p></div>`;
 }
+// ---------- pasarle el trabajo a otro equipo: «…y si encontrás algo, pasáselo a @desarrollo» ----------
+// (lib/teams.syn → mentions: los mismos @id que reconoce el servidor)
+function mentionsOf(txt, self) {
+  const ids = new Set(state.teams.map((x) => x.id)), out = [];
+  for (const m of String(txt || '').toLowerCase().matchAll(/@([a-z0-9][a-z0-9-]*)/g)) { const id = m[1].replace(/-+$/, ''); if (ids.has(id) && id !== self && !out.includes(id)) out.push(id); }
+  return out;
+}
+function passBoxHtml(t, f) {
+  const others = state.teams.filter((x) => x.id !== t.id);
+  if (!others.length) return '';
+  const to = mentionsOf(f.text, t.id);
+  if (!to.length) return `<p class="ds mhint">¿El resultado le sirve a otro equipo? Escribí <b>@</b> y su nombre (${others.slice(0, 3).map((x) => '@' + esc(x.id)).join(', ')}) y el líder se lo pasa, ya preparado para ese equipo.</p>`;
+  return `<div class="passbox">${ICON_PASS}<div><p>Si hace falta, ${esc(t.name || t.id)} se lo pasa a ${to.map((x) => `<b>${esc(teamName(x))}</b>`).join(' o ')}: les escribe un pedido para ese equipo, con lo que necesitan para hacerlo. Si no hay nada para ellos, solo te informa a vos.</p>
+    <label class="chk"><input type="checkbox" id="nPassAsk" ${f.passAsk ? 'checked' : ''}> Preguntarme antes de pasarlo</label></div></div>`;
+}
+const ICON_PASS = '<svg class="ico pass" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="13" height="10" rx="1.8"/><path d="M3 7l6 4.4L15 7"/><path d="M15 17.5h6.5M18.5 14.5l3 3-3 3"/></svg>';
+// el autocompletado de @: debajo del texto, con flechas, Enter o Tab
+function bindMentions(t, onChange) {
+  const ta = $('#nText'), box = $('#nMention'); let items = [], at = 0;
+  const query = () => { const m = ta.value.slice(0, ta.selectionStart).match(/(^|\s)@([a-z0-9-]*)$/i); return m ? m[2].toLowerCase() : null; };
+  const paint = () => {
+    const q = query();
+    items = q === null ? [] : state.teams.filter((x) => x.id !== t.id && (x.id.startsWith(q) || String(x.name || '').toLowerCase().includes(q))).slice(0, 6);
+    box.hidden = !items.length; at = Math.min(at, Math.max(0, items.length - 1));
+    box.innerHTML = items.map((x, i) => `<span class="mi${i === at ? ' on' : ''}" role="option" data-i="${i}"><b>@${esc(x.id)}</b>${x.name && x.name !== x.id ? ' ' + esc(x.name) : ''}${x.description && x.description !== x.name ? `<i>${esc(short(x.description, 70))}</i>` : ''}</span>`).join('');
+  };
+  const pick = (i) => {
+    const x = items[i]; if (!x) return;
+    const pos = ta.selectionStart, before = ta.value.slice(0, pos).replace(/@([a-z0-9-]*)$/i, '@' + x.id + ' ');
+    ta.value = before + ta.value.slice(pos); ta.selectionStart = ta.selectionEnd = before.length; ta.focus();
+    box.hidden = true; items = []; onChange();
+  };
+  ta.addEventListener('input', () => { at = 0; paint(); onChange(); });
+  ta.addEventListener('click', paint);
+  ta.addEventListener('blur', () => setTimeout(() => (box.hidden = true), 150));
+  ta.addEventListener('keydown', (e) => {
+    if (box.hidden || !items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); at = (at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length; paint(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(at); }
+    else if (e.key === 'Escape') { box.hidden = true; }
+  });
+  box.addEventListener('mousedown', (e) => { const el = e.target.closest('[data-i]'); if (el) { e.preventDefault(); pick(+el.dataset.i); } });
+}
+// la pregunta de un objetivo, en palabras: un pase pendiente dice a qué equipo y qué le va a pedir
+function questionHtml(o) {
+  const m = String(o.question || '').match(/^hand over to team (\S+):\n?([\s\S]*)$/);
+  return m ? `pasarle a <b>${esc(teamName(m[1]))}</b>: ${esc(m[2])}` : esc(o.question);
+}
+// de dónde vino y a quién se lo pasó (en vivo y en el informe)
+function passLinksHtml(o) {
+  const out = [];
+  if (o.from) out.push(`<a class="xlink from" data-nav href="${esc(url.obj(o.from.team, o.from.id))}">viene de <b>${esc(teamName(o.from.team))}</b> · ${esc(o.from.ref)}</a>`);
+  (o.passed || []).forEach((c) => out.push(`<a class="xlink to" data-nav href="${esc(url.obj(c.team, c.id))}">${ICON_PASS}pasado a <b>${esc(teamName(c.team))}</b> · ${esc(c.ref)} · ${esc(STATUS[c.status] || c.status)}</a>`));
+  const left = (o.pass_to || []).filter((x) => !(o.passed || []).some((c) => c.team === x));
+  if (left.length && OPEN_OBJ.includes(o.status)) out.push(`<span class="xlink maybe" title="lo nombraste en el pedido: el líder decide si hace falta">puede pasarlo a ${left.map((x) => esc(teamName(x))).join(' o ')}</span>`);
+  return out.join('');
+}
 function bindObjForm(t, mode) {
-  const f = state.form, keep = () => { f.text = $('#nText').value; if ($('#nAt')) f.at = $('#nAt').value; if ($('#nEvery')) f.every = +$('#nEvery').value || 1; f.budget = +$('#nBudget').value || 0; f.days = [...document.querySelectorAll('[data-day]:checked')].map((c) => c.dataset.day); };
+  const f = state.form, keep = () => { f.text = $('#nText').value; if ($('#nPassAsk')) f.passAsk = $('#nPassAsk').checked; if ($('#nAt')) f.at = $('#nAt').value; if ($('#nEvery')) f.every = +$('#nEvery').value || 1; f.budget = +$('#nBudget').value || 0; f.days = [...document.querySelectorAll('[data-day]:checked')].map((c) => c.dataset.day); };
   const redraw = () => { keep(); $('#objNew').innerHTML = objFormHtml(t, mode); bindObjForm(t, mode); };
   document.querySelectorAll('#objNew [data-mode]').forEach((b) => (b.onclick = () => { keep(); if (b.dataset.mode !== mode) go(b.dataset.mode === 'repeat' ? url.newRoutine(t.id) : url.newObj(t.id), true); }));
   if ($('#nFreq')) $('#nFreq').onchange = (e) => { keep(); f.freq = e.target.value; redraw(); };
@@ -208,7 +325,7 @@ function bindObjForm(t, mode) {
     if (!f.text.trim()) { $('#nErr').textContent = 'Escribí qué tiene que lograr el equipo.'; return; }
     $('#nGo').disabled = true;
     if (mode === 'once') {
-      const r = await api('objectives/add', { team: t.id, text: f.text.trim(), budget_tokens: f.budget });
+      const r = await api('objectives/add', { team: t.id, text: f.text.trim(), budget_tokens: f.budget, pass_ask: !!f.passAsk });
       $('#nGo').disabled = false;
       if (!r.ok) { $('#nErr').textContent = r.data.error || 'no se pudo crear'; return; }
       state.form = null; await refreshObjectives(); go(url.obj(t.id, r.data.id), true); return;
@@ -216,11 +333,13 @@ function bindObjForm(t, mode) {
     // la rutina: una tarea programada (lib/schedule.syn) cuya acción le da este objetivo al equipo
     if (f.freq === 'days' && !f.days.length) { $('#nGo').disabled = false; $('#nErr').textContent = 'Elegí al menos un día.'; return; }
     const when = f.freq === 'every' ? 'every ' + Math.max(1, f.every) + 'h' : (f.freq === 'days' ? f.days.join(',') + ' ' : 'daily ') + (f.at || '09:00');
-    const r = await api('schedules/add', { name: firstSentence(f.text, 60), when, action: { type: 'objective', team: t.id, text: f.text.trim(), budget_tokens: f.budget } });
+    const r = await api('schedules/add', { name: firstSentence(f.text, 60), when, action: { type: 'objective', team: t.id, text: f.text.trim(), budget_tokens: f.budget, pass_ask: !!f.passAsk } });
     $('#nGo').disabled = false;
     if (!r.ok) { $('#nErr').textContent = r.data.error || 'no se pudo crear la rutina'; return; }
     state.form = null; await refreshRoutines(); go(url.routine(t.id, r.data.task.id), true);
   };
+  const passNow = () => { keep(); const h = passBoxHtml(t, f); if ($('#nPass').innerHTML !== h) $('#nPass').innerHTML = h; };
+  bindMentions(t, passNow);
   setTimeout(() => $('#nText') && $('#nText').focus(), 0);
 }
 
@@ -241,6 +360,41 @@ function overText(r) {
 }
 // ¿un asiento pasó su tope diario? (solo cuenta para objetivos de hoy: el gasto es del día)
 const overCap = (o, s) => s.cap > 0 && s.today >= s.cap && new Date(o.created_at * 1000).toDateString() === new Date().toDateString();
+// lo que se puede hacer con un asiento que pasó su tope: darle más por hoy, reiniciarlo o cambiar su tope
+// (lib/api.syn → seat_tokens; el tope propio del asiento se guarda con el equipo)
+function capPop(anchor, o, seats) {
+  document.querySelectorAll('.cappop').forEach((x) => x.remove());
+  const live = OPEN_OBJ.includes(o.status), left = o.budget_tokens ? Math.max(0, o.budget_tokens - o.spent) : 0;
+  const pop = document.createElement('div'); pop.className = 'cappop'; pop.setAttribute('role', 'dialog');
+  pop.innerHTML = `<button type="button" class="iclose" data-x title="cerrar">✕</button>
+    ${seats.map((s) => `<div class="cp-seat" data-agent="${esc(s.agent)}"><p class="cp-h"><b>${esc(s.role || s.agent)}</b> lleva <b>${k(s.today)}</b> de ${k(s.cap)} hoy</p>
+      <div class="cp-bar"><i style="width:${Math.min(100, (100 * s.cap) / Math.max(s.today, 1))}%"></i></div>
+      <div class="cp-acts"><button type="button" class="primary" data-grant>Darle ${k(s.cap)} más hoy</button><button type="button" data-reset>Reiniciar su cuenta de hoy</button><button type="button" class="lnk" data-edit>Cambiar su tope</button></div></div>`).join('')}
+    <p class="cp-note">${live && (!o.budget_tokens || left > 0) ? `Mientras este objetivo tenga presupuesto (le quedan ${o.budget_tokens ? k(left) : 'sin límite'}), sigue trabajando igual: el tope diario frena sus turnos sueltos, fuera de un objetivo.` : 'Sin más presupuesto en un objetivo, al pasar el tope no recibe turnos hasta mañana.'} Mirá sus pasos para ver en qué se le fue.</p>
+    <p class="ferr" data-err></p>`;
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect(), w = pop.offsetWidth;
+  pop.style.left = Math.max(12, Math.min(innerWidth - w - 12, r.left + r.width / 2 - w / 2)) + 'px';
+  pop.style.top = Math.min(innerHeight - pop.offsetHeight - 12, r.bottom + 8) + 'px';
+  const close = () => { pop.remove(); document.removeEventListener('pointerdown', away, true); };
+  const away = (e) => { if (!pop.contains(e.target) && e.target !== anchor) close(); };
+  setTimeout(() => document.addEventListener('pointerdown', away, true), 0);
+  pop.querySelector('[data-x]').onclick = close;
+  pop.querySelectorAll('.cp-seat').forEach((box) => {
+    const agent = box.dataset.agent, s = seats.find((x) => x.agent === agent);
+    const send = async (body, btn) => {
+      box.querySelectorAll('button').forEach((b) => (b.disabled = true)); btn.textContent = 'listo…';
+      const res = await api('teams/seat-tokens', { agent, ...body });
+      if (!res.ok) { pop.querySelector('[data-err]').textContent = (res.data && res.data.error) || 'no se pudo'; box.querySelectorAll('button').forEach((b) => (b.disabled = false)); return; }
+      box.querySelector('.cp-h').innerHTML = `<b>${esc(s.role || s.agent)}</b> lleva <b>${k(res.data.today)}</b> de ${k(res.data.cap)} hoy <span class="cp-ok">✓</span>`;
+      box.querySelector('.cp-bar i').style.width = Math.min(100, (100 * res.data.today) / Math.max(res.data.cap, 1)) + '%';
+      box.querySelector('.cp-acts').remove(); if (state.route.page === 'obj') loadObj(); setTimeout(close, 1600);
+    };
+    box.querySelector('[data-grant]').onclick = (e) => send({ action: 'grant', tokens: s.cap }, e.target);
+    box.querySelector('[data-reset]').onclick = (e) => send({ action: 'reset' }, e.target);
+    box.querySelector('[data-edit]').onclick = () => { close(); state.selWanted = agent; go(url.edit(o.team)); };
+  });
+}
 function logHtml(rows, el) {
   const fresh = [];
   const html = rows.map((r) => {
@@ -367,8 +521,10 @@ async function loadSeatWork(o) {
 }
 // el informe: cada línea en su párrafo, y las rutas de archivos como código
 // markdown chico: lo que escriben los agentes (**negrita**, `código`, rutas) se ve con formato y no con los signos
+// algunos modelos escriben los acentos escapados («é»): se muestran como letras
+const unescapeU = (t) => String(t ?? '').replace(/\\u([0-9a-fA-F]{4})/g, (m, h) => String.fromCharCode(parseInt(h, 16)));
 function mdInline(t) {
-  return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+  return esc(unescapeU(t)).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
     .replace(/(^|[\s(«])((?:[\w.-]+\/)+[\w.-]+|[\w-]+\.(?:md|js|ts|tsx|jsx|json|py|syn|css|html|yml|yaml|txt|csv))(?=[\s),.;:»]|$)/g, (m, a, b) => a + '<code>' + b + '</code>');
 }
 // el informe: un párrafo por línea; «- …» como lista; las partes «**Algo:**» como títulos chicos
@@ -420,21 +576,22 @@ async function loadObj() {
       ${s.turns.length ? `<button class="lnk" data-seat="${esc(s.agent)}">${isOpen ? 'ocultar pasos' : 'ver sus pasos'}</button>` : ''}</div>
       ${isOpen ? `<div class="steps">${seatTimelineHtml(s.turns, s.agent)}</div>` : ''}</div>`;
   };
-  const now = o.status === 'waiting' ? `<div class="box q"><h5>${o.question_kind === 'approval' ? 'te pide aprobación' : 'te pregunta'}</h5><p>${esc(o.question)}</p><p class="ds">Respondé arriba, en la franja de lo que te espera.</p></div>`
+  const now = o.status === 'waiting' ? `<div class="box q"><h5>${o.pass_pending ? 'quiere pasarle el trabajo a otro equipo' : o.question_kind === 'approval' ? 'te pide aprobación' : 'te pregunta'}</h5><p>${questionHtml(o)}</p><p class="ds">Respondé arriba, en la franja de lo que te espera.</p></div>`
     : o.result ? `<div class="box res${o.status === 'failed' ? ' bad' : ''}"><h5>${o.status === 'failed' ? 'Por qué no se pudo' : 'Resultado'} <span class="who">informe de ${esc((seats.find((s) => s.lead) || {}).role || o.agent)}</span></h5>${reportHtml(o.result)}</div>`
     : o.progress ? `<div class="box"><h5>Ahora</h5>${reportHtml(o.progress)}</div>` : open ? '<div class="box"><h5>Ahora</h5><p>Arrancando: el líder está repartiendo el trabajo.</p></div>' : '';
   $('#objDetail').innerHTML = `
     <div class="dhead"><span class="ref">${esc(o.ref)}</span><span class="st ${o.status}">${STATUS[o.status] || o.status}</span>${o.working ? '<span class="tw">● trabajando ahora</span>' : ''}
-      <span class="dmeta">${rt ? `⟳ ejecución de <a data-nav href="${esc(url.routine(o.team, rid))}">${esc(rt.name)}</a> · ` : ''}${fmtWhen(o.created_at)} · ${o.turns} ronda${o.turns === 1 ? '' : 's'} · ${k(o.spent)}${o.budget_tokens ? ' de ' + k(o.budget_tokens) : ''} tokens</span>
-      <span class="spacer"></span><button data-log>Registro</button>${open ? `${o.status === 'paused' ? '<button data-resume>Seguir (más presupuesto)</button>' : ''}<button class="no" data-cancel>Cancelar</button>` : ''}</div>
+      <span class="dmeta">${rt ? `⟳ ejecución de <a data-nav href="${esc(url.routine(o.team, rid))}">${esc(rt.name)}</a> · ` : ''}${fmtWhen(o.created_at)} · ${o.turns} ronda${o.turns === 1 ? '' : 's'} · ${k(o.spent)}${o.budget_tokens ? ' de ' + k(o.budget_tokens) : ''} tokens</span>${passLinksHtml(o)}
+      <span class="spacer"></span>${o.team ? '<button data-diag title="Qué está trabado y cómo destrabarlo">Revisar</button>' : ''}<button data-log>Registro</button>${open ? `${o.status === 'paused' ? '<button data-resume>Seguir (más presupuesto)</button>' : ''}<button class="no" data-cancel>Cancelar</button>` : ''}</div>
     ${o.budget_tokens && open ? `<div class="meter ${pct > 80 ? 'hot' : ''}"><i style="width:${pct}%"></i></div>` : ''}
     <div class="rgrid"><div class="rmain">
-      <div class="ask0${long && !state.askOpen ? ' clamp' : ''}"><h5>Qué se pidió</h5><p>${esc(o.text)}</p>${long ? `<button class="lnk" data-ask>${state.askOpen ? 'ver menos' : 'ver todo'}</button>` : ''}</div>
+      <div class="ask0${long && !state.askOpen ? ' clamp' : ''}"><h5>Qué se pidió</h5><p>${esc(unescapeU(o.text))}</p>${long ? `<button class="lnk" data-ask>${state.askOpen ? 'ver menos' : 'ver todo'}</button>` : ''}</div>
       ${now}</div>
       <div class="rside"><h4 class="secttl">Qué hizo cada asiento</h4>${overNote(o)}<div class="seats">${ordered.map(seatRow).join('')}</div></div></div>
     <h4 class="secttl">Tablero de este objetivo ${open ? '<span class="live2">● en vivo</span>' : ''}</h4>
     ${(o.tasks || []).length ? `<div class="board">${boardHtml(o.tasks, moved)}</div>` : '<p class="ihint">Todavía no hay tareas: el líder las crea al repartir el trabajo.</p>'}`;
   bindObjButtons(o);
+  const cb = $('#objDetail [data-cap]'); if (cb) cb.onclick = () => capPop(cb, o, (o.seats || []).filter((s) => overCap(o, s)));
   if (state.drawer) renderDrawer(o);
   document.querySelectorAll('#objDetail [data-seat]').forEach((b) => (b.onclick = () => { const a = b.dataset.seat; if (openSeats.has(a)) openSeats.delete(a); else openSeats.add(a); loadObj(); }));
   document.querySelectorAll('#objDetail details[data-k]').forEach((d) => (d.ontoggle = () => { if (d.open) state.openRaw.add(d.dataset.k); else state.openRaw.delete(d.dataset.k); }));
@@ -443,7 +600,7 @@ async function loadObj() {
 function overNote(o) {
   const over = (o.seats || []).filter((s) => overCap(o, s)); if (!over.length) return '';
   const names = over.map((s) => `<b>${esc(s.role || s.agent)}</b>`).join(', ');
-  return `<p class="overnote">${names} ${over.length === 1 ? 'pasó su' : 'pasaron su'} tope diario de tokens. Mirá sus pasos para ver en qué se le fue${o.team ? ` y, si hace falta, <a data-nav href="${esc(url.edit(o.team))}">ajustá el equipo</a>` : ''}.</p>`;
+  return `<p class="overnote">${names} ${over.length === 1 ? 'pasó su' : 'pasaron su'} tope diario de tokens. Mirá sus pasos para ver en qué se le fue${o.team ? ` y, si hace falta, <button type="button" class="lnk" data-cap>dale más o ajustá su tope</button>` : ''}.</p>`;
 }
 async function refreshObjectives() {
   const r = await api('objectives');
@@ -649,7 +806,7 @@ function bindWizard() {
 // ---------- borrador: el equipo (miembros + datos de sus agentes) que se guarda entero ----------
 function draftFrom(team) {
   return { isNew: false, id: team.id, name: team.name || team.id, lead: team.lead || (team.members.find((m) => !m.reports_to) || team.members[0]).agent, description: team.description, round_minutes: team.round_minutes, budget_daily_tokens: team.budget_daily_tokens, worktrees: team.worktrees !== false, talks: (team.talks || []).map((p) => p.slice()),
-    members: team.members.map((m) => ({ agent: m.agent, role: m.role, reports_to: m.reports_to, description: m.description, system: m.system, preset: presetOf(m.tools), permission: m.permission || 'strict', dirty: false })) };
+    members: team.members.map((m) => ({ agent: m.agent, role: m.role, reports_to: m.reports_to, daily_tokens: m.daily_tokens || 0, description: m.description, system: m.system, preset: presetOf(m.tools), permission: m.permission || 'strict', dirty: false })) };
 }
 function presetOf(tools) { const t = tools || []; if (!t.length) return 'none'; if (t.includes('write') || t.includes('edit')) return 'code'; return 'read'; }
 function slugName() { return (BASE ? BASE.slice(3) : 'equipo').replace(/-[0-9a-f]{8}$/, '').replace(/[^a-z0-9-]/g, '').slice(0, 40) || 'equipo'; }
@@ -735,6 +892,8 @@ function inspectorHtml() {
     <label>Qué puede hacer <select id="mPreset">${PRESETS.map(([v, l]) => `<option value="${v}" ${v === m.preset ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <label>Ante algo riesgoso <select id="mPerm">${permsFor(m.agent === L, m.reports_to && (d.members.find((x) => x.agent === m.reports_to) || {}).role).map(([v, l]) => `<option value="${v}" ${v === m.permission ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <span class="ds">${m.agent === L ? 'Es el único del equipo que te consulta a vos.' : 'Nunca te pregunta a vos: si su jefe no puede decidirlo, sube hasta el líder, que es el único que te consulta.'}</span></label>
+    <label>Tope diario de tokens <span class="unit"><input id="mCap" type="number" min="0" step="50000" value="${m.daily_tokens || ''}" placeholder="el del equipo: ${esc(k(d.budget_daily_tokens || 0))}"> tokens</span>
+      <span class="ds">${(() => { const live = (teamOf(d.id) || { members: [] }).members.find((x) => x.agent === m.agent); return live ? `Hoy lleva ${k(live.spent_today || 0)}. ` : ''; })()}Vacío = el del equipo (en Opciones). Ponele más al que más trabaja.</span></label>
     <label>Cómo trabaja <textarea id="mSys" rows="4" placeholder="Sos el CTO: decidís cómo se construye, revisás el código de los demás…">${esc(m.system)}</textarea></label>
     ${cand.length ? `<div class="talkbox"><div class="lbl">También habla con</div><div class="chips">${cand.map((x) => `<label class="chip"><input type="checkbox" data-talk="${esc(x.agent)}" ${talksWith.includes(x.agent) ? 'checked' : ''}>${esc(x.role || x.agent)}</label>`).join('')}</div><p class="ds">La línea punteada. Se propone sola al unir dos asientos bajo el mismo jefe; sacala si no hace falta.</p></div>` : ''}
     <details class="adv"><summary>Nombre interno</summary><label><input id="mId" value="${esc(m.agent)}"><span class="ds">el id del agente (se guarda sin espacios ni acentos)</span></label></details>
@@ -772,6 +931,7 @@ function bindEditor() {
   on('#mDesc', 'oninput', (e) => { m.description = e.target.value; touch(); renderGraph(); });
   on('#mBoss', 'onchange', (e) => { if (e.target.value) connectDraft(e.target.value, m.agent); else { m.reports_to = ''; renderTeams(); } });
   on('#mSys', 'oninput', (e) => { m.system = e.target.value; touch(); });
+  on('#mCap', 'oninput', (e) => (m.daily_tokens = Math.max(0, +e.target.value || 0)));
   on('#mPreset', 'onchange', (e) => { m.preset = e.target.value; touch(); renderGraph(); });
   on('#mPerm', 'onchange', (e) => { m.permission = e.target.value; touch(); });
   on('#mLead', 'onclick', () => makeLeader(m.agent));
@@ -785,7 +945,7 @@ async function saveDraft() {
   // los sueltos le reportan al líder; el líder va primero (lib/teams.syn → lead_of: el primero que no reporta a nadie)
   d.members.forEach((m) => { if (loose(d, m)) m.reports_to = d.lead; });
   const ordered = [d.members.find((m) => m.agent === d.lead), ...d.members.filter((m) => m.agent !== d.lead)];
-  const body = { team: { id: d.id, name: String(d.name ?? d.id).trim(), description: d.description, members: ordered.map((m) => ({ agent: m.agent, role: m.role || m.agent, reports_to: m.reports_to })), talks: d.talks, round_minutes: d.round_minutes, budget_daily_tokens: d.budget_daily_tokens, worktrees: d.worktrees },
+  const body = { team: { id: d.id, name: String(d.name ?? d.id).trim(), description: d.description, members: ordered.map((m) => ({ agent: m.agent, role: m.role || m.agent, reports_to: m.reports_to, daily_tokens: m.daily_tokens || 0 })), talks: d.talks, round_minutes: d.round_minutes, budget_daily_tokens: d.budget_daily_tokens, worktrees: d.worktrees },
     agents: d.members.filter((m) => m.dirty || m.system).map((m) => ({ id: m.agent, description: m.description, system: m.system || `Sos ${m.role || m.agent} del equipo ${d.id}.`, preset: m.preset, permission: m.permission })) };
   const r = await api('teams/save', body);
   if (!r.ok) { $('#eErr').textContent = r.data.error || 'no se pudo guardar'; return; }
@@ -821,6 +981,7 @@ function render(light) {
   const r = state.route;
   renderCrumbs();
   if (r.page === 'edit' && !state.draft) { const t = teamOf(r.team); if (t) state.draft = draftFrom(t); }
+  if (r.page === 'edit' && state.draft && state.selWanted) { if (state.draft.members.some((m) => m.agent === state.selWanted)) state.sel = state.selWanted; state.selWanted = null; }
   const d = state.draft, editing = (r.page === 'edit' || r.page === 'newteam') && !!d, listing = r.page === 'list' || (r.page === 'newteam' && !d);
   $('#tlist').hidden = !listing; $('#tpage').hidden = r.page !== 'team'; $('#rpage').hidden = r.page !== 'routine'; $('#opage').hidden = r.page !== 'obj'; $('#tedit').hidden = !editing;
   const loaded = state.loaded;
