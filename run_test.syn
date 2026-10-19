@@ -374,7 +374,7 @@ write_file(TDIR + "/rt_fuga.syn", read_file(TDIR + "/rt_fuga.syn") + "\n")
 check(contains(text(apptools.get("rt_pedido")["error"]), "rt_fuga.syn"), "apptools: otra herramienta cambiada (se puede usar como módulo) también frena")
 apptools.approve("")
 rm_file(TDIR + "/sub/rt_h.syn")
-check(contains(text(apptools.get("rt_pedido")["error"]), "is gone"), "apptools: un archivo aprobado que desaparece frena (no se puede esconder)")
+check(apptools.approval()["sub/rt_h.syn"] == "missing" and apptools.get("rt_pedido")["error"] == nothing, "apptools: borrar un archivo aprobado no frena las demás (se muestra como borrado)")
 check(contains(apptools.approve(""), "sub/rt_h.syn (removed)") and apptools.get("rt_pedido")["error"] == nothing, "apptools: approve sin nombre saca los que el dev borró")
 when env("OS", "") == "Windows_NT"
     -- una junction a una carpeta de afuera: `use "./rt_ext/x.syn"` la atravesaría
@@ -382,6 +382,11 @@ when env("OS", "") == "Windows_NT"
     proc_wait(proc_spawn("cmd", ["/c", "mklink", "/J", jlink, replace(TDIR + "/sub", "/", "\\")], {}))
     check(contains(text(apptools.get("rt_pedido")["error"]), "links are not allowed"), "apptools: una junction en la carpeta frena todas")
     proc_wait(proc_spawn("cmd", ["/c", "rmdir", jlink], {}))
+    -- una junction llamada x.syn: read_file falla. Frena las herramientas, no tumba el registro de los agentes
+    let jsyn be replace(TDIR + "/rt_trampa.syn", "/", "\\")
+    proc_wait(proc_spawn("cmd", ["/c", "mklink", "/J", jsyn, replace(TDIR + "/sub", "/", "\\")], {}))
+    check(contains(text(apptools.get("rt_pedido")["error"]), "rt_trampa.syn") and contains(runtime.registry_of(runtime.get("build")), "read"), "apptools: un .syn que no se puede leer frena las herramientas y los demás agentes siguen")
+    proc_wait(proc_spawn("cmd", ["/c", "rmdir", jsyn], {}))
 check(apptools.call("rt_techo", {}, {}) == "sin .env", "apptools: el .env de la carpeta no llega a la herramienta (--no-env-file)")
 check(contains(apptools.call("rt_sube", {}, {}), "not permitted"), "apptools: un require dentro del task, fuera de los de arriba, se niega (--cap-set)")
 each f in ["_datos.syn", "rt_pedido.syn", "rt_fuga.syn", "rt_roto.syn", "rt_todo_env.syn", "rt_techo.syn", "rt_sube.syn", ".env"]

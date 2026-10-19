@@ -241,7 +241,7 @@ when tl_cmd != ""
         each e in apptools.scan_files()
             set byfile[e["file"]] to e
         each f in sort(keys(st))
-            let mark be when st[f] == "ok" then "● " otherwise (when st[f] == "new" then "○ nueva, sin aprobar  " otherwise (when st[f] == "missing" then "✕ aprobada y ya no está  " otherwise (when st[f] == "link" then "✕ link a una carpeta: no se permite  " otherwise "△ cambió, sin aprobar  ")))
+            let mark be when st[f] == "ok" then "● " otherwise (when st[f] == "new" then "○ nueva, sin aprobar  " otherwise (when st[f] == "missing" then "· borrada (estaba aprobada; approve la saca)  " otherwise (when st[f] == "unreadable" then "✕ no se puede leer  " otherwise (when st[f] == "link" then "✕ link a una carpeta: no se permite  " otherwise "△ cambió, sin aprobar  "))))
             let info be when contains(byfile, f) then (when byfile[f]["error"] != nothing then "rota: " + text(byfile[f]["error"]) otherwise "puede tocar: " + apptools.ceiling(byfile[f])) otherwise (when starts_with(f, "_") then "ayudante" otherwise "va al prompt")
             print("  " + mark + f + "  " + info)
         exit(0)

@@ -203,8 +203,10 @@ task links_in(d, rel)
         give out
     give out
 
--- {archivo: "ok" | "new" | "changed" | "missing" | "link"}. Un archivo aprobado que ya no está cuenta: si no, esconderlo
--- (borrarlo, taparlo con un link) no frenaba nada. (approveTools del SDK aprueba UNA vez, al arrancar `run --stdio`: lo que
+-- {archivo: "ok" | "new" | "changed" | "unreadable" | "link" | "missing"}. Lo que no se puede leer (una junction
+-- llamada x.syn, un archivo bloqueado) frena las herramientas pero no el resto: sin el try, tumbaba registry_of de
+-- TODOS los agentes. "missing" (aprobado y borrado) solo se muestra: borrar no hace correr nada sin aprobar (si
+-- vuelve con otro contenido, el hash guardado da "changed"); esconder con un link lo ve links_in. (approveTools del SDK aprueba UNA vez, al arrancar `run --stdio`: lo que
 -- cambie después, aunque sea el agente, sigue el camino normal)
 export task approval()
     require exec
@@ -218,8 +220,11 @@ export task approval()
     let out be {}
     let here be watched(d)
     each f in here
-        let h be digest(d + "/" + f)
-        set out[f] to when not contains(ok, f) then "new" otherwise (when ok[f] == h then "ok" otherwise "changed")
+        try
+            let h be digest(d + "/" + f)
+            set out[f] to when not contains(ok, f) then "new" otherwise (when ok[f] == h then "ok" otherwise "changed")
+        recover err
+            set out[f] to "unreadable"
     each f in keys(ok)
         when not contains(here, f) and f != "README.md"
             set out[f] to "missing"
@@ -248,10 +253,13 @@ export task approve(name)
     set ok to kept
     each f in here
         when name == "" or f == name or f == name + ".syn"
-            let h be digest(d + "/" + f)
-            when not contains(ok, f) or ok[f] != h
-                set ok[f] to h
-                set done to append(done, f)
+            try
+                let h be digest(d + "/" + f)
+                when not contains(ok, f) or ok[f] != h
+                    set ok[f] to h
+                    set done to append(done, f)
+            recover err
+                set done to append(done, f + " (cannot be read: not approved)")
     write_file(APPROVED, json_encode(ok))
     give done
 
@@ -260,14 +268,14 @@ export task approve(name)
 task gate(e, st)
     when e["error"] != nothing
         give e
-    let bad be where(sort(keys(st)), (f) => st[f] != "ok" and f != "README.md")
+    let bad be where(sort(keys(st)), (f) => st[f] != "ok" and st[f] != "missing" and f != "README.md")
     when length(bad) > 0
         let own be where(bad, (f) => f == e["file"])
         let f be when length(own) > 0 then own[0] otherwise bad[0]
         when st[f] == "link"
             set e["error"] to "links are not allowed in the tools folder: " + f + " (a `use` would run what is behind it, never approved). Replace it with the real files and run `lampson tools approve`"
             give e
-        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "missing" then " was approved and is gone" otherwise " changed since it was approved")) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise " changed since it was approved")) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
     give e
 
 -- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error)

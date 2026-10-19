@@ -88,8 +88,9 @@ Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
   de la carpeta y sus subcarpetas, y si una no está al día no corre ninguna herramienta; `approveTools` solo al
   arrancar `run --stdio`; el `ask` de escribir `apptools_approved.json` lo dice; `seen` que falla → 503 sin correr.
 - **Cuarta revisión** (`10_cuarta_revision_sdk_tools.md`): un link a una carpeta dentro de la carpeta de
-  herramientas frena todas (`use` lo atraviesa y `list_dir` no entra; se detecta con `file_info`), un archivo
-  aprobado que desaparece cuenta como cambiado (`approve("")` saca los borrados), el 503 de `seen` tiene un mensaje
+  herramientas frena todas (`use` lo atraviesa y `list_dir` no entra; se detecta con `file_info`), un `.syn` que no
+  se puede leer también (con `try`: antes tumbaba el registro de todos los agentes), uno aprobado y borrado solo se
+  muestra (`approve("")` lo saca; si vuelve con otro contenido da "changed"), el 503 de `seen` tiene un mensaje
   fijo (el detalle va al log de la app) y un `seen` async en `handle_tool_request` es un error claro.
 - SDK: `toolsHandler({ seen })` / `handle_tool_request(seen=)` / `tools_asgi(seen=)` para compartir el `call_id`
   entre instancias.
