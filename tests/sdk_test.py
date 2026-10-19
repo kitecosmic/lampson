@@ -188,6 +188,9 @@ except urllib.error.HTTPError as e:
 check(fstatus == 401, "servidor: un pedido sin la firma de Lampson → 401")
 rstatus, rout = srv2.handle_tool_request("POST", captured[0][0], captured[0][1])
 check(rstatus == 409, "servidor: el mismo pedido firmado, repetido → 409: " + json.dumps(rout))
+shared = []
+sstatus, _ = srv2.handle_tool_request("POST", captured[0][0], captured[0][1], seen=lambda cid: shared.append(cid) or True)
+check(sstatus == 409 and len(shared) == 1, "servidor: handle_tool_request(seen=...) usa el almacén de la app para el call_id")
 tools_srv.shutdown()
 subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="remove", LAMPSON_KEY_ID=kid2), capture_output=True)
 

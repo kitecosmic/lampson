@@ -139,6 +139,10 @@ check(forged.status === 401 && !remoteSeen.some(c => c.from && c.from.id === 'u-
 const ranBefore = remoteSeen.length;
 const replay = await fetch('http://127.0.0.1:47998/tools', { method: 'POST', headers: { 'signature-input': captured.headers['signature-input'], 'signature': captured.headers['signature'], 'content-digest': captured.headers['content-digest'] }, body: captured.body });
 check(replay.status === 409 && remoteSeen.length === ranBefore, 'servidor: el mismo pedido firmado, repetido → 409 y la función no corre de nuevo');
+const sharedSeen = [];
+const h3 = srv2.toolsHandler({ seen: async id => { sharedSeen.push(id); return true; } });
+const r3 = await h3(new Request('http://127.0.0.1:47998/tools', { method: 'POST', headers: { 'signature-input': captured.headers['signature-input'], 'signature': captured.headers['signature'], 'content-digest': captured.headers['content-digest'] }, body: captured.body }));
+check(r3.status === 409 && sharedSeen.length === 1 && remoteSeen.length === ranBefore, 'servidor: toolsHandler({ seen }) usa el almacén de la app (Redis, KV) para el call_id');
 const srvBad = new Lampson({ url: 'http://127.0.0.1:47996/w/test/', key, toolsUrl: 'http://127.0.0.1:47998/tools', toolsSecret: secret2 });
 srvBad.tool('sdk_eco', { execute: () => 1 });
 let e403t = null;

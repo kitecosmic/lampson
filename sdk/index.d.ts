@@ -130,7 +130,11 @@ export class Lampson {
    * Server mode: the endpoint for Lampson's tool calls — verifies the signature, runs the tool, answers.
    * Web standard (Next route handler, Hono, Bun, Deno) or Node (Express, http.createServer).
    */
-  toolsHandler(): (req: any, res?: any) => Promise<Response | void>;
+  toolsHandler(opts?: {
+    /** true if this call_id already ran (and record it if not). Default: in this process. With several instances
+     *  (serverless, workers) share it, e.g. Redis `SET call:<id> 1 NX EX 600`. A repeated call answers 409. */
+    seen?: (callId: string) => boolean | Promise<boolean>;
+  }): (req: any, res?: any) => Promise<Response | void>;
   /** The default agent given in the options ("" = the workspace default). */
   readonly agent: string;
   /** Local mode: tools some agent lists but will not have, one message each (filled once the process is ready). */

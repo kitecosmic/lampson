@@ -396,7 +396,16 @@ class Lampson {
    * toolsSecret, ±300 s), runs the tool and answers {output} | {error}. Web standard (Next route handler, Hono, Bun,
    * Deno: POST = lampson.toolsHandler()) or Node (Express: app.post(path, lampson.toolsHandler()); http.createServer).
    */
-  toolsHandler() {
+  toolsHandler(opts = {}) {
+    // seen(callId) → true if it already ran (and records it if not). Default: a Map in this process. With several
+    // instances (serverless, workers) pass a shared one: Redis `SET call:<id> 1 NX EX 600` → !ok
+    const seen = typeof opts.seen === 'function' ? opts.seen : (id => {
+      const now = Date.now();
+      for (const [k, until] of this.seenCalls) if (until < now) this.seenCalls.delete(k);
+      if (this.seenCalls.has(id)) return true;
+      this.seenCalls.set(id, now + 600000);
+      return false;
+    });
     const answer = async (method, headers, body) => {
       const v = verifyToolRequest({ method, url: this.toolsUrl, headers, body }, this.toolsSecret);
       if (!v) return [401, { error: 'invalid or missing Lampson signature' }];
@@ -404,13 +413,8 @@ class Lampson {
       try { msg = JSON.parse(Buffer.isBuffer(body) ? body.toString('utf8') : String(body)); } catch { return [400, { error: 'body must be JSON' }]; }
       if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return [400, { error: 'body must be a JSON object' }];
       // the signature is valid for ±300 s: a captured request replayed in that window would run the tool again
-      // (the one that charges). Each call_id runs once per process — serverless instances each keep their own
-      const now = Date.now();
-      for (const [id, until] of this.seenCalls) if (until < now) this.seenCalls.delete(id);
-      if (msg.call_id != null) {
-        if (this.seenCalls.has(String(msg.call_id))) return [409, { error: 'call_id ' + msg.call_id + ' already ran' }];
-        this.seenCalls.set(String(msg.call_id), now + 600000);
-      }
+      // (the one that charges). Each call_id runs once — per process unless opts.seen is shared
+      if (msg.call_id != null && await seen(String(msg.call_id))) return [409, { error: 'call_id ' + msg.call_id + ' already ran' }];
       return [200, await executeTool(this.serverTools.get(msg.name), msg.name, msg.args, msg.ctx)];
     };
     return async (req, res) => {

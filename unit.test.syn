@@ -368,6 +368,11 @@ test "una tool NO puede salir del workspace (least-privilege real): abs, .., her
     assert_error(() => call_tool(REG["find"], {"pattern": "*", "path": ".."}))
     assert_error(() => call_tool(REG["write"], {"path": "../pwned.txt", "content": "x"}))
 
+test "alias de Windows (.lampson., lampso~1, punto o espacio final) no llegan a la carpeta real"
+    each p in [".lampson./tools/x.syn", "lampso~1/tools/x.syn", ".env.", "src /a.txt", "a/b:stream"]
+        assert_error(() => call_tool(REG["write"], {"path": p, "content": "x"}))
+    assert(not file_exists("workspace/.lampson/tools/x.syn") and not file_exists("workspace/.env"), "no escribió nada")
+
 test "escape del workspace: mensaje instructivo (no 'Capability not granted' ni 'os error 123')"
     -- abs de Windows, abs con backslash y ..: el modelo debe recibir la regla + qué hacer, no un críptico
     each bad in ["C:/Users/x/nota.md", "C:\\Users\\x\\nota.md", "../memoria-global.md", "a/../../fuera.txt"]
@@ -1409,7 +1414,7 @@ test "runtime: boot de un agente del proyecto — su prompt, pasos, presupuesto 
 
 test "runtime: sesión por (agente, thread)"
     let a be runtime.fresh_session()
-    assert(matches(a, "[0-9]{8}-[0-9]{6}-[0-9]{4}"), a)
+    assert(matches(a, "[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]{16,}"), a)
     assert_eq(runtime.thread_key("x", "t"), runtime.thread_key("x", "t"))
     assert(runtime.thread_key("x", "t") != runtime.thread_key("y", "t"), "mismo thread, otro agente = otra sesión")
     let o be {"session": "test-rt-thread", "thread": "whatsapp:+5491100000000", "ctx": {"agent": "rt-t"}}

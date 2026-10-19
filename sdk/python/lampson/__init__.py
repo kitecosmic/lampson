@@ -523,8 +523,20 @@ class Lampson:
             return env
         return dict(env, tools=[s["wire"] for s in self._server_tools.values()], tools_url=self.tools_url)
 
-    def _tool_call(self, method, headers, body):
-        """Signature, JSON object, call_id not seen -> (None, msg) to run it, or (status, error) to answer."""
+    def _seen_here(self, call_id):
+        """call_id already ran in this process? (and record it if not)"""
+        now = time.time()
+        with self._seen_lock:
+            for k in [k for k, until in self._seen_calls.items() if until < now]:
+                del self._seen_calls[k]
+            if call_id in self._seen_calls:
+                return True
+            self._seen_calls[call_id] = now + 600
+            return False
+
+    def _tool_call(self, method, headers, body, seen=None):
+        """Signature, JSON object, call_id not seen -> (None, msg) to run it, or (status, error) to answer.
+        seen=False skips the call_id check (tools_asgi does it, maybe awaiting)."""
         if not verify_tool_request(method, self.tools_url, headers, body, self.tools_secret):
             return 401, {"error": "invalid or missing Lampson signature"}
         try:
@@ -534,30 +546,26 @@ class Lampson:
         if not isinstance(msg, dict):
             return 400, {"error": "body must be a JSON object"}
         # the signature is valid for +-300 s: a captured request replayed in that window would run the tool again
-        # (the one that charges). Each call_id runs once per process; several workers each keep their own
+        # (the one that charges). Each call_id runs once — per process unless `seen` is shared (Redis, a DB)
         call_id = msg.get("call_id")
-        if call_id is not None:
-            now = time.time()
-            with self._seen_lock:
-                for k in [k for k, until in self._seen_calls.items() if until < now]:
-                    del self._seen_calls[k]
-                if str(call_id) in self._seen_calls:
-                    return 409, {"error": "call_id %s already ran" % call_id}
-                self._seen_calls[str(call_id)] = now + 600
+        if call_id is not None and seen is not False and (seen or self._seen_here)(str(call_id)):
+            return 409, {"error": "call_id %s already ran" % call_id}
         return None, msg
 
-    def handle_tool_request(self, method, headers, body):
+    def handle_tool_request(self, method, headers, body, seen=None):
         """Server mode, any framework: verify Lampson's signature on a tool call and run it -> (status, dict).
-        Pass the raw body (bytes) exactly as received; the signed URL is tools_url, not the request's."""
-        status, msg = self._tool_call(method, headers, body)
+        Pass the raw body (bytes) exactly as received; the signed URL is tools_url, not the request's.
+        seen(call_id) -> True if it already ran (and records it if not); default in this process. With several
+        workers share it, e.g. Redis: lambda cid: not r.set("call:" + cid, 1, nx=True, ex=600). Repeated -> 409."""
+        status, msg = self._tool_call(method, headers, body, seen)
         if status is not None:
             return status, msg
         name = msg.get("name")
         return 200, _execute_tool(self._server_tools.get(name), name, msg.get("args"), msg.get("ctx"))
 
-    def tools_asgi(self):
+    def tools_asgi(self, seen=None):
         """Server mode: an ASGI app for the tool calls (FastAPI/Starlette: app.mount("/lampson/tools", lampson.tools_asgi())).
-        async def tools are awaited; plain def tools run in a thread."""
+        async def tools are awaited; plain def tools run in a thread. seen: like handle_tool_request's, sync or async."""
         import asyncio
 
         async def app(scope, receive, send):
@@ -570,7 +578,13 @@ class Lampson:
                 more = ev.get("more_body", False)
             body = b"".join(chunks)
             headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers", [])}
-            status, out = self._tool_call(scope.get("method", "POST"), headers, body)
+            status, out = self._tool_call(scope.get("method", "POST"), headers, body, False)
+            if status is None and out.get("call_id") is not None:
+                dup = (seen or self._seen_here)(str(out["call_id"]))
+                if inspect.isawaitable(dup):
+                    dup = await dup
+                if dup:
+                    status, out = 409, {"error": "call_id %s already ran" % out["call_id"]}
             if status is None:
                 msg = out
                 spec = self._server_tools.get(msg.get("name"))

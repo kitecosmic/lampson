@@ -13,7 +13,13 @@ export task new_id()
     require time
     give format_time(now(), "%Y%m%d-%H%M%S")
 
+-- un id es un nombre de archivo: sin / ni .. (un id con ../ abría otro JSON de .lampson)
+export task valid_id(id)
+    give matches(text(id), "[A-Za-z0-9_-]{1,96}")
+
 task path_of(id)
+    when not valid_id(id)
+        raise("invalid session id")
     give DIR + "/" + id + ".json"
 
 export task save(id, messages, meta)
@@ -50,6 +56,8 @@ export task from_other_run(doc)
 export task exists(id)
     require file.read(".lampson")
     require file.read(".lampson/*")
+    when not valid_id(id)
+        give false
     try
         read_file(path_of(id), 1, 1)
         give true

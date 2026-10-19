@@ -147,6 +147,10 @@ export task parse(body, rec)
         set sobre["tools_url"] to tu
         set sobre["tools_key"] to rec["id"]
     set sobre to scope_sobre(sobre, rec)
+    -- retomar una sesión: solo una de esta key. Una ajena (otra app, la web del dueño, un equipo) es 404, no una
+    -- sesión nueva callada: la app creería que siguió la conversación
+    when sobre["session"] != "" and runtime.session_space(sobre["session"]) != sobre["space"]
+        give {"ok": false, "status": 404, "error": "no such session: " + sobre["session"]}
     give {"ok": true, "status": 200, "error": "", "sobre": sobre, "callback": cb, "stream": field(body, "stream", false) == true}
 
 -- la conversación es de la key que la empezó: por dentro el thread es "key:<id>:<thread>" y la app sigue viendo el

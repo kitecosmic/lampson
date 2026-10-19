@@ -74,6 +74,14 @@ Decididos por Joel y hechos:
 - **Pregunta 5:** una key con secreto propio y sin lista no pide callbacks; las viejas siguen llegando a nombres
   públicos y `lampson key list` las marca.
 
+Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
+- **B1, capa 1:** `common.ws` rechaza los alias de Windows (segmento que termina en `.` o espacio, `~` + dígito,
+  `:`), para todas las tools de archivos. Así `in_lampson_dir` e `is_secret_env` ven la única forma de la ruta.
+- **B2, la sesión:** ids con `token(16)` en vez de 4 dígitos; `session.valid_id` (nada de `../`); la sesión
+  guarda `meta.space` y por la API solo se retoma una de la misma key (si no, 404), sin adoptar su thread.
+- SDK: `toolsHandler({ seen })` / `handle_tool_request(seen=)` / `tools_asgi(seen=)` para compartir el `call_id`
+  entre instancias.
+
 Sin hacer (pueden esperar, §3 de la revisión): `lampson key secret <id>`, pasar las callbacks a `http_sign`,
 derivar los secretos en vez de guardarlos.
 

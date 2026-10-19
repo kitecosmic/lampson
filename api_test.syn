@@ -124,6 +124,11 @@ let m3 be post("/messages", {"to": "rt-api", "thread": "api:cliente-1", "text": 
 check(m3["status"] == 200 and m3["json"]["thread"] == "api:cliente-1" and m3["json"]["session"] != m1["json"]["session"] and not contains(m3["json"]["text"], "msgs=6"), "otra key con el mismo thread → otra conversación (no ve el historial de la primera)")
 when m3["json"] != nothing
     set created to append(created, m3["json"]["session"])
+check(post("/messages", {"to": "rt-api", "session": m1["json"]["session"], "text": "hola"}, kb)["status"] == 404, "la sesión de otra key → 404 (no se retoma ni adopta su thread)")
+check(post("/messages", {"to": "rt-api", "session": "../api_keys", "text": "hola"}, ka)["status"] == 404, "un id de sesión con ../ → 404")
+let m4 be post("/messages", {"to": "rt-api", "session": m1["json"]["session"], "text": "hola"}, ka)
+check(m4["status"] == 200 and m4["json"]["session"] == m1["json"]["session"], "la sesión propia se retoma")
+check(matches(text(m1["json"]["session"]), "[0-9]{8}-[0-9]{6}-[A-Za-z0-9_-]{16,}"), "id de sesión que no se adivina: " + text(m1["json"]["session"]))
 check(post("/messages", {"to": "build", "text": "hola"}, ka)["status"] == 403, "agente fuera de la key → 403")
 check(post("/messages", {"to": "nadie", "text": "hola"}, kb)["status"] == 404, "agente inexistente → 404")
 check(post("/messages", {"to": "rt-api", "text": ""}, ka)["status"] == 400, "text vacío → 400")

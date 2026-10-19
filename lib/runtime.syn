@@ -539,10 +539,23 @@ export task fresh_session()
     let i be 0
     while i < 20
         set i to i + 1
-        let id be base + "-" + slice(text(10000 + floor(random() * 10000)), 1, 5)
+        -- antes 4 dígitos: con la hora, se adivinaba (2026-10-19). La API además exige que sea de su key
+        let id be base + "-" + token(16)
         when not session.exists(id)
             give id
     raise("could not allocate a session id")
+
+-- de qué key es una sesión ("key:<id>:", lib/api.syn space_of); "" si no es de la API o no existe
+export task session_space(sid)
+    require file.read(".lampson")
+    require file.read(".lampson/*")
+    when not session.exists(sid)
+        give ""
+    try
+        let doc be session.load(sid)
+        give when contains(doc, "meta") and type_of(doc["meta"]) == "map" and contains(doc["meta"], "space") then text(doc["meta"]["space"]) otherwise ""
+    recover err
+        give ""
 
 -- la sesión de (agente, thread) si ya existe; "" si no
 export task thread_session(agent, thread)
@@ -600,6 +613,11 @@ export task open(sobre, hooks)
     let ctx be boot(id, hooks, field(hooks, "ask_fn", nothing))
     let thread be text(field(sobre, "thread", ""))
     let sid be text(field(sobre, "session", ""))
+    -- por la API (space = "key:<id>:"): solo una sesión de esa key, y su thread nunca se adopta (lib/api.syn ya
+    -- contestó 404 a una ajena; esto es la segunda capa)
+    let space be text(field(sobre, "space", ""))
+    when sid != "" and space != "" and session_space(sid) != space
+        raise("no such session: " + sid)
     when sid != "" and not session.exists(sid)
         set sid to ""
     when sid == ""
@@ -610,7 +628,7 @@ export task open(sobre, hooks)
         let doc be session.load(sid)
         let prev be doc["messages"]
         set messages to [ctx["system"]] + slice(prev, 1, length(prev))
-        when thread == "" and contains(doc["meta"], "thread")
+        when thread == "" and space == "" and contains(doc["meta"], "thread")
             set thread to text(doc["meta"]["thread"])
         -- sesión guardada por otra corrida de lampson: sus procesos ya no viven — decírselo al modelo (una vez)
         when session.from_other_run(doc)
@@ -668,7 +686,7 @@ export task open(sobre, hooks)
     set ctx["opts"] to aopts
     -- sesión actual (blackboard): la tool todo guarda su lista por sesión (lib/tools/todo.syn)
     share {"id": sid} as "lampson:session"
-    give {"ctx": ctx, "session": sid, "thread": thread, "messages": messages, "mode": ctx["opts"]["permission_mode"], "note": note}
+    give {"ctx": ctx, "session": sid, "thread": thread, "messages": messages, "mode": ctx["opts"]["permission_mode"], "note": note, "space": space}
 
 -- guarda la sesión con su agente y thread (y el índice del thread)
 export task save(o, messages)
@@ -676,7 +694,7 @@ export task save(o, messages)
     require file(".lampson")
     require file(".lampson/*")
     require env("LAMPSON_*")
-    session.save(o["session"], messages, {"title": session.title_of(messages), "agent": o["ctx"]["agent"], "thread": o["thread"]})
+    session.save(o["session"], messages, {"title": session.title_of(messages), "agent": o["ctx"]["agent"], "thread": o["thread"], "space": text(field(o, "space", ""))})
     remember_thread(o["ctx"]["agent"], o["thread"], o["session"])
 
 -- la vista en vivo de un objetivo (public/js/objlive.js): cada paso de un asiento de equipo u objetivo sale al bus

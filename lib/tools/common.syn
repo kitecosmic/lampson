@@ -35,6 +35,11 @@ export task ws(path)
     -- quiso guardar una "memoria global" fuera del workspace, como el install global de skills).
     when contains(split(p, "/")[0], ":") or has_dotdot(p)
         raise("path escapes the workspace: \"" + text(path) + "\" — file tools only reach the mounted workspace; use paths relative to its root (e.g. \"src/app.ts\"). Do not retry with other path variants. To keep notes across sessions use the memory tool (the harness stores them per project, outside the repo); for anything else outside the workspace, explain what you need and ask the user.")
+    -- alias de Windows: "x." y "x " son "x", "lampso~1" es el nombre corto 8.3 de ".lampson", "a:b" es un stream.
+    -- Con ellos, una regla por nombre (.lampson/, .env) se saltaba; ningún proyecto los necesita
+    each seg in split(p, "/")
+        when seg != "." and seg != ".." and (ends_with(seg, ".") or ends_with(seg, " ") or contains(seg, ":") or matches(seg, ".*~[0-9].*"))
+            raise("path not allowed: \"" + text(path) + "\" — a name ending in '.' or a space, with '~' and a digit, or with ':' is another name for a different file on Windows. Use the plain name.")
     when p == "." or p == "" or p == ROOT
         give ROOT
     when starts_with(p, ROOT + "/")
