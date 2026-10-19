@@ -30,7 +30,7 @@ lampson = Lampson(agent="shop", local={"workspace": "./my-project", "lampson_too
 lampson.ask(thread="customer-42", text="where is my order?")
 ```
 
-Your app's functions as tools (local mode): the schema comes from the type hints, the docstring is the description,
+Your app's functions as tools: the schema comes from the type hints, the docstring is the description,
 and `ctx` (who is writing, the thread, your `meta`) comes from your app, never from the model:
 
 ```python
@@ -42,11 +42,23 @@ def stock(product: str, ctx: dict) -> dict:
 lampson.ask(thread="customer-42", text="do you have bread?", **{"from": {"id": "c-42"}})
 ```
 
+With Lampson on another machine the tool code is the same: pass `tools_url` (the public URL of your endpoint, in the
+key's `--callback` list) and `tools_secret` (the `whsec_…` that `lampson key add` shows), and mount the endpoint.
+Lampson POSTs each call there, signed (RFC 9421); it is verified, run, and a repeated `call_id` gets 409:
+
+```python
+lampson = Lampson(url=..., key=..., tools_url="https://my-app.com/lampson/tools", tools_secret=os.environ["LAMPSON_TOOLS_SECRET"])
+app.mount("/lampson/tools", lampson.tools_asgi())     # FastAPI / Starlette; any other: lampson.handle_tool_request(...)
+```
+
+With several workers, give it a shared store for the `call_id`s: `tools_asgi(seen=...)`.
+
 Or write the tool in Synsema (`.lampson/tools/stock.syn`, one file per tool): its `require`s are everything it can
-touch. See [lampson.org/docs/sdk](https://lampson.org/docs/sdk).
+touch, and it runs only once a person approved that exact content (`lampson tools approve` or the web UI; for development,
+`local={"approve_tools": True}`). See [lampson.org/docs/sdk](https://lampson.org/docs/sdk).
 
 If an agent lists a tool it will not have (a plugin that is off, a typo), you get a line on stderr at start
 (`on_warning=` to change it, `None` to silence it) and the list in `lampson.warnings`.
 
 The same methods in both modes: `ask`, `stream`, `agents`, `job` (server), `close`, and
-`Lampson.verify_signature(raw_body, signature, secret)` for callbacks.
+`Lampson.verify_signature(raw_body, signature, secret)` for callbacks and `verify_tool_request(...)` for tool calls.

@@ -121,12 +121,17 @@ const r = await lampson.ask({ agent: "shop", thread: "customer-42", text: "do yo
 const shop = new Lampson({ agent: "shop", local: { workspace: "./my-project", lampsonTools: false } });
 shop.tool("stock", { description: "Units in stock", inputSchema: z.object({ product: z.string() }),
   execute: async ({ product }, ctx) => db.stock(product, ctx.from.id) });   // your function; ctx comes from your app
+
+// Lampson on another machine: the same tools; it POSTs each call to your endpoint, signed with the key's secret
+const remote = new Lampson({ url, key, toolsUrl: "https://my-app.com/api/lampson/tools", toolsSecret });
+export const POST = remote.toolsHandler();                  // Next/Hono/Bun; Express: app.post(path, remote.toolsHandler())
 ```
 
 Or write the tool in Synsema — `.lampson/tools/stock.syn`, one file per tool — and its `require`s are everything it can
 touch: a message that tricks the model into sending data elsewhere gets `Capability not granted`. It reads only
 the variables it names with `env("NAME")` (never Lampson's own, never the folder's `.env`), and it runs only once
-you approved that exact content (`lampson tools approve`): if an agent rewrites it, it stops until you look.
+you approved that exact content (`lampson tools approve`, or *herramientas* in the web UI): if an agent rewrites
+it, it stops until you look.
 
 - **An agent is a file**: `.lampson/agents/shop.agent.json` (or `~/lampson/agents/` for every project) — its prompt,
   the exact tools it may use (optionally limited to some paths, with per-tool approval) and its model.

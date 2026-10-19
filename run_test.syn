@@ -389,7 +389,7 @@ when env("OS", "") == "Windows_NT"
     proc_wait(proc_spawn("cmd", ["/c", "rmdir", jsyn], {}))
 -- tope: un .syn de más de 1 MB frena las herramientas sin leerlo entero en cada escaneo
 write_file(TDIR + "/sub/rt_grande.syn", "-- " + join(apply((i) => "0123456789", range(110000)), ""))
-check(apptools.approval()["sub/rt_grande.syn"] == "too_big" and contains(text(apptools.get("rt_pedido")["error"]), "over the limit"), "apptools: un .syn de más de 1 MB frena las herramientas")
+check(apptools.approval()["sub/rt_grande.syn"] == "too_big" and contains(text(apptools.get("rt_pedido")["error"]), "remove files"), "apptools: un .syn de más de 1 MB frena las herramientas")
 rm_file(TDIR + "/sub/rt_grande.syn")
 -- tope total (5 MB) y de cantidad (500 .syn): se corta el recorrido y se frenan las herramientas
 let pieza be "-- " + join(apply((i) => "0123456789", range(90000)), "")
@@ -400,7 +400,7 @@ each i in range(6)
     rm_file(TDIR + "/sub/rt_total_" + text(i) + ".syn")
 each i in range(505)
     write_file(TDIR + "/sub/rt_n_" + text(i) + ".syn", "export let X be 1\n")
-check(contains(text(apptools.get("rt_pedido")["error"]), "more than 500") and contains(apptools.approve("")[0], "nothing approved"), "apptools: más de 500 .syn frena y approve no aprueba nada")
+check(contains(text(apptools.get("rt_pedido")["error"]), "more than 500") and contains(text(apptools.get("rt_pedido")["error"]), "remove files") and contains(apptools.approve("")[0], "nothing approved"), "apptools: más de 500 .syn frena y approve no aprueba nada")
 each i in range(505)
     rm_file(TDIR + "/sub/rt_n_" + text(i) + ".syn")
 check(apptools.get("rt_pedido")["error"] == nothing, "apptools: al volver bajo el tope, todo sigue aprobado")
@@ -409,6 +409,7 @@ check(contains(apptools.call("rt_sube", {}, {}), "not permitted"), "apptools: un
 each f in ["_datos.syn", "rt_pedido.syn", "rt_fuga.syn", "rt_roto.syn", "rt_todo_env.syn", "rt_techo.syn", "rt_sube.syn", ".env"]
     rm_file(TDIR + "/" + f)
 rm_file(ADIR + "/rt-tools.agent.json")
+apptools.approve("")   -- saca de lo aprobado los archivos de prueba que se acaban de borrar
 
 -- limpieza
 -- por thread también: si un check falló a mitad, la sesión del thread igual se borra

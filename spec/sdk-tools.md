@@ -83,7 +83,7 @@ Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
   con el sha256 que aprobó una persona (`lampson tools list|approve [nombre]`, guardado en `.lampson/` del proceso
   del workspace, fuera del alcance de las tools de archivos). Un cambio la frena hasta aprobarla de nuevo; un
   ayudante cambiado frena a todas. `call` relee y compara justo antes de correr. Modo local del SDK:
-  `approveTools: true` / `approve_tools=True` aprueba una vez al arrancar. Falta el botón en la web.
+  `approveTools: true` / `approve_tools=True` aprueba una vez al arrancar. El botón en la web llegó en la octava revisión.
 - **Tercera revisión** (`09_tercera_revision_sdk_tools.md`, rama `fix/aprobacion-tools`): se aprueba **toda** `.syn`
   de la carpeta y sus subcarpetas, y si una no está al día no corre ninguna herramienta; `approveTools` solo al
   arrancar `run --stdio`; el `ask` de escribir `apptools_approved.json` lo dice; `seen` que falla → 503 sin correr.
@@ -101,6 +101,10 @@ Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
   reusa unos segundos mientras la carpeta tenga los mismos archivos, tamaños y fechas (una vez por turno, y `call`
   compara siempre el hash de lo que corre); el aviso de `scan()` sale una vez por error y `runtime.missing` lo dice
   («could not be read») en vez de «not a known tool».
+- **Octava revisión** (`14_octava_revision_sdk_tools.md`): `call` recalcula la aprobación sin el memo, y pasado el
+  tope el error dice «remove files» (aprobar no sirve). Además, aprobar desde la web: pill *herramientas* en la
+  cabecera (`public/js/apptools.js`) con cada archivo, su estado, su techo y su código; rutas `/api/apptools`,
+  `/api/apptools/source` y `/api/apptools/approve` (solo la sesión del dueño).
 - SDK: `toolsHandler({ seen })` / `handle_tool_request(seen=)` / `tools_asgi(seen=)` para compartir el `call_id`
   entre instancias.
 

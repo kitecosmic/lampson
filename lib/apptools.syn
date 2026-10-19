@@ -312,10 +312,13 @@ task gate(e, st)
     when length(bad) > 0
         let own be where(bad, (f) => f == e["file"])
         let f be when length(own) > 0 then own[0] otherwise bad[0]
+        when st[f] == "too_big"
+            set e["error"] to (when starts_with(f, "(") then "the tools folder is over the limit " + f otherwise f + " is over " + text(MAX_FILE_BYTES) + " bytes") + " (limits: " + text(MAX_FILE_BYTES) + " bytes per file, " + text(MAX_TOTAL_BYTES) + " in total, " + text(MAX_FILES) + " .syn files): remove files from it (data, node_modules…) — approving does not help"
+            give e
         when st[f] == "link"
             set e["error"] to "links are not allowed in the tools folder: " + f + " (a `use` would run what is behind it, never approved). Replace it with the real files and run `lampson tools approve`"
             give e
-        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise (when st[f] == "too_big" then " is over the limit (" + text(MAX_FILE_BYTES) + " bytes per file, " + text(MAX_TOTAL_BYTES) + " in total, " + text(MAX_FILES) + " .syn files)" otherwise " changed since it was approved"))) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise " changed since it was approved")) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
     give e
 
 -- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error).
@@ -381,6 +384,43 @@ export task scan_files()
     recover err
         set sig to sig
     give out
+
+-- para la UI (web.syn /api/apptools): cada archivo de la carpeta con su estado y, si es herramienta, qué hace y qué
+-- puede tocar. Aprobar es de la persona (la ruta exige la sesión del dueño); el agente no tiene esta ruta.
+export task summary()
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let d be dir()
+    let st be {}
+    try
+        set st to approval()
+    recover err
+        give {"dir": d, "files": [], "error": text(err)}
+    let tools be {}
+    each e in scan_files()
+        set tools[e["file"]] to e
+    let out be []
+    each f in sort(keys(st))
+        let t be when contains(tools, f) then tools[f] otherwise nothing
+        set out to append(out, {"file": f, "status": st[f], "tool": when t == nothing then nothing otherwise {"name": t["name"], "description": t["description"], "ceiling": ceiling(t), "error": t["error"], "params": t["params"]}})
+    give {"dir": d, "files": out, "error": load_error()}
+
+-- el texto de un archivo de la carpeta, para revisarlo antes de aprobar (solo los que la aprobación mira)
+export task source(f)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let d be dir()
+    when not contains(watched(d), f)
+        raise("not a file of the tools folder: " + f)
+    give slice(read_file(d + "/" + f), 0, MAX_FILE_BYTES)
 
 -- por qué no se pudo leer la carpeta en el último escaneo ("" si se pudo): runtime.missing lo dice en vez de
 -- «not a known tool»
@@ -486,6 +526,12 @@ export task call(name, args, ctx)
     when e["error"] != nothing
         give "ERROR: tool '" + name + "' is broken: " + e["error"]
     let d be dir()
+    -- la aprobación de la carpeta otra vez, sin el memo de approval(): lo que corre no usa un resultado de hace 3 s
+    let raw be where(scan_files(), (x) => x["name"] == name)
+    when length(raw) > 0
+        let fresh be gate(raw[0], compute_approval(d, walk(d), approved_map()))
+        when fresh["error"] != nothing
+            give "ERROR: tool '" + name + "' is broken: " + fresh["error"]
     let src be read_file(d + "/" + e["file"])
     let okm be approved_map()
     when not contains(okm, e["file"]) or okm[e["file"]] != decode(sha256(src), "hex")

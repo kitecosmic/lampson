@@ -63,6 +63,7 @@ use "./lib/settings.syn" as settings
 use "./lib/trace.syn" as trace
 use "./lib/mcp.syn" as mcp
 use "./lib/plugins.syn" as plugins
+use "./lib/apptools.syn" as apptools
 use "./lib/lsp.syn" as lsp
 use "./lib/tools/todo.syn" as todo
 use "./lib/schedule.syn" as schedule
@@ -173,7 +174,7 @@ serve on 8080
     describe
         about: "Lampson API — agents of this workspace for your apps, channels and other agents"
         version: "1.0.0"
-        api: ["POST /w/:slug/v1/messages -- send a message to an agent and get its answer (JSON); with \"callback\", 202 now and the answer POSTed later. Body: {to, thread, text, images?, from?, meta?, sent_at?, session?, callback?}", "POST /w/:slug/v1/messages/stream -- the same, as Server-Sent Events: session, the agent's steps, done", "GET /w/:slug/v1/agents -- the agents this API key can use", "GET /w/:slug/v1/jobs/:id -- status and result of a message sent with a callback", "POST /w/:slug/v1/mcp -- Model Context Protocol (Streamable HTTP, JSON responses): tools ask, agents and history, for other AI agents", "POST /w/:slug/v1/mcp/stream -- the same MCP server answering with Server-Sent Events: with params._meta.progressToken, each step of the agent arrives as notifications/progress before the result", "GET /w/:slug/v1/mcp -- 405: this MCP server opens no server-to-client stream", "POST /w/:slug/v1/objectives -- give an agent (or a team) an objective to work on by itself until done; it plans on a board, works in rounds and asks before anything irreversible. Body: {text, agent? | team?, budget_tokens?, round_seconds?}", "GET /w/:slug/v1/objectives -- the objectives this API key can see", "GET /w/:slug/v1/objectives/:id -- one objective: status, last report, question or approval it waits for, result, board and record", "POST /w/:slug/v1/objectives/:id/reply -- answer its question, or approve/deny what it asked: {text?, approved?}", "POST /w/:slug/v1/objectives/:id/cancel -- stop it"]
+        api: ["POST /w/:slug/v1/messages -- send a message to an agent and get its answer (JSON); with \"callback\", 202 now and the answer POSTed later. Body: {to, thread, text, images?, from?, meta?, sent_at?, session?, callback?, tools?, tools_url?} — tools: your app's functions [{name, description, parameters, timeout?}], called with a signed POST to tools_url", "POST /w/:slug/v1/messages/stream -- the same, as Server-Sent Events: session, the agent's steps, done", "GET /w/:slug/v1/agents -- the agents this API key can use", "GET /w/:slug/v1/jobs/:id -- status and result of a message sent with a callback", "POST /w/:slug/v1/mcp -- Model Context Protocol (Streamable HTTP, JSON responses): tools ask, agents and history, for other AI agents", "POST /w/:slug/v1/mcp/stream -- the same MCP server answering with Server-Sent Events: with params._meta.progressToken, each step of the agent arrives as notifications/progress before the result", "GET /w/:slug/v1/mcp -- 405: this MCP server opens no server-to-client stream", "POST /w/:slug/v1/objectives -- give an agent (or a team) an objective to work on by itself until done; it plans on a board, works in rounds and asks before anything irreversible. Body: {text, agent? | team?, budget_tokens?, round_seconds?}", "GET /w/:slug/v1/objectives -- the objectives this API key can see", "GET /w/:slug/v1/objectives/:id -- one objective: status, last report, question or approval it waits for, result, board and record", "POST /w/:slug/v1/objectives/:id/reply -- answer its question, or approve/deny what it asked: {text?, approved?}", "POST /w/:slug/v1/objectives/:id/cancel -- stop it"]
 
     -- la UI vive bajo /w/<slug> (BASE en js/core.js); si alguien entra por el puerto del proceso, es lo mismo
     -- Acceso DIRECTO por el puerto del proceso (sin X-Forwarded-Host, que solo agrega el hub al proxyear): la UI se
@@ -442,6 +443,29 @@ serve on 8080
         let b be json of request
         try
             give {"ok": true, "result": plugins.remove(text(b["name"])), "plugins": plugins.summary()}
+        recover err
+            give fail(400, text(err))
+
+    -- herramientas .syn del proyecto (lib/apptools.syn): ver cada archivo, su código y su techo, y aprobarlo. Solo la
+    -- persona: el agente no tiene ninguna tool que llegue acá
+    route "GET /w/:slug/api/apptools" requires auth
+        private
+        give apptools.summary()
+
+    route "GET /w/:slug/api/apptools/source" requires auth
+        private
+        let f be when contains(query, "file") then text(query.file) otherwise ""
+        try
+            give {"file": f, "text": apptools.source(f)}
+        recover err
+            give fail(400, text(err))
+
+    route "POST /w/:slug/api/apptools/approve" requires auth
+        private
+        let b be json of request
+        let n be when contains(b, "name") then text(b["name"]) otherwise ""
+        try
+            give {"ok": true, "approved": apptools.approve(n), "summary": apptools.summary()}
         recover err
             give fail(400, text(err))
 

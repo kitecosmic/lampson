@@ -45,6 +45,7 @@
     <select id="perm" title="qué pasa con un comando peligroso (rm -rf, git push --force, sudo…)"><option value="ask">permisos: preguntar</option><option value="yolo">permisos: permitir todo</option><option value="strict">permisos: denegar</option></select>
     <span class="pill on" id="wsPill" style="display:none" title="cambiar de workspace">workspace ▾</span>
     <span class="pill" id="plugins" title="plugins: tools propias que vos encendés · clic para ver y activar">plugins</span>
+    <span class="pill" id="apptools" hidden title="herramientas .syn del proyecto: corren solo aprobadas">herramientas</span>
     <span class="pill" id="model" title="proveedor y modelo · clic para cambiarlos o cargar una API key">…</span>
   </div>
 </header>
@@ -141,6 +142,7 @@
 <script src="/js/mcp.js"></script>
 <script src="/js/lsp.js"></script>
 <script src="/js/plugins.js"></script>
+<script src="/js/apptools.js"></script>
 <script src="/js/engine.js"></script>
 <script src="/js/schedules.js"></script>
 <script src="/js/approvals.js"></script>

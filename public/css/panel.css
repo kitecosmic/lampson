@@ -15,6 +15,7 @@
 .panel .pghost { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; margin:0; font:400 13px/1 var(--mono); letter-spacing:0; text-transform:none; border:1px solid var(--rule); border-radius:var(--r); background:transparent; color:var(--ink-3); cursor:pointer; }
 .panel .pghost:hover { color:var(--ink); border-color:var(--rule-2); }
 .panel .pghost + .pghost { margin-left:6px; }
+.panel .pghost.wide { width:auto; padding:0 10px; white-space:nowrap; }
 
 /* pestañas */
 .panel .ptabs { display:flex; gap:2px; border-bottom:1px solid var(--rule); margin:0 0 14px; flex:none; }
@@ -112,6 +113,7 @@
 .panel .tool .go { margin-top:10px; display:flex; align-items:center; gap:10px; }
 .panel .tool .go button { font:400 12px/1 var(--mono); padding:5px 10px; }
 .panel .tool .go .st { color:var(--ink-3); font-size:11.5px; }
+.panel pre.src { margin-top:12px; max-height:46vh; overflow:auto; font:400 11.5px/1.45 var(--mono); border:1px solid var(--rule); border-radius:var(--r); padding:10px; white-space:pre-wrap; }
 .panel .tool pre.out { margin-top:8px; max-height:38vh; overflow:auto; font:400 11.5px/1.45 var(--mono); border:1px solid var(--rule); border-radius:var(--r); padding:8px; white-space:pre-wrap; }
 /* conversación resumida (sesiones) */
 .panel .dmsgs { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
