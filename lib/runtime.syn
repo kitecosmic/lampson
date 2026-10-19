@@ -398,6 +398,8 @@ export task missing(spec)
                 set why to when length(found) == 0 then "there is no plugin '" + pn + "'" otherwise (when found[0]["error"] != nothing then "plugin '" + pn + "' is broken: " + text(found[0]["error"]) otherwise (when not found[0]["enabled"] then "plugin '" + pn + "' is off (turn it on: lampson plugin on " + pn + ")" otherwise "plugin '" + pn + "' has no such tool"))
             otherwise when apptools.get(t) != nothing
                 set why to "tool file " + apptools.dir() + "/" + t + ".syn: " + text(apptools.get(t)["error"])
+            otherwise when apptools.load_error() != ""
+                set why to "the app tools folder " + apptools.dir() + " could not be read: " + apptools.load_error()
             otherwise when builtin_off() and (t == "delegate" or contains(apply((s) => s["name"], tools.CATALOG), t))
                 set why to "Lampson's own tools are off in this process (lampsonTools: false)"
             otherwise when starts_with(t, "mcp_")

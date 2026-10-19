@@ -96,6 +96,11 @@ Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
   `instructions` con `try`: un error de la carpeta es "no hay herramientas .syn" y un aviso, nunca un turno caído.
   Tope: más de 1 MB por archivo o más de 500 `.syn` frena las herramientas (no se cachea el hash por fecha: con
   `bash` la fecha se vuelve atrás).
+- **Séptima revisión** (`13_septima_revision_sdk_tools.md`, rama `fix/apptools-rendimiento`): un solo recorrido de
+  la carpeta (`walk`) que se corta al pasar 500 `.syn` o 5000 entradas; tope de 5 MB en total; `approval()` se
+  reusa unos segundos mientras la carpeta tenga los mismos archivos, tamaños y fechas (una vez por turno, y `call`
+  compara siempre el hash de lo que corre); el aviso de `scan()` sale una vez por error y `runtime.missing` lo dice
+  («could not be read») en vez de «not a known tool».
 - SDK: `toolsHandler({ seen })` / `handle_tool_request(seen=)` / `tools_asgi(seen=)` para compartir el `call_id`
   entre instancias.
 

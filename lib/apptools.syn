@@ -45,7 +45,10 @@ let MAX_README be 12000
 -- ahí harían lento cada turno de todos. Pasado el tope, las herramientas se frenan (no se cachea por fecha: con bash,
 -- la fecha se vuelve atrás)
 let MAX_FILE_BYTES be 1000000
+let MAX_TOTAL_BYTES be 5000000
 let MAX_FILES be 500
+let MAX_ENTRIES be 5000
+let MEMO_SECONDS be 3
 -- nombres que ya usa Lampson: una herramienta del dev no puede pisarlos
 export let TAKEN be ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill", "mcp", "plugin", "schedule", "computer_use", "delegate", "send", "board", "objective"]
 
@@ -173,71 +176,94 @@ task approved_map()
     recover err
         give {}
 
--- los archivos que se aprueban: TODA .syn de la carpeta y sus subcarpetas (una herramienta puede `use "./sub/h.syn"`
--- o `use "./otra.syn"`), y el README.md de arriba, que va al prompt. Rutas relativas a la carpeta.
+-- un recorrido de la carpeta → {files, links, sizes, over}. files: TODA .syn de la carpeta y sus subcarpetas (una
+-- herramienta puede `use "./sub/h.syn"` o `use "./otra.syn"`) y el README.md de arriba, que va al prompt; rutas
+-- relativas a la carpeta. links: links a carpetas (junction, symlink): `use "./ext/o.syn"` los atraviesa (el chequeo
+-- del motor es por el texto de la ruta) y list_dir no entra, así que lo de adentro nunca se aprobaría. list_dir los da
+-- como archivo; file_info sigue el link y dice carpeta (Synsema 0.6.44 no tiene is_link). over: pasó el tope de
+-- entradas o de .syn — se corta ahí, sin recorrer un node_modules entero en cada escaneo.
+task walk(d)
+    let acc be walk_into(d, "", {"files": [], "links": [], "sizes": {}, "seen": 0, "over": false})
+    when file_exists(d + "/README.md")
+        set acc["files"] to append(acc["files"], "README.md")
+        set acc["sizes"]["README.md"] to file_info(d + "/README.md")["size"]
+    set acc["files"] to sort(acc["files"])
+    give acc
+
+task walk_into(d, rel, acc)
+    try
+        each e in list_dir(d + (when rel == "" then "" otherwise "/" + rel))
+            when not acc["over"]
+                set acc["seen"] to acc["seen"] + 1
+                let p be when rel == "" then e["name"] otherwise rel + "/" + e["name"]
+                when acc["seen"] > MAX_ENTRIES or length(acc["files"]) > MAX_FILES
+                    set acc["over"] to true
+                otherwise when e["is_dir"]
+                    set acc to walk_into(d, p, acc)
+                otherwise
+                    let fi be file_info(d + "/" + p)
+                    when fi["is_dir"]
+                        set acc["links"] to append(acc["links"], p)
+                    otherwise when ends_with(e["name"], ".syn")
+                        set acc["files"] to append(acc["files"], p)
+                        set acc["sizes"][p] to when fi["size"] == nothing then 0 otherwise fi["size"]
+    recover err
+        give acc
+    give acc
+
 task watched(d)
-    let out be when file_exists(d + "/README.md") then ["README.md"] otherwise []
-    give sort(out + syn_files(d, ""))
+    give walk(d)["files"]
 
-task syn_files(d, rel)
-    let out be []
-    try
-        each e in list_dir(d + (when rel == "" then "" otherwise "/" + rel))
-            let p be when rel == "" then e["name"] otherwise rel + "/" + e["name"]
-            when e["is_dir"]
-                set out to out + syn_files(d, p)
-            otherwise when ends_with(e["name"], ".syn")
-                set out to append(out, p)
-    recover err
-        give out
-    give out
-
--- links a carpetas dentro de la carpeta (junction, symlink): `use "./ext/o.syn"` los atraviesa (el chequeo del motor
--- es por el texto de la ruta) y list_dir no entra, así que lo de adentro nunca se aprobaría (2026-10-19). list_dir los
--- da como archivo; file_info sigue el link y dice carpeta. (Synsema 0.6.44 no tiene is_link: synsema-faltantes.md)
-task links_in(d, rel)
-    let out be []
-    try
-        each e in list_dir(d + (when rel == "" then "" otherwise "/" + rel))
-            let p be when rel == "" then e["name"] otherwise rel + "/" + e["name"]
-            when e["is_dir"]
-                set out to out + links_in(d, p)
-            otherwise when file_info(d + "/" + p)["is_dir"]
-                set out to append(out, p)
-    recover err
-        give out
-    give out
-
--- {archivo: "ok" | "new" | "changed" | "unreadable" | "link" | "missing"}. Lo que no se puede leer (una junction
--- llamada x.syn, un archivo bloqueado) frena las herramientas pero no el resto: sin el try, tumbaba registry_of de
--- TODOS los agentes. "missing" (aprobado y borrado) solo se muestra: borrar no hace correr nada sin aprobar (si
--- vuelve con otro contenido, el hash guardado da "changed"); esconder con un link lo ve links_in. (approveTools del SDK aprueba UNA vez, al arrancar `run --stdio`: lo que
--- cambie después, aunque sea el agente, sigue el camino normal)
+-- {archivo: "ok" | "new" | "changed" | "unreadable" | "too_big" | "link" | "missing"}. Lo que no se puede leer (una
+-- junction llamada x.syn, un archivo bloqueado) frena las herramientas pero no el resto: sin el try, tumbaba
+-- registry_of de TODOS los agentes. "missing" (aprobado y borrado) solo se muestra: borrar no hace correr nada sin
+-- aprobar (si vuelve con otro contenido, el hash guardado da "changed"). (approveTools del SDK aprueba UNA vez, al
+-- arrancar `run --stdio`: lo que cambie después, aunque sea el agente, sigue el camino normal.)
+--
+-- Una vez por turno: el escaneo corre varias veces (registry_of, catalog_of, opts_for, missing), así que el
+-- resultado se reusa unos segundos mientras la carpeta tenga los mismos archivos, tamaños y fechas. Pasado ese rato se
+-- vuelve a leer todo; y `call` compara siempre el hash del archivo que va a correr.
 export task approval()
     require exec
+    require time
     require file(".lampson")
     require file(".lampson/*")
     require file("workspace")
     require file("workspace/*")
     require env("LAMPSON_*")
     let d be dir()
+    let w be walk(d)
     let ok be approved_map()
+    let fp be json_encode([d, w["files"], w["links"], w["over"], apply((f) => text(file_info(d + "/" + f)["modified"]), w["files"]), w["sizes"], ok])
+    let key be "apptools:approval"
+    observe key as memo
+    when memo != nothing and memo["fp"] == fp and now() - memo["at"] < MEMO_SECONDS
+        give memo["st"]
+    let st be compute_approval(d, w, ok)
+    share {"fp": fp, "at": now(), "st": st} as key
+    give st
+
+task compute_approval(d, w, ok)
+    when w["over"]
+        give {"(more than " + text(MAX_FILES) + " .syn or " + text(MAX_ENTRIES) + " entries)": "too_big"}
+    let total be 0
+    each f in w["files"]
+        set total to total + w["sizes"][f]
+    when total > MAX_TOTAL_BYTES
+        give {"(" + text(total) + " bytes in total)": "too_big"}
     let out be {}
-    let here be watched(d)
-    when length(here) > MAX_FILES
-        give {"(" + text(length(here)) + " files)": "too_big"}
-    each f in here
+    each f in w["files"]
         try
-            when file_info(d + "/" + f)["size"] > MAX_FILE_BYTES
+            when w["sizes"][f] > MAX_FILE_BYTES
                 raise("too big")
             let h be digest(d + "/" + f)
             set out[f] to when not contains(ok, f) then "new" otherwise (when ok[f] == h then "ok" otherwise "changed")
         recover err
-            set out[f] to when text(err) == "too big" or contains(text(err), "too big") then "too_big" otherwise "unreadable"
+            set out[f] to when contains(text(err), "too big") then "too_big" otherwise "unreadable"
     each f in keys(ok)
-        when not contains(here, f) and f != "README.md"
+        when not contains(w["files"], f) and f != "README.md"
             set out[f] to "missing"
-    each l in links_in(d, "")
+    each l in w["links"]
         set out[l] to "link"
     give out
 
@@ -251,7 +277,10 @@ export task approve(name)
     let d be dir()
     let ok be approved_map()
     let done be []
-    let here be watched(d)
+    let wk be walk(d)
+    when wk["over"]
+        give ["(the tools folder is over the limit: " + text(MAX_FILES) + " .syn or " + text(MAX_ENTRIES) + " entries; nothing approved)"]
+    let here be wk["files"]
     -- los aprobados que ya no están (el dev los borró): fuera, con "" (aprobar todo) o nombrándolos
     let kept be {}
     each f in keys(ok)
@@ -286,7 +315,7 @@ task gate(e, st)
         when st[f] == "link"
             set e["error"] to "links are not allowed in the tools folder: " + f + " (a `use` would run what is behind it, never approved). Replace it with the real files and run `lampson tools approve`"
             give e
-        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise (when st[f] == "too_big" then " is over the limit (" + text(MAX_FILE_BYTES) + " bytes per file, " + text(MAX_FILES) + " .syn files)" otherwise " changed since it was approved"))) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise (when st[f] == "too_big" then " is over the limit (" + text(MAX_FILE_BYTES) + " bytes per file, " + text(MAX_TOTAL_BYTES) + " in total, " + text(MAX_FILES) + " .syn files)" otherwise " changed since it was approved"))) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
     give e
 
 -- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error).
@@ -302,9 +331,17 @@ export task scan()
     require env("LAMPSON_*")
     try
         let st be approval()
-        give apply((e) => gate(e, st), scan_files())
+        let out be apply((e) => gate(e, st), scan_files())
+        observe "apptools:error" as prev
+        when prev != nothing and prev != ""
+            share "" as "apptools:error"
+        give out
     recover err
-        eprint("lampson: app tools skipped (" + dir() + "): " + text(err))
+        let msg be text(err)
+        observe "apptools:error" as prev
+        when prev != msg
+            eprint("lampson: app tools skipped (" + dir() + "): " + msg)
+            share msg as "apptools:error"
         give []
 
 -- todas las herramientas de la carpeta (también las rotas, con su error). Caché en disco por nombre+tamaño+fecha.
@@ -344,6 +381,12 @@ export task scan_files()
     recover err
         set sig to sig
     give out
+
+-- por qué no se pudo leer la carpeta en el último escaneo ("" si se pudo): runtime.missing lo dice en vez de
+-- «not a known tool»
+export task load_error()
+    observe "apptools:error" as e
+    give when e == nothing then "" otherwise text(e)
 
 export task names()
     require exec
