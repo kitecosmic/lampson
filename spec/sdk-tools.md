@@ -79,6 +79,11 @@ Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
   `:`), para todas las tools de archivos. Así `in_lampson_dir` e `is_secret_env` ven la única forma de la ruta.
 - **B2, la sesión:** ids con `token(16)` en vez de 4 dígitos; `session.valid_id` (nada de `../`); la sesión
   guarda `meta.space` y por la API solo se retoma una de la misma key (si no, 404), sin adoptar su thread.
+- **B1, capa 2:** cada archivo de la carpeta (herramientas, `_*.syn`, `README.md`) corre o entra al prompt solo
+  con el sha256 que aprobó una persona (`lampson tools list|approve [nombre]`, guardado en `.lampson/` del proceso
+  del workspace, fuera del alcance de las tools de archivos). Un cambio la frena hasta aprobarla de nuevo; un
+  ayudante cambiado frena a todas. `call` relee y compara justo antes de correr. Modo local del SDK:
+  `approveTools: true` / `approve_tools=True` aprueba solo (el dev es quien edita). Falta el botón en la web.
 - SDK: `toolsHandler({ seen })` / `handle_tool_request(seen=)` / `tools_asgi(seen=)` para compartir el `call_id`
   entre instancias.
 

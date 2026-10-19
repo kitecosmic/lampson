@@ -13,6 +13,7 @@
 #   lampson mcp serve [--agent ID[,ID]] [--workspace RUTA]     # Lampson como servidor MCP (stdio) para otros agentes
 #   lampson channel list · channel on|off <canal> · channel setup <canal>   # canales (Telegram, Chatwoot…)
 #   lampson plugin list · plugin on|off <nombre>              # encender plugins sin interfaz (VPS por SSH, scripts)
+#   lampson tools list · tools approve [nombre]               # herramientas .syn del proyecto: corren solo aprobadas
 #   lampson objective add "…" --agent ID | --team ID [--budget N] [--round S] · objective list · show <id> · reply <id> "…" [--approve|--deny] · cancel <id>   # objetivos
 #   lampson team list                                         # equipos de agentes y quién reporta a quién
 set -euo pipefail
@@ -20,7 +21,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 caller="$(pwd)"
 ws=""; web=0; hub=""; install=""; domain="-"; email=""; pair_url="-"
-run=0; msg=""; perm_flag=""; key=""; key_name=""; key_id=""; mcp_serve=""; ch_cmd=""; ch_name=""; pl_cmd=""; pl_name=""
+run=0; msg=""; perm_flag=""; key=""; key_name=""; key_id=""; mcp_serve=""; ch_cmd=""; ch_name=""; pl_cmd=""; pl_name=""; tl_cmd=""
 obj_cmd=""; obj_id=""; obj_team=""; obj_budget=""; obj_round=""; obj_decision=""; team_cmd=""
 # `lampson run …`: subcomando sin interfaz (run.syn); las palabras sueltas son el mensaje, no el workspace
 if [ "${1:-}" = run ]; then run=1; shift; fi
@@ -30,6 +31,8 @@ if [ "${1:-}" = mcp ] && [ "${2:-}" = serve ]; then run=1; mcp_serve=1; shift 2;
 # `lampson channel list|on|off|setup <canal>` (run.syn con LAMPSON_CHANNEL_CMD)
 if [ "${1:-}" = channel ]; then run=1; ch_cmd="${2:-list}"; shift; [ $# -gt 0 ] && shift; fi
 # `lampson plugin list|on|off <nombre>` (run.syn con LAMPSON_PLUGIN_CMD)
+# `lampson tools list|approve [nombre]` (run.syn con LAMPSON_TOOLS_CMD): aprobar las herramientas .syn del proyecto
+if [ "${1:-}" = tools ]; then run=1; tl_cmd="${2:-list}"; shift; [ $# -gt 0 ] && shift; fi
 if [ "${1:-}" = plugin ]; then run=1; pl_cmd="${2:-list}"; shift; [ $# -gt 0 ] && shift; fi
 if [ "${1:-}" = key ]; then run=1; key="${2:-help}"; shift; [ $# -gt 0 ] && shift; fi
 # `lampson objective add|list|show|reply|cancel` y `lampson team list` (run.syn con LAMPSON_OBJ_CMD / LAMPSON_TEAM_CMD)
@@ -63,7 +66,7 @@ while [ $# -gt 0 ]; do
         --deny) obj_decision=deny ;;
         --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
         -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
-        *) if [ -n "$obj_cmd" ] && [ -z "$obj_id" ] && { [ "$obj_cmd" = show ] || [ "$obj_cmd" = reply ] || [ "$obj_cmd" = cancel ]; }; then obj_id="$1"; elif [ -n "$obj_cmd" ]; then msg="${msg:+$msg }$1"; elif [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$pl_cmd" ]; then pl_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
+        *) if [ -n "$obj_cmd" ] && [ -z "$obj_id" ] && { [ "$obj_cmd" = show ] || [ "$obj_cmd" = reply ] || [ "$obj_cmd" = cancel ]; }; then obj_id="$1"; elif [ -n "$obj_cmd" ]; then msg="${msg:+$msg }$1"; elif [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$pl_cmd" ] || [ -n "$tl_cmd" ]; then pl_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
     esac
     shift
 done
@@ -186,7 +189,7 @@ if [ "$run" = 1 ]; then
     # sin interfaz: los permisos los fija el flag, o el agente (run.syn: strict si el agente no dice nada)
     entry=run.syn; export LAMPSON_MESSAGE="$msg" LAMPSON_RUN_PERMISSION="$perm_flag"
     export LAMPSON_KEY_CMD="$key" LAMPSON_KEY_NAME="$key_name" LAMPSON_KEY_ID="$key_id" LAMPSON_KEY_AGENTS="${LAMPSON_AGENT:-}"
-    export LAMPSON_CHANNEL_CMD="$ch_cmd" LAMPSON_CHANNEL_NAME="$ch_name" LAMPSON_PLUGIN_CMD="$pl_cmd" LAMPSON_PLUGIN_NAME="$pl_name"
+    export LAMPSON_CHANNEL_CMD="$ch_cmd" LAMPSON_CHANNEL_NAME="$ch_name" LAMPSON_PLUGIN_CMD="$pl_cmd" LAMPSON_PLUGIN_NAME="$pl_name" LAMPSON_TOOLS_CMD="$tl_cmd" LAMPSON_TOOLS_NAME="$pl_name"
     export LAMPSON_OBJ_CMD="$obj_cmd" LAMPSON_OBJ_ID="$obj_id" LAMPSON_OBJ_AGENT="$([ -n "$obj_cmd" ] && echo "${LAMPSON_AGENT:-}")" LAMPSON_OBJ_TEAM="$obj_team"
     export LAMPSON_OBJ_BUDGET="$obj_budget" LAMPSON_OBJ_ROUND="$obj_round" LAMPSON_OBJ_DECISION="$obj_decision" LAMPSON_TEAM_CMD="$team_cmd"
     export LAMPSON_MCP_SERVE="$mcp_serve" LAMPSON_MCP_AGENTS="$([ -n "$mcp_serve" ] && echo "${LAMPSON_AGENT:-}")"

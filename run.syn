@@ -48,6 +48,7 @@ use "./lib/mcp_server.syn" as mcp_server
 use "./lib/approvals.syn" as approvals
 use "./lib/plugins.syn" as plugins
 use "./lib/sdktools.syn" as sdktools
+use "./lib/apptools.syn" as apptools
 use "./lib/channels.syn" as channels
 
 -- `lampson key add|list|remove`: API keys de la API /v1 de este workspace (lib/apikeys.syn, lib/api.syn)
@@ -225,6 +226,34 @@ when pl_cmd != ""
             exit(2)
         exit(0)
     print("uso: lampson plugin list · plugin on|off <nombre>")
+    exit(2)
+
+-- `lampson tools list|approve [nombre]`: las herramientas .syn del proyecto (lib/apptools.syn) y su aprobación
+let tl_cmd be env("LAMPSON_TOOLS_CMD", "")
+when tl_cmd != ""
+    let tl_name be env("LAMPSON_TOOLS_NAME", "")
+    let tdir be apptools.dir()
+    when tl_cmd == "list"
+        let st be apptools.approval()
+        when length(keys(st)) == 0
+            print("no hay herramientas .syn (" + slice(tdir, length("workspace/"), length(tdir)) + "/<nombre>.syn en el proyecto)")
+        let byfile be {}
+        each e in apptools.scan_files()
+            set byfile[e["file"]] to e
+        each f in sort(keys(st))
+            let mark be when st[f] == "ok" then "● " otherwise (when st[f] == "new" then "○ nueva, sin aprobar  " otherwise "△ cambió, sin aprobar  ")
+            let info be when contains(byfile, f) then (when byfile[f]["error"] != nothing then "rota: " + text(byfile[f]["error"]) otherwise "puede tocar: " + apptools.ceiling(byfile[f])) otherwise (when starts_with(f, "_") then "ayudante" otherwise "va al prompt")
+            print("  " + mark + f + "  " + info)
+        exit(0)
+    when tl_cmd == "approve"
+        let done be apptools.approve(tl_name)
+        when length(done) == 0
+            print(when tl_name == "" then "nada que aprobar: todo está al día" otherwise "nada que aprobar con ese nombre (lampson tools list)")
+        each f in done
+            let es be where(apptools.scan_files(), (e) => e["file"] == f)
+            print("aprobada " + f + (when length(es) > 0 and es[0]["error"] == nothing then "  · puede tocar: " + apptools.ceiling(es[0]) otherwise ""))
+        exit(0)
+    print("uso: lampson tools list · tools approve [nombre]   (sin nombre: todo lo que está en la carpeta)")
     exit(2)
 
 -- `lampson channel list|on|off|setup [canal]`: los canales (plugins con "channel", lib/channels.syn)

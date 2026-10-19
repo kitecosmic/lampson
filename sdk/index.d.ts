@@ -27,6 +27,9 @@ export interface LocalOptions {
     /** Your tools in Synsema: a folder inside `workspace` with one `<name>.syn` per tool (default `<workspace>/.lampson/tools`).
      *  Each file has an `intent:` line (its description), its `require`s (all it can touch) and `export task <name>(…)`. */
     tools?: string;
+    /** A `.syn` tool runs only once a person approved that exact content (`lampson tools approve`). true approves what
+     *  is in the folder at each scan: for development, where you edit the tools. Never on a shared server. */
+    approveTools?: boolean;
     /** Extra environment for the Lampson process (e.g. provider keys). */
     env?: Record<string, string>;
     /** Advanced / tests: an exact command that speaks the `lampson run --stdio` protocol. */

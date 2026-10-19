@@ -15,6 +15,8 @@ Two ways to reach Lampson, the same methods for both:
           (typo, plugin off) is reported through on_warning (default: a line on stderr) and in lampson.warnings.
           local={"lampson_tools": False} -> no tool of Lampson's own exists in that process (bash, read, write,
           fetch...), not even for the built-in agents: your agents get only the tools you give them.
+          A .syn tool runs only once approved (`lampson tools approve`, its sha256); local={"approve_tools": True}
+          approves what is in the folder, for development, where you are the one editing it.
           Your own tools in Synsema: one file per tool in <workspace>/.lampson/tools/ (or local={"tools": "./tools"},
           inside the workspace): `export task <file name>(...)`, an `intent:` line and its `require`s.
 
@@ -304,7 +306,7 @@ def verify_tool_request(method, url, headers, body, secret, now=None):
 
 class _Local:
     def __init__(self, workspace=None, home=None, env=None, command=None, spawn=None, on_warning=None, lampson_tools=True,
-                 tools=None):
+                 tools=None, approve_tools=False):
         child_env = dict(os.environ)
         child_env.update(env or {})
         # relative to the app, not to the workspace (the launcher runs with cwd = workspace)
@@ -312,6 +314,10 @@ class _Local:
             child_env["LAMPSON_HOME"] = os.path.abspath(home)
         if lampson_tools is False:
             child_env["LAMPSON_BUILTIN_TOOLS"] = "off"
+        # you edit the .syn tools yourself: approve what is in the folder (never on a server: there a person runs
+        # `lampson tools approve`, so an agent that rewrites a tool cannot raise its own ceiling)
+        if approve_tools is True:
+            child_env["LAMPSON_APPROVE_TOOLS"] = "1"
         if tools:
             # the tools folder lives in the project (Lampson only reads inside it): relative to the workspace
             try:

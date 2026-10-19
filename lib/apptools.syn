@@ -24,12 +24,20 @@
 -- session, meta, channel} del sobre — lo pone la app, el modelo no lo ve ni lo escribe. Sus argumentos sí los escribe
 -- el modelo: validarlos siempre.
 --
--- Autorización: estar en la carpeta (el commit del dev) y en la lista de tools del agente. Pasan en cualquier modo;
+-- Aprobación (2026-10-19): cada archivo de la carpeta (herramientas, ayudantes _*.syn y el README.md) corre o
+-- entra al prompt solo si su sha256 es el que aprobó el humano: `lampson tools approve [nombre]`. Lo guardado vive
+-- en .lampson/ del proceso del workspace, donde las tools de archivos del agente no llegan. Así, un agente que
+-- reescribe una herramienta (por un alias de ruta, un bash disfrazado…) no le sube el techo: deja de correr hasta
+-- que alguien mira el cambio. Con LAMPSON_APPROVE_TOOLS=1 (el SDK en modo local con approveTools: true: quien
+-- edita es el dev) se aprueba solo.
+--
+-- Autorización: estar en la carpeta, aprobada, y en la lista de tools del agente. Pasan en cualquier modo;
 -- "approve": "ask" en el agente las hace pedir, y una que declara `require spend(…)` pide siempre (runtime.opts_for).
 
 export let MARK be "apptool"
 let DEFAULT_DIR be ".lampson/tools"
 let CACHE be ".lampson/apptools.json"
+let APPROVED be ".lampson/apptools_approved.json"
 let TIMEOUT be 60
 let MAX_OUT be 60000
 let MAX_README be 12000
@@ -150,8 +158,89 @@ task field_list(m, k)
         give m[k]
     give []
 
--- todas las herramientas de la carpeta (también las rotas, con su error). Caché en disco por nombre+tamaño+fecha.
+task digest(path)
+    give decode(sha256(read_file(path)), "hex")
+
+task approved_map()
+    try
+        let m be json_decode(read_file(APPROVED))
+        give when type_of(m) == "map" then m otherwise {}
+    recover err
+        give {}
+
+-- los archivos que se aprueban: cada .syn (herramientas y ayudantes) y el README.md, que va al prompt
+task watched(d)
+    let out be []
+    try
+        each e in list_dir(d)
+            when not e["is_dir"] and (ends_with(e["name"], ".syn") or e["name"] == "README.md")
+                set out to append(out, e["name"])
+    recover err
+        give []
+    give sort(out)
+
+-- {archivo: "ok" | "new" | "changed"}
+export task approval()
+    require exec
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let d be dir()
+    let ok be approved_map()
+    when env("LAMPSON_APPROVE_TOOLS", "") == "1"
+        approve("")
+        set ok to approved_map()
+    let out be {}
+    each f in watched(d)
+        let h be digest(d + "/" + f)
+        set out[f] to when not contains(ok, f) then "new" otherwise (when ok[f] == h then "ok" otherwise "changed")
+    give out
+
+-- aprobar lo que está ahora en la carpeta: un archivo (`estado_pedido` o `_comun.syn`) o, con "", todos → los que cambió
+export task approve(name)
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let d be dir()
+    let ok be approved_map()
+    let done be []
+    each f in watched(d)
+        when name == "" or f == name or f == name + ".syn"
+            let h be digest(d + "/" + f)
+            when not contains(ok, f) or ok[f] != h
+                set ok[f] to h
+                set done to append(done, f)
+    write_file(APPROVED, json_encode(ok))
+    give done
+
+-- una herramienta sin aprobar (o con un ayudante sin aprobar) se carga con un error que dice qué hacer
+task gate(e, st)
+    when e["error"] != nothing
+        give e
+    let bad be where(keys(st), (f) => st[f] != "ok" and (f == e["file"] or starts_with(f, "_")))
+    when length(bad) > 0
+        let f be bad[0]
+        set e["error"] to (when f == e["file"] then f otherwise "its helper " + f) + (when st[f] == "new" then " is not approved yet" otherwise " changed since it was approved") + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+    give e
+
+-- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error)
 export task scan()
+    require exec
+    require time
+    require file(".lampson")
+    require file(".lampson/*")
+    require file("workspace")
+    require file("workspace/*")
+    require env("LAMPSON_*")
+    let st be approval()
+    give apply((e) => gate(e, st), scan_files())
+
+-- todas las herramientas de la carpeta (también las rotas, con su error). Caché en disco por nombre+tamaño+fecha.
+export task scan_files()
     require exec
     require time
     require file(".lampson")
@@ -258,6 +347,9 @@ export task instructions(tool_names)
     let mine be where(names(), (n) => contains(tool_names, n))
     when length(mine) == 0
         give ""
+    let st be approval()
+    when not contains(st, "README.md") or st["README.md"] != "ok"
+        give ""
     try
         let t be read_file(dir() + "/README.md")
         give "\n\n# Your app's tools\n" + slice(t, 0, MAX_README)
@@ -280,6 +372,9 @@ export task call(name, args, ctx)
         give "ERROR: tool '" + name + "' is broken: " + e["error"]
     let d be dir()
     let src be read_file(d + "/" + e["file"])
+    let okm be approved_map()
+    when not contains(okm, e["file"]) or okm[e["file"]] != decode(sha256(src), "hex")
+        give "ERROR: tool '" + name + "' changed since it was approved: run `lampson tools approve " + name + "`"
     let prog be src + "\n\nrequire env(\"LAMPSON_TOOL_ARGS\")\nlet __lampson_r be call(" + name + ", json_decode(env(\"LAMPSON_TOOL_ARGS\")))\nprint(when type_of(__lampson_r) == \"text\" then __lampson_r otherwise json_encode(__lampson_r))\n"
     let envs be {"LAMPSON_TOOL_ARGS": json_encode(when args == nothing then {} otherwise args)}
     when e["ctx"]

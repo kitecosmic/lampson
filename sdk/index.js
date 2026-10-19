@@ -16,6 +16,8 @@
 //           (default console.warn) and in lampson.warnings.
 //           `lampsonTools: false` → no tool of Lampson's own exists in that process (bash, read, write, fetch…),
 //           not even for the built-in agents: your agents get only the tools you give them.
+//           A .syn tool runs only once approved (`lampson tools approve`, its sha256); `approveTools: true`
+//           approves what is in the folder — for development, where you are the one editing it.
 //           Your own tools in Synsema: one file per tool in <workspace>/.lampson/tools/ (or `tools: "./tools"`,
 //           inside the workspace) — `export task <file name>(…)`, an `intent:` line and its `require`s, which are
 //           all it can touch. List the name in the agent's "tools". See lampson.org/docs/sdk.
@@ -225,7 +227,7 @@ function killTree(child) {
 }
 
 class LocalTransport {
-  constructor({ workspace, home, env, lampsonTools, tools, spawn: spawnSpec }, onWarning) {
+  constructor({ workspace, home, env, lampsonTools, tools, approveTools, spawn: spawnSpec }, onWarning) {
     if (!workspace && !spawnSpec) throw new TypeError('local.workspace is required (the project folder the agents work in)');
     let command, args, cwd;
     if (spawnSpec) {
@@ -242,6 +244,9 @@ class LocalTransport {
     // inside the project (2026-10-18)
     if (home) childEnv.LAMPSON_HOME = path.resolve(home);
     if (lampsonTools === false) childEnv.LAMPSON_BUILTIN_TOOLS = 'off';
+    // you edit the .syn tools yourself: approve what is in the folder at each scan (never on a server: there a
+    // person runs `lampson tools approve`, so an agent that rewrites a tool cannot raise its own ceiling)
+    if (approveTools === true) childEnv.LAMPSON_APPROVE_TOOLS = '1';
     if (tools) {
       // the tools folder lives in the project (Lampson only reads inside it): pass it relative to the workspace
       const rel = path.relative(path.resolve(workspace || '.'), path.resolve(tools)).split(path.sep).join('/');
