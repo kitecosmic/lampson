@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lampson"
-version = "0.5.0"
+version = "0.5.1"
 description = "Lampson SDK: talk to Lampson agents from Python — server mode (HTTP API) or local mode (Lampson as a child process)."
 readme = "README.md"
 requires-python = ">=3.9"
