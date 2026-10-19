@@ -67,8 +67,15 @@ Pruebas:
 - SDK: `toolsHandler()` / `handle_tool_request()` / `tools_asgi()` contestan 409 a un `call_id` repetido
   (por proceso, 600 s) y 400 a un cuerpo que no es un objeto; Python usa `fullmatch`.
 
-Sin hacer, esperan a Joel: **B2** (la conversación no está separada por key) y la **pregunta 5** (keys nuevas
-sin lista: ¿callbacks sí o no?).
+Decididos por Joel y hechos:
+- **B2, conversación por key:** por dentro el thread de la API es `key:<id>:<thread>` (`api.space_of`); la app
+  ve el suyo en respuestas, eventos, callbacks y jobs. Aplica a `/v1/messages`, `/stream` y `/v1/mcp` (`ask` y
+  `history`). Al actualizar, los threads de la API empiezan de cero una vez. Tampoco se puede escribir en `team:…`.
+- **Pregunta 5:** una key con secreto propio y sin lista no pide callbacks; las viejas siguen llegando a nombres
+  públicos y `lampson key list` las marca.
+
+Sin hacer (pueden esperar, §3 de la revisión): `lampson key secret <id>`, pasar las callbacks a `http_sign`,
+derivar los secretos en vez de guardarlos.
 
 **Pendiente:**
 1. **Tipos en la firma de un `task`**, del lado del motor: con eso el esquema sale completo del archivo.

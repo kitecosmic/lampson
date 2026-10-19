@@ -843,7 +843,7 @@ serve on 8080
         let offered be apply((x) => x["id"], api.agents_for(a["key"]))
         when length(offered) == 0
             give fail(403, "this API key has no agents")
-        let resp be mcp_server.handle(json of request, offered, api.mcp_deliver)
+        let resp be mcp_server.handle(json of request, offered, api.mcp_deliver, api.space_of(a["key"]))
         when resp == nothing
             give respond("", "application/json", 202)
         give resp
@@ -884,14 +884,14 @@ serve on 8080
                             set result to r
                 state_delete("mb:res:" + mid)
                 bus_unsubscribe(sub)
-                give when result == nothing then {"agent": sobre["to"], "thread": sobre["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: timed out"} otherwise result
+                give when result == nothing then {"agent": sobre["to"], "thread": get(sobre, "shown_thread", sobre["thread"]), "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: timed out"} otherwise result
             when not a["ok"]
                 send {"jsonrpc": "2.0", "id": nothing, "error": {"code": -32001, "message": a["error"]}} as "message"
             otherwise when length(offered) == 0
                 send {"jsonrpc": "2.0", "id": nothing, "error": {"code": -32001, "message": "this API key has no agents"}} as "message"
             otherwise
                 state_set("lampson:last_used", now())
-                let resp be mcp_server.handle(req, offered, deliver_sse)
+                let resp be mcp_server.handle(req, offered, deliver_sse, api.space_of(a["key"]))
                 when resp != nothing
                     send resp as "message"
 

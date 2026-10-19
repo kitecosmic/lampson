@@ -109,7 +109,7 @@ export task parse(body, rec)
     when cb != "" and not (starts_with(cb, "https://") or starts_with(cb, "http://"))
         give {"ok": false, "status": 400, "error": "callback must be an http(s) URL"}
     when cb != "" and not apikeys.callback_allowed(rec, cb)
-        give {"ok": false, "status": 403, "error": "this API key cannot send callbacks to " + cb + (when length(field(rec, "callbacks", [])) > 0 then " (allowed: " + join(rec["callbacks"], ", ") + ")" otherwise " (a key without a callback list only reaches public hosts: add one with `lampson key add --callback URL`)")}
+        give {"ok": false, "status": 403, "error": "this API key cannot send callbacks to " + cb + (when length(field(rec, "callbacks", [])) > 0 then " (allowed: " + join(rec["callbacks"], ", ") + ")" otherwise ": this API key has no callback list; create one with `lampson key add --callback URL`")}
     let images be field(body, "images", [])
     when type_of(images) != "list"
         set images to []
@@ -146,7 +146,21 @@ export task parse(body, rec)
         set sobre["tools"] to nt["tools"]
         set sobre["tools_url"] to tu
         set sobre["tools_key"] to rec["id"]
+    set sobre to scope_sobre(sobre, rec)
     give {"ok": true, "status": 200, "error": "", "sobre": sobre, "callback": cb, "stream": field(body, "stream", false) == true}
+
+-- la conversación es de la key que la empezó: por dentro el thread es "key:<id>:<thread>" y la app sigue viendo el
+-- suyo (shown_thread). Antes, dos apps con el mismo thread compartían historial y lote: la de B corría con las
+-- herramientas y el `from` de A (2026-10-19). Tampoco puede escribir en "team:…" u "objective:…".
+export task space_of(rec)
+    give "key:" + text(rec["id"]) + ":"
+
+task scope_sobre(sobre, rec)
+    set sobre["space"] to space_of(rec)
+    when sobre["thread"] != ""
+        set sobre["shown_thread"] to sobre["thread"]
+        set sobre["thread"] to space_of(rec) + sobre["thread"]
+    give sobre
 
 -- el modo de un agente por la API: el suyo, y si no dice → strict (nadie en la request para preguntarle)
 export task mode_for(spec)
@@ -166,7 +180,7 @@ export task create_job(id, rec, sobre, callback)
     require time
     require file(".lampson")
     require file(".lampson/*")
-    mailbox.save_job({"job": id, "status": "queued", "key": rec["id"], "agent": sobre["to"], "thread": sobre["thread"], "callback": callback, "created": format_time(now()), "result": nothing, "delivered": false, "merged_into": nothing})
+    mailbox.save_job({"job": id, "status": "queued", "key": rec["id"], "agent": sobre["to"], "thread": get(sobre, "shown_thread", sobre["thread"]), "callback": callback, "created": format_time(now()), "result": nothing, "delivered": false, "merged_into": nothing})
 
 export task job(id)
     require file.read(".lampson")

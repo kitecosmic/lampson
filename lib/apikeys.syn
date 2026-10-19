@@ -40,7 +40,7 @@ task store(keys_list)
     write_file(FILE, json_encode({"keys": keys_list}))
 
 task public(k)
-    give {"id": k["id"], "name": k["name"], "agents": k["agents"], "created": k["created"], "last_used": k["last_used"], "rate": when contains(k, "rate") then k["rate"] otherwise DEFAULT_RATE, "callbacks": when contains(k, "callbacks") then k["callbacks"] otherwise []}
+    give {"id": k["id"], "name": k["name"], "agents": k["agents"], "created": k["created"], "last_used": k["last_used"], "rate": when contains(k, "rate") then k["rate"] otherwise DEFAULT_RATE, "callbacks": when contains(k, "callbacks") then k["callbacks"] otherwise [], "own_secret": contains(k, "secret")}
 
 export task create(name, agents)
     require time
@@ -68,7 +68,8 @@ export task create_with(name, agents, opts)
 
 -- ¿esta key puede pedir un callback a esta URL? sin lista = cualquiera; con lista = solo esos prefijos
 -- ¿esta key puede mandar una callback a `url`? Con lista: mismo esquema, host y puerto, y el path de la lista como
--- prefijo de carpeta ("https://app.com/hooks" deja /hooks y /hooks/x, no /hooks-x). Sin lista: un NOMBRE público
+-- prefijo de carpeta ("https://app.com/hooks" deja /hooks y /hooks/x, no /hooks-x). Sin lista: ninguna, salvo en
+-- las keys de antes del secreto por key, que llegan a un NOMBRE público
 -- — nunca una IP escrita, loopback, red privada ni metadatos de la nube. (Un nombre que resuelve a 127.0.0.1 pasa:
 -- el techo de red de Synsema 0.6.44 compara nombres, no la IP con la que conecta.) Antes (hasta 2026-10-18) era starts_with sobre la URL
 -- entera: "https://app.com" dejaba pasar "https://app.com.evil.net", y sin lista, cualquier URL (SSRF).
@@ -78,6 +79,10 @@ export task callback_allowed(rec, url)
         give false
     let cbs be when contains(rec, "callbacks") then rec["callbacks"] otherwise []
     when length(cbs) == 0
+        -- una key con secreto propio (creada desde 2026-10-19) sin lista no manda callbacks: "solo públicos" no se
+        -- puede prometer mientras el motor no mire la IP. Las de antes siguen como estaban, `key list` las marca
+        when get(rec, "own_secret", false) == true or contains(rec, "secret")
+            give false
         give not urls.is_ip_literal(u["host"]) and urls.host_class(u["host"]) == "public"
     each pre in cbs
         let p be urls.parse(pre)

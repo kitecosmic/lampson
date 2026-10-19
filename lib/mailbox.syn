@@ -52,7 +52,7 @@ export task key_of(sobre, id)
         give runtime.thread_key(sobre["to"], th)
     let ss be text(sobre["session"])
     when ss != ""
-        give runtime.thread_key(sobre["to"], "session:" + ss)
+        give runtime.thread_key(sobre["to"], get(sobre, "space", "") + "session:" + ss)
     give runtime.thread_key(sobre["to"], "msg:" + id)
 
 -- la espera de un agente: la suya, o la de la puerta (DEFAULT_BUFFER para la API); false → {0, 0}
@@ -267,17 +267,19 @@ task run_batch(k, spec, items)
             recover err
                 set typing_at to typing_at
     typing()
+    -- el thread que mandó la app (sin el "key:<id>:" de lib/api.syn): es el que vuelve en eventos, resultado y callback
+    let shown be get(lead, "shown_thread", lead["thread"])
     task publish(kind, data, tag)
         when kind == "busy"
             typing()
         when kind != "busy" and kind != "idle"
-            bus_publish(topic, {"kind": kind, "data": data, "tag": tag, "agent": lead["to"], "thread": lead["thread"]})
+            bus_publish(topic, {"kind": kind, "data": data, "tag": tag, "agent": lead["to"], "thread": shown})
     let hooks be {"mode": spec["mode"], "ask_fn": approve_queue, "on_event": publish}
     let result be nothing
     try
         -- from (el ctx de las herramientas de la app) y las funciones de la app que mandó el mensaje (lib/remotetools.syn)
         let o be runtime.open({"to": lead["to"], "thread": lead["thread"], "session": lead["session"], "text": "", "channel": lead["channel"], "meta": lead["meta"], "from": get(lead, "from", {}), "tools": get(lead, "tools", []), "tools_url": get(lead, "tools_url", ""), "tools_key": get(lead, "tools_key", "")}, hooks)
-        bus_publish(topic, {"kind": "session", "data": {"session": o["session"], "agent": o["ctx"]["agent"], "thread": o["thread"], "batch": apply((it) => it["id"], ordered)}, "tag": "", "agent": lead["to"], "thread": lead["thread"]})
+        bus_publish(topic, {"kind": "session", "data": {"session": o["session"], "agent": o["ctx"]["agent"], "thread": shown, "batch": apply((it) => it["id"], ordered)}, "tag": "", "agent": lead["to"], "thread": shown})
         when o["note"] != ""
             publish("inbox", o["note"], "")
         -- a mitad de turno: lo que llegó mientras el agente trabajaba entra antes de la próxima llamada al modelo
@@ -305,9 +307,9 @@ task run_batch(k, spec, items)
             set msgs to append(msgs, user_msg(it))
         let label be join(apply((it) => it["text"], ordered), " ⏎ ")
         let r be runtime.turn(o, msgs, label, hooks)
-        set result to {"agent": o["ctx"]["agent"], "thread": o["thread"], "session": o["session"], "text": r["text"], "steps": r["steps"], "usage": r["usage"], "stopped": r["stopped"]}
+        set result to {"agent": o["ctx"]["agent"], "thread": when shown != "" then shown otherwise o["thread"], "session": o["session"], "text": r["text"], "steps": r["steps"], "usage": r["usage"], "stopped": r["stopped"]}
     recover err
-        set result to {"agent": lead["to"], "thread": lead["thread"], "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
+        set result to {"agent": lead["to"], "thread": shown, "session": "", "text": "", "steps": 0, "usage": {"input": 0, "output": 0, "cached": 0}, "stopped": "error: " + text(err)}
     -- equipos y objetivos: un turno que falló (proveedor caído, error del runtime) queda en el registro del equipo —
     -- lo ven el líder en su próximo turno y la pantalla; si no, el equipo esperaría en silencio
     when starts_with(text(result["stopped"]), "error") and (starts_with(text(lead["thread"]), "team:") or starts_with(text(lead["thread"]), "objective:"))
@@ -443,7 +445,7 @@ export task submit(sobre, opts)
     let sent be nothing
     when contains(sobre["meta"], "sent_at")
         set sent to sobre["meta"]["sent_at"]
-    let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true, "reply_channel": when contains(opts, "reply_channel") then opts["reply_channel"] otherwise "", "reply_thread": when contains(opts, "reply_thread") then opts["reply_thread"] otherwise "", "tools": get(sobre, "tools", []), "tools_url": get(sobre, "tools_url", ""), "tools_key": get(sobre, "tools_key", "")}
+    let item be {"id": id, "to": sobre["to"], "thread": sobre["thread"], "session": sobre["session"], "text": sobre["text"], "images": sobre["images"], "channel": sobre["channel"], "meta": sobre["meta"], "from": sobre["from"], "sent_at": sent, "arrived": now(), "callback": when contains(opts, "callback") then opts["callback"] otherwise "", "job": contains(opts, "job") and opts["job"] == true, "reply_channel": when contains(opts, "reply_channel") then opts["reply_channel"] otherwise "", "reply_thread": when contains(opts, "reply_thread") then opts["reply_thread"] otherwise "", "tools": get(sobre, "tools", []), "tools_url": get(sobre, "tools_url", ""), "tools_key": get(sobre, "tools_key", ""), "shown_thread": get(sobre, "shown_thread", sobre["thread"])}
     when post(k, item)
         -- el worker espera {quiet_s, max_s}: false/nothing (sin espera) se normaliza acá — con `false` el worker
         -- moría al primer settle y la conversación quedaba trabada (visto 2026-10-16)

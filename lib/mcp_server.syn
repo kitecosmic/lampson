@@ -58,7 +58,8 @@ task text_result(t, structured, is_error)
     give {"content": [{"type": "text", "text": t}], "structuredContent": structured, "isError": is_error}
 
 -- tools/call → resultado MCP (no se llama `call`: taparía al builtin call() que invoca deliver_fn)
-export task run_tool(name, args, agents_list, deliver_fn)
+-- space: "key:<id>:" por HTTP (lib/api.syn space_of), "" por stdio — la conversación es de la key
+export task run_tool(name, args, agents_list, deliver_fn, space = "")
     require net
     require exec
     require time
@@ -92,7 +93,7 @@ export task run_tool(name, args, agents_list, deliver_fn)
         let lim be when contains(args, "limit") and args["limit"] != nothing then floor(number(args["limit"])) otherwise 20
         when lim < 1 or lim > 100
             set lim to 20
-        let sid be runtime.thread_session(hag, hth)
+        let sid be runtime.thread_session(hag, space + hth)
         when sid == ""
             give text_result("no conversation with " + hag + " in thread '" + hth + "' yet", {"agent": hag, "thread": hth, "messages": []}, false)
         let msgs be []
@@ -117,7 +118,7 @@ export task run_tool(name, args, agents_list, deliver_fn)
     let mode be when spec["permission"] != "" then "" otherwise "strict"
     let r be nothing
     try
-        set r to call(deliver_fn, {"sobre": {"to": agent, "thread": thread, "session": "", "from": {"id": "", "name": "", "kind": "agent"}, "text": msg, "images": [], "channel": "mcp", "meta": {}}, "mode": mode})
+        set r to call(deliver_fn, {"sobre": {"to": agent, "thread": space + thread, "shown_thread": thread, "space": space, "session": "", "from": {"id": "", "name": "", "kind": "agent"}, "text": msg, "images": [], "channel": "mcp", "meta": {}}, "mode": mode})
     recover err
         give text_result("error: " + text(err), {"agent": agent, "thread": thread}, true)
     let failed be starts_with(r["stopped"], "error")
@@ -126,7 +127,7 @@ export task run_tool(name, args, agents_list, deliver_fn)
     give text_result(body + footer, {"agent": agent, "thread": thread, "session": r["session"], "text": r["text"], "steps": r["steps"], "stopped": r["stopped"]}, failed)
 
 -- un mensaje JSON-RPC → la respuesta (map), o nothing si era una notificación (no se responde)
-export task handle(req, agents_list, deliver_fn)
+export task handle(req, agents_list, deliver_fn, space = "")
     require net
     require exec
     require time
@@ -164,7 +165,7 @@ export task handle(req, agents_list, deliver_fn)
         give {"jsonrpc": "2.0", "id": id, "result": {"tools": tools_list(agents_list)}}
     when method == "tools/call"
         let args be when contains(params, "arguments") and params["arguments"] != nothing then params["arguments"] otherwise {}
-        give {"jsonrpc": "2.0", "id": id, "result": run_tool(text(params["name"]), args, agents_list, deliver_fn)}
+        give {"jsonrpc": "2.0", "id": id, "result": run_tool(text(params["name"]), args, agents_list, deliver_fn, space)}
     give {"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "method not found: " + method}}
 
 -- stdio: el turno directo (un solo cliente, un proceso)
