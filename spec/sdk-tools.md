@@ -368,3 +368,19 @@ obtenés garantías que tu lenguaje no te puede dar»**. Synsema se adopta por n
    primer ejemplo?
 5. ¿Qué tendría que traer el primer ejemplo de la documentación para que alguien que viene de Eve, LangChain o
    el AI SDK se quede?
+
+## Fricciones de 0.5.1
+
+Encontradas al probar 0.5.1 instalado desde npm y PyPI (`15_lampson_051_pruebas.md`, demo `13_lampson_tienda`):
+
+- **Python sin `npm i -g lampson`:** si `lampson` no está en el PATH, `_lampson_command()` usa
+  `npx -y lampson@<versión del paquete de Python>`. Sin `npx`, el error dice que hace falta Node.
+- **`command` relativo en Python:** cada elemento que es una ruta relativa existente se resuelve contra
+  `os.getcwd()` (la app) antes de lanzar, como `home` y `workspace`; antes se buscaba en el workspace.
+- **`from_=` en Python:** `ask()` y `stream()` aceptan `from_` (PEP 8) en los dos modos; `**{"from": ...}` sigue
+  andando y pasar los dos es `TypeError`.
+- **zod 3 en JS:** sin `zod-to-json-schema`, `zod3Schema` convierte lo común desde `_def.typeName` (object, string,
+  number con `int`, boolean, enum, array, optional, default, nullable, describe). Para lo demás, el mismo error con
+  cómo seguir. Documentado en el README y en el sitio.
+- **Avisos dos veces en JS:** el `onWarning` por defecto muestra cada mensaje distinto una vez por proceso, aunque
+  haya varias instancias. Los eventos `warning` del stream no cambian: son datos para la app.

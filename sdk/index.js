@@ -13,7 +13,7 @@
 //           the same conversation (agent + thread) are answered in order. `home` and `workspace` resolve against
 //           process.cwd().
 //           An agent that lists a tool it will not have (typo, plugin off) is reported through onWarning
-//           (default console.warn) and in lampson.warnings.
+//           (default console.warn, each message once per process) and in lampson.warnings.
 //           `lampsonTools: false` → no tool of Lampson's own exists in that process (bash, read, write, fetch…),
 //           not even for the built-in agents: your agents get only the tools you give them.
 //           A .syn tool runs only once approved (`lampson tools approve`, its sha256); `approveTools: true`
@@ -139,8 +139,38 @@ class HttpTransport {
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,39}$/;
 const TAKEN = ['read', 'write', 'edit', 'ls', 'find', 'grep', 'lsp', 'fetch', 'bash', 'process', 'memory', 'todo', 'skill', 'mcp', 'plugin', 'schedule', 'computer_use', 'delegate', 'send', 'board', 'objective'];
 
-// a JSON Schema from what the AI SDK world passes: jsonSchema(...) wrappers, zod (v4: z.toJSONSchema, v3 needs
-// zod-to-json-schema in the app) or a plain JSON Schema object
+// zod 3 has no toJSONSchema: the common shapes from its _def (typeName), without adding zod-to-json-schema. Anything
+// else (unions, records, refinements…) → null, and the caller says how to fix it
+function zod3Schema(s) {
+  const d = s && s._def;
+  if (!d || typeof d.typeName !== 'string') return null;
+  const desc = x => (d.description ? Object.assign(x, { description: d.description }) : x);
+  switch (d.typeName) {
+    case 'ZodString': return desc({ type: 'string' });
+    case 'ZodNumber': return desc({ type: (d.checks || []).some(c => c.kind === 'int') ? 'integer' : 'number' });
+    case 'ZodBoolean': return desc({ type: 'boolean' });
+    case 'ZodEnum': return desc({ type: 'string', enum: d.values });
+    case 'ZodArray': { const it = zod3Schema(d.type); return it && desc({ type: 'array', items: it }); }
+    case 'ZodNullable': { const it = zod3Schema(d.innerType); return it && desc({ anyOf: [it, { type: 'null' }] }); }
+    case 'ZodOptional': case 'ZodDefault': { const it = zod3Schema(d.innerType); return it && (d.description ? desc(it) : it); }
+    case 'ZodObject': {
+      const shape = typeof d.shape === 'function' ? d.shape() : d.shape;
+      const properties = {}, required = [];
+      for (const [k, v] of Object.entries(shape || {})) {
+        const it = zod3Schema(v);
+        if (!it) return null;
+        properties[k] = it;
+        const t = v._def.typeName;
+        if (t !== 'ZodOptional' && t !== 'ZodDefault') required.push(k);
+      }
+      return desc(Object.assign({ type: 'object', properties }, required.length ? { required } : {}));
+    }
+    default: return null;
+  }
+}
+
+// a JSON Schema from what the AI SDK world passes: jsonSchema(...) wrappers, zod (v4: z.toJSONSchema; v3: its
+// zod-to-json-schema if the app has it, else zod3Schema) or a plain JSON Schema object
 function toJsonSchema(s, name) {
   if (s == null) return { type: 'object', properties: {} };
   if (s.jsonSchema && typeof s.jsonSchema === 'object') return s.jsonSchema;
@@ -150,7 +180,9 @@ function toJsonSchema(s, name) {
     const req = createRequire(path.join(process.cwd(), 'noop.js'));
     try { const z = req('zod'); if (typeof z.toJSONSchema === 'function') return z.toJSONSchema(s); } catch {}
     try { return req('zod-to-json-schema').zodToJsonSchema(s); } catch {}
-    throw new TypeError('tool ' + name + ': cannot turn this zod schema into JSON Schema (zod 4 has z.toJSONSchema; with zod 3 install zod-to-json-schema), or pass `parameters` as a JSON Schema');
+    const own = zod3Schema(s);
+    if (own) return own;
+    throw new TypeError('tool ' + name + ': cannot turn this zod schema into JSON Schema (zod 3 here covers object, string, number, boolean, enum, array, optional, nullable and describe; for the rest use zod 4, or install zod-to-json-schema), or pass `parameters` as a JSON Schema');
   }
   if (typeof s === 'object') return s;
   throw new TypeError('tool ' + name + ': inputSchema/parameters must be a zod schema or a JSON Schema object');
@@ -366,14 +398,23 @@ class LocalTransport {
   }
 }
 
+// the default onWarning: each distinct message once per process (ready lists them, and every new Lampson, or a
+// restarted one, would print them again). The stream's `warning` events are data for the app and do not change
+const shownWarnings = new Set();
+function defaultWarning(w) {
+  if (shownWarnings.has(w)) return;
+  shownWarnings.add(w);
+  console.warn('lampson: ' + w);
+}
+
 class Lampson {
   /**
    * @param {object} opts  { url, key, toolsUrl?, toolsSecret? } for server mode, or
    *                        { local: { workspace, home?, env?, lampsonTools?, tools?, spawn? } };
-   *                        agent? — the default agent; onWarning?(message) — default console.warn
+   *                        agent? — the default agent; onWarning?(message) — default console.warn, each message once per process
    */
   constructor(opts = {}) {
-    const onWarning = opts.onWarning === undefined ? (w => console.warn('lampson: ' + w)) : opts.onWarning;
+    const onWarning = opts.onWarning === undefined ? defaultWarning : opts.onWarning;
     this.transport = opts.local ? new LocalTransport(opts.local, onWarning) : new HttpTransport(opts);
     this.mode = opts.local ? 'local' : 'server';
     this.agent = opts.agent || '';

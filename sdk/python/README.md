@@ -8,7 +8,8 @@ from lampson import Lampson
 # server mode: a running Lampson, an API key from `lampson key add`
 lampson = Lampson(url="https://my-lampson.com/w/<workspace>", key="lk_...")
 
-# or local mode: Lampson as a child process on this machine (needs the `lampson` command)
+# or local mode: Lampson as a child process on this machine. It needs Node.js: it uses the `lampson` command if
+# installed, else `npx lampson@<this version>` (fetched once)
 lampson = Lampson(local={"workspace": "./my-project"})
 
 r = lampson.ask(agent="shop", thread="customer-42", text="do you have whole-wheat bread?")
@@ -20,6 +21,9 @@ for ev in lampson.stream(agent="shop", thread="customer-42", text="and the price
 
 lampson.close()
 ```
+
+Another Lampson for local mode: `local={"workspace": ..., "command": ["node", "node_modules/lampson/bin/lampson.js"]}`.
+A relative path there is resolved against your app's directory, not the workspace.
 
 An agent for your customers should have only the tools you give it. In local mode, `lampson_tools: False` removes
 every tool of Lampson's own (bash, read, write, fetch…) from that process, and `agent=` sets the agent that answers
@@ -39,7 +43,7 @@ def stock(product: str, ctx: dict) -> dict:
     """Units in stock of a product."""
     return db.stock(product, customer=ctx["from"]["id"])
 
-lampson.ask(thread="customer-42", text="do you have bread?", **{"from": {"id": "c-42"}})
+lampson.ask(thread="customer-42", text="do you have bread?", from_={"id": "c-42"})   # from_: `from` is a keyword
 ```
 
 With Lampson on another machine the tool code is the same: pass `tools_url` (the public URL of your endpoint, in the

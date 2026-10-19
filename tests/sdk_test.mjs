@@ -155,6 +155,38 @@ toolsServer.close();
 if (key2Id) spawnSync('synsema', ['run', 'run.syn'], { env: Object.assign({}, process.env, { LAMPSON_KEY_CMD: 'remove', LAMPSON_KEY_ID: key2Id }) });
 
 // ---------- verifySignature ----------
+// ---------- fricciones de 0.5.1 ----------
+console.log('SDK: avisos una vez por proceso y zod 3');
+// un `run --stdio` mínimo que avisa al arrancar: dos Lampson en el mismo proceso → el aviso por defecto sale una vez
+const FAKE = "console.log(JSON.stringify({kind:'ready',data:{agents:[],protocol:2,warnings:['aviso de prueba']}}));process.stdin.resume()";
+const warned = [], prevWarn = console.warn;
+console.warn = (...a) => warned.push(a.join(' '));
+const f1 = new Lampson({ local: { spawn: { command: process.execPath, args: ['-e', FAKE] } } });
+await f1.transport.ready;
+const f2 = new Lampson({ local: { spawn: { command: process.execPath, args: ['-e', FAKE] } } });
+await f2.transport.ready;
+console.warn = prevWarn;
+check(warned.filter(w => w.includes('aviso de prueba')).length === 1 && f2.warnings.includes('aviso de prueba'), 'onWarning por defecto: cada aviso una vez por proceso (lampson.warnings lo sigue teniendo)');
+// zod 3 sin zod-to-json-schema: la forma de su _def (typeName), lo común
+const z3 = (typeName, extra = {}) => ({ _def: Object.assign({ typeName }, extra) });
+const z3obj = z3('ZodObject', { shape: () => ({
+  pedido: z3('ZodString', { description: 'el id' }),
+  monto: z3('ZodNumber', { checks: [{ kind: 'int' }] }),
+  urgente: z3('ZodOptional', { innerType: z3('ZodBoolean') }),
+  canal: z3('ZodEnum', { values: ['web', 'tel'] }),
+  items: z3('ZodArray', { type: z3('ZodString') }),
+  nota: z3('ZodNullable', { innerType: z3('ZodString') }),
+}) });
+f1.tool('z3_tool', { description: 'zod 3', inputSchema: z3obj, execute: async () => 'ok' });
+const z3s = f1.transport.tools.get('z3_tool').wire.parameters;
+check(z3s.type === 'object' && z3s.properties.pedido.description === 'el id' && z3s.properties.monto.type === 'integer'
+  && z3s.properties.canal.enum.join() === 'web,tel' && z3s.properties.items.items.type === 'string'
+  && z3s.properties.nota.anyOf.length === 2 && z3s.required.join() === 'pedido,monto,canal,items,nota', 'zod 3: object, string, number, boolean, enum, array, optional, nullable y describe sin zod-to-json-schema');
+let z3err = null;
+try { f1.tool('z3_union', { inputSchema: z3('ZodObject', { shape: () => ({ x: z3('ZodUnion', { options: [] }) }) }), execute: async () => 1 }); } catch (e) { z3err = e; }
+check(z3err && /zod 4|zod-to-json-schema/.test(z3err.message), 'zod 3 con algo que no cubre (union): el error dice cómo seguir');
+await f1.close(); await f2.close();
+
 const body = '{"job":"m1","text":"hola"}';
 const sig = 'sha256=' + createHmac('sha256', 's3cret').update(body).digest('hex');
 check(Lampson.verifySignature(body, sig, 's3cret') && Lampson.verifySignature(Buffer.from(body), sig, 's3cret'), 'verifySignature acepta la firma correcta (string o Buffer)');

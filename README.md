@@ -117,6 +117,8 @@ import { Lampson } from "lampson";               // also: pip install lampson
 const lampson = new Lampson({ local: { workspace: "./my-project" } });   // or { url, key } for a running Lampson
 const r = await lampson.ask({ agent: "shop", thread: "customer-42", text: "do you have whole-wheat bread?" });
 
+// tools are the AI SDK shape: zod 4, zod 3 (objects, strings, numbers, enums, arrays, optional… — for the rest add
+// zod-to-json-schema) or a plain JSON Schema
 // an agent for your customers: only the tools you give it — no bash, read, write or fetch of Lampson's own
 const shop = new Lampson({ agent: "shop", local: { workspace: "./my-project", lampsonTools: false } });
 shop.tool("stock", { description: "Units in stock", inputSchema: z.object({ product: z.string() }),

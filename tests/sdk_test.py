@@ -97,6 +97,8 @@ with Lampson(local={"spawn": {"command": "synsema", "args": ["run", "run.syn"], 
     t1 = local.ask(agent="rt-sdkpy", thread="py-4", text='usa-tool py_eco {"x":"ja","veces":2}', **{"from": {"id": "u-7"}})
     check('"eco": "jaja"' in t1["text"] and '"from": "u-7"' in t1["text"], "@lampson.tool: la función corre con sus argumentos y el ctx de la app: " + t1["text"][:80])
     check(not any("py_eco" in w for w in local.warnings), "@lampson.tool: sin aviso por una herramienta registrada")
+    t2 = local.ask(agent="rt-sdkpy", thread="py-4", text='usa-tool py_eco {"x":"je"}', from_={"id": "u-9"})
+    check('"from": "u-9"' in t2["text"], "from_= (from es palabra reservada) llega como ctx.from: " + t2["text"][:80])
 try:
     local.ask(agent="rt-sdkpy", text="hola")
     after = None
@@ -177,7 +179,7 @@ class ToolsHandler(http.server.BaseHTTPRequestHandler):
 
 tools_srv = http.server.ThreadingHTTPServer(("127.0.0.1", 47999), ToolsHandler)
 threading.Thread(target=tools_srv.serve_forever, daemon=True).start()
-r1 = srv2.ask(agent="rt-sdkpy", thread="py-5", text='usa-tool py_eco {"x":"remoto"}', **{"from": {"id": "u-8"}})
+r1 = srv2.ask(agent="rt-sdkpy", thread="py-5", text='usa-tool py_eco {"x":"remoto"}', from_={"id": "u-8"})
 check('"eco": "remoto"' in r1["text"] and '"from": "u-8"' in r1["text"], "servidor: Lampson llamó a la función de la app, firmada, con el ctx: " + r1["text"][:80])
 forged = urllib.request.Request("http://127.0.0.1:47999/tools", data=b'{"name":"py_eco","args":{"x":"a"}}', method="POST")
 try:
@@ -213,6 +215,40 @@ except TypeError as e:
 check(async_err is not None and "tools_asgi" in str(async_err), "servidor: un seen async en handle_tool_request → error claro (no 409 siempre)")
 tools_srv.shutdown()
 subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="remove", LAMPSON_KEY_ID=kid2), capture_output=True)
+
+import lampson as _L  # noqa: E402
+
+try:
+    _L._envelope({"text": "x", "from": {"id": "a"}, "from_": {"id": "b"}})
+    both = None
+except TypeError as e:
+    both = e
+check(both is not None and _L._envelope({"text": "x", "from_": {"id": "b"}})["from"] == {"id": "b"} and "from_" not in _L._envelope({"text": "x", "from_": {"id": "b"}}),
+      "from_ y from juntos → TypeError; from_ solo → el campo from del mensaje")
+# sin `lampson` en el PATH: npx con la versión de este paquete; sin npx tampoco: el error dice que falta Node
+_which = _L.shutil.which
+try:
+    _L.shutil.which = lambda n: "C:/node/npx.cmd" if n == "npx" else None
+    via_npx = _L._lampson_command()
+    _L.shutil.which = lambda n: None
+    try:
+        _L._lampson_command()
+        no_node = None
+    except LampsonError as e:
+        no_node = e
+finally:
+    _L.shutil.which = _which
+check(via_npx == ["C:/node/npx.cmd", "-y", "lampson@" + _L.__version__], "sin lampson en el PATH: npx -y lampson@<esta versión>")
+check(no_node is not None and "Node" in str(no_node), "sin lampson ni npx: el error dice que hace falta Node")
+# un command relativo es de la app, no del workspace (el launcher corre con cwd = workspace)
+try:
+    fake = Lampson(local={"workspace": "workspace", "command": [sys.executable, "tests/fake_stdio.py"]})
+    rel_ok = fake._t.info is not None and os.path.isabs(fake._t.proc.args[1])
+    fake.close()
+except Exception as e:
+    rel_ok = False
+    print("    " + str(e))
+check(rel_ok, "local['command'] relativo se resuelve contra el directorio de la app")
 
 body = '{"job":"m1","text":"hola"}'
 sig = "sha256=" + hmac.new(b"s3cret", body.encode(), hashlib.sha256).hexdigest()

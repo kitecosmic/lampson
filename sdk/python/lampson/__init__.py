@@ -80,6 +80,11 @@ def _envelope(msg):
     if not isinstance(text, str) or not text.strip():
         raise TypeError("text is required")
     env = {"text": text}
+    # `from` is a Python keyword: from_= (PEP 8) is the same field; **{"from": ...} still works
+    if msg.get("from_") is not None:
+        if msg.get("from") is not None:
+            raise TypeError("pass from_ or from, not both")
+        msg = dict(msg, **{"from": msg["from_"]})
     to = msg.get("agent") or msg.get("to")
     if to:
         env["to"] = to
@@ -167,7 +172,12 @@ def _lampson_command():
         found = shutil.which(name)
         if found:
             return [found]
-    raise LampsonError("local mode needs the `lampson` command: npm i -g lampson (or pass local={'command': [...]})")
+    # no global install: npx runs the Lampson of this same version (downloaded once, then cached)
+    npx = shutil.which("npx")
+    if npx:
+        return [npx, "-y", "lampson@" + __version__]
+    raise LampsonError("local mode needs Lampson, which runs on Node.js: install Node (it brings npx, and this package "
+                       "uses it), or npm i -g lampson, or pass local={'command': [...]}")
 
 
 # ---------- your app's functions as tools (local mode) ----------
@@ -339,6 +349,9 @@ class _Local:
             if not workspace:
                 raise TypeError("local['workspace'] is required (the project folder the agents work in)")
             ws = os.path.abspath(workspace)
+            # a relative path in command is the app's (node_modules/lampson/bin/lampson.js), not the workspace's
+            command = [os.path.abspath(c) if isinstance(c, str) and not os.path.isabs(c) and os.path.exists(c) else c
+                       for c in command] if command else None
             argv = (command or _lampson_command()) + ["run", "--stdio", "--workspace", ws]
             cwd = ws
         self.proc = subprocess.Popen(argv, cwd=cwd, env=child_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

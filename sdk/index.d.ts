@@ -40,7 +40,7 @@ export interface LocalOptions {
 export interface CommonOptions {
   /** The agent that answers when a message does not say `agent`. Without it: the workspace default ("build"). */
   agent?: string;
-  /** Local mode: called once per tool an agent lists but will not have (plugin off, typo). Default console.warn; null = silent. */
+  /** Local mode: called once per tool an agent lists but will not have (plugin off, typo). Default console.warn, each distinct message once per process; null = silent. */
   onWarning?: ((message: string) => void) | null;
 }
 
