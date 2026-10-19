@@ -112,6 +112,10 @@ export task evaluate(name, args, mode)
         let base be parts[length(parts) - 1]
         when in_lampson_dir(p)
             -- como instalar un plugin: humano siempre, incluso en yolo; strict lo niega
+            when ends_with(p, "apptools_approved.json")
+                when mode == "strict"
+                    give {"decision": "deny", "reason": "strict mode (the app tools' approvals)"}
+                give {"decision": "ask", "reason": "writes " + text(args["path"]) + ": the list of APPROVED app tools — approving this lets the agent approve its own tools"}
             when mode == "strict"
                 give {"decision": "deny", "reason": "strict mode (writes Lampson's project config or app tools)"}
             give {"decision": "ask", "reason": "writes " + text(args["path"]) + ": Lampson's project config or an app tool (what it can do is set there)"}

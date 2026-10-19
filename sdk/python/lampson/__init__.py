@@ -16,7 +16,7 @@ Two ways to reach Lampson, the same methods for both:
           local={"lampson_tools": False} -> no tool of Lampson's own exists in that process (bash, read, write,
           fetch...), not even for the built-in agents: your agents get only the tools you give them.
           A .syn tool runs only once approved (`lampson tools approve`, its sha256); local={"approve_tools": True}
-          approves what is in the folder, for development, where you are the one editing it.
+          approves what is in the folder when Lampson starts, for development, where you edit it.
           Your own tools in Synsema: one file per tool in <workspace>/.lampson/tools/ (or local={"tools": "./tools"},
           inside the workspace): `export task <file name>(...)`, an `intent:` line and its `require`s.
 
@@ -554,8 +554,13 @@ class Lampson:
         # the signature is valid for +-300 s: a captured request replayed in that window would run the tool again
         # (the one that charges). Each call_id runs once — per process unless `seen` is shared (Redis, a DB)
         call_id = msg.get("call_id")
-        if call_id is not None and seen is not False and (seen or self._seen_here)(str(call_id)):
-            return 409, {"error": "call_id %s already ran" % call_id}
+        if call_id is not None and seen is not False:
+            try:
+                dup = (seen or self._seen_here)(str(call_id))
+            except Exception as e:   # the store is down: do not run (a repeat could slip through)
+                return 503, {"error": "cannot check call_id (seen failed: %s): not run" % e}
+            if dup:
+                return 409, {"error": "call_id %s already ran" % call_id}
         return None, msg
 
     def handle_tool_request(self, method, headers, body, seen=None):
@@ -586,9 +591,12 @@ class Lampson:
             headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers", [])}
             status, out = self._tool_call(scope.get("method", "POST"), headers, body, False)
             if status is None and out.get("call_id") is not None:
-                dup = (seen or self._seen_here)(str(out["call_id"]))
-                if inspect.isawaitable(dup):
-                    dup = await dup
+                try:
+                    dup = (seen or self._seen_here)(str(out["call_id"]))
+                    if inspect.isawaitable(dup):
+                        dup = await dup
+                except Exception as e:   # the store is down: do not run
+                    status, out, dup = 503, {"error": "cannot check call_id (seen failed: %s): not run" % e}, False
                 if dup:
                     status, out = 409, {"error": "call_id %s already ran" % out["call_id"]}
             if status is None:

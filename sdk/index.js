@@ -17,7 +17,7 @@
 //           `lampsonTools: false` → no tool of Lampson's own exists in that process (bash, read, write, fetch…),
 //           not even for the built-in agents: your agents get only the tools you give them.
 //           A .syn tool runs only once approved (`lampson tools approve`, its sha256); `approveTools: true`
-//           approves what is in the folder — for development, where you are the one editing it.
+//           approves what is in the folder when Lampson starts — for development, where you edit it.
 //           Your own tools in Synsema: one file per tool in <workspace>/.lampson/tools/ (or `tools: "./tools"`,
 //           inside the workspace) — `export task <file name>(…)`, an `intent:` line and its `require`s, which are
 //           all it can touch. List the name in the agent's "tools". See lampson.org/docs/sdk.
@@ -244,7 +244,7 @@ class LocalTransport {
     // inside the project (2026-10-18)
     if (home) childEnv.LAMPSON_HOME = path.resolve(home);
     if (lampsonTools === false) childEnv.LAMPSON_BUILTIN_TOOLS = 'off';
-    // you edit the .syn tools yourself: approve what is in the folder at each scan (never on a server: there a
+    // you edit the .syn tools yourself: approve what is in the folder when it starts (never on a server: there a
     // person runs `lampson tools approve`, so an agent that rewrites a tool cannot raise its own ceiling)
     if (approveTools === true) childEnv.LAMPSON_APPROVE_TOOLS = '1';
     if (tools) {
@@ -419,7 +419,11 @@ class Lampson {
       if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return [400, { error: 'body must be a JSON object' }];
       // the signature is valid for ±300 s: a captured request replayed in that window would run the tool again
       // (the one that charges). Each call_id runs once — per process unless opts.seen is shared
-      if (msg.call_id != null && await seen(String(msg.call_id))) return [409, { error: 'call_id ' + msg.call_id + ' already ran' }];
+      if (msg.call_id != null) {
+        let dup;
+        try { dup = await seen(String(msg.call_id)); } catch (e) { return [503, { error: 'cannot check call_id (seen failed: ' + ((e && e.message) || e) + '): not run' }]; }
+        if (dup) return [409, { error: 'call_id ' + msg.call_id + ' already ran' }];
+      }
       return [200, await executeTool(this.serverTools.get(msg.name), msg.name, msg.args, msg.ctx)];
     };
     return async (req, res) => {

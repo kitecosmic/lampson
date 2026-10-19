@@ -168,18 +168,27 @@ task approved_map()
     recover err
         give {}
 
--- los archivos que se aprueban: cada .syn (herramientas y ayudantes) y el README.md, que va al prompt
+-- los archivos que se aprueban: TODA .syn de la carpeta y sus subcarpetas (una herramienta puede `use "./sub/h.syn"`
+-- o `use "./otra.syn"`), y el README.md de arriba, que va al prompt. Rutas relativas a la carpeta.
 task watched(d)
+    let out be when file_exists(d + "/README.md") then ["README.md"] otherwise []
+    give sort(out + syn_files(d, ""))
+
+task syn_files(d, rel)
     let out be []
     try
-        each e in list_dir(d)
-            when not e["is_dir"] and (ends_with(e["name"], ".syn") or e["name"] == "README.md")
-                set out to append(out, e["name"])
+        each e in list_dir(d + (when rel == "" then "" otherwise "/" + rel))
+            let p be when rel == "" then e["name"] otherwise rel + "/" + e["name"]
+            when e["is_dir"]
+                set out to out + syn_files(d, p)
+            otherwise when ends_with(e["name"], ".syn")
+                set out to append(out, p)
     recover err
-        give []
-    give sort(out)
+        give out
+    give out
 
--- {archivo: "ok" | "new" | "changed"}
+-- {archivo: "ok" | "new" | "changed"}. (approveTools del SDK aprueba UNA vez, al arrancar `run --stdio`: lo que
+-- cambie después, aunque sea el agente, sigue el camino normal)
 export task approval()
     require exec
     require file(".lampson")
@@ -189,9 +198,6 @@ export task approval()
     require env("LAMPSON_*")
     let d be dir()
     let ok be approved_map()
-    when env("LAMPSON_APPROVE_TOOLS", "") == "1"
-        approve("")
-        set ok to approved_map()
     let out be {}
     each f in watched(d)
         let h be digest(d + "/" + f)
@@ -217,14 +223,16 @@ export task approve(name)
     write_file(APPROVED, json_encode(ok))
     give done
 
--- una herramienta sin aprobar (o con un ayudante sin aprobar) se carga con un error que dice qué hacer
+-- regla global: si CUALQUIER .syn de la carpeta no está aprobada, ninguna herramienta corre ("si algo cambió, nada
+-- corre hasta que lo mires"): mirar qué importa cada una, transitivamente, es más código para un caso raro
 task gate(e, st)
     when e["error"] != nothing
         give e
-    let bad be where(keys(st), (f) => st[f] != "ok" and (f == e["file"] or starts_with(f, "_")))
+    let bad be where(sort(keys(st)), (f) => st[f] != "ok" and f != "README.md")
     when length(bad) > 0
-        let f be bad[0]
-        set e["error"] to (when f == e["file"] then f otherwise "its helper " + f) + (when st[f] == "new" then " is not approved yet" otherwise " changed since it was approved") + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+        let own be where(bad, (f) => f == e["file"])
+        let f be when length(own) > 0 then own[0] otherwise bad[0]
+        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise " changed since it was approved") + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
     give e
 
 -- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error)

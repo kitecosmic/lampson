@@ -191,6 +191,14 @@ check(rstatus == 409, "servidor: el mismo pedido firmado, repetido → 409: " + 
 shared = []
 sstatus, _ = srv2.handle_tool_request("POST", captured[0][0], captured[0][1], seen=lambda cid: shared.append(cid) or True)
 check(sstatus == 409 and len(shared) == 1, "servidor: handle_tool_request(seen=...) usa el almacén de la app para el call_id")
+
+
+def _caido(cid):
+    raise RuntimeError("redis caído")
+
+
+fstatus2, _ = srv2.handle_tool_request("POST", captured[0][0], captured[0][1], seen=_caido)
+check(fstatus2 == 503, "servidor: si seen falla → 503 y no corre")
 tools_srv.shutdown()
 subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="remove", LAMPSON_KEY_ID=kid2), capture_output=True)
 

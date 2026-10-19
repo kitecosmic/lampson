@@ -28,7 +28,7 @@ export interface LocalOptions {
      *  Each file has an `intent:` line (its description), its `require`s (all it can touch) and `export task <name>(…)`. */
     tools?: string;
     /** A `.syn` tool runs only once a person approved that exact content (`lampson tools approve`). true approves what
-     *  is in the folder at each scan: for development, where you edit the tools. Never on a shared server. */
+     *  is in the folder when Lampson starts (later changes, even the agent's, need approval): for development, where you edit the tools. Never on a shared server. */
     approveTools?: boolean;
     /** Extra environment for the Lampson process (e.g. provider keys). */
     env?: Record<string, string>;

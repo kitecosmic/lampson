@@ -409,6 +409,9 @@ task stdio_ask(req, rid)
     let sobre be {"to": agent_id, "thread": th, "session": ss, "from": from, "text": msg, "images": when contains(req, "images") and type_of(req["images"]) == "list" then req["images"] otherwise [], "channel": "sdk", "meta": when contains(req, "meta") and type_of(req["meta"]) == "map" then req["meta"] otherwise {}}
     give {"ok": true, "key": key, "warnings": runtime.missing(spec), "job": {"id": rid, "to": agent_id, "thread": th, "mode": mode, "key": key, "sobre": sobre}}
 
+when env("LAMPSON_RUN_STDIO", "") == "1" and env("LAMPSON_APPROVE_TOOLS", "") == "1"
+    -- SDK local con approveTools: lo que dejó el dev en la carpeta, aprobado una vez al arrancar (lib/apptools.syn)
+    apptools.approve("")
 when env("LAMPSON_RUN_STDIO", "") == "1"
     share {"id": text(now())} as "lampson:run"
     share {"kind": "sdk"} as "lampson:ui"
