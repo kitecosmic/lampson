@@ -41,6 +41,11 @@ let APPROVED be ".lampson/apptools_approved.json"
 let TIMEOUT be 60
 let MAX_OUT be 60000
 let MAX_README be 12000
+-- el hash de toda la carpeta corre en cada escaneo (varias veces por turno): un .syn de 1 GB o un node_modules copiado
+-- ahí harían lento cada turno de todos. Pasado el tope, las herramientas se frenan (no se cachea por fecha: con bash,
+-- la fecha se vuelve atrás)
+let MAX_FILE_BYTES be 1000000
+let MAX_FILES be 500
 -- nombres que ya usa Lampson: una herramienta del dev no puede pisarlos
 export let TAKEN be ["read", "write", "edit", "ls", "find", "grep", "lsp", "fetch", "bash", "process", "memory", "todo", "skill", "mcp", "plugin", "schedule", "computer_use", "delegate", "send", "board", "objective"]
 
@@ -219,12 +224,16 @@ export task approval()
     let ok be approved_map()
     let out be {}
     let here be watched(d)
+    when length(here) > MAX_FILES
+        give {"(" + text(length(here)) + " files)": "too_big"}
     each f in here
         try
+            when file_info(d + "/" + f)["size"] > MAX_FILE_BYTES
+                raise("too big")
             let h be digest(d + "/" + f)
             set out[f] to when not contains(ok, f) then "new" otherwise (when ok[f] == h then "ok" otherwise "changed")
         recover err
-            set out[f] to "unreadable"
+            set out[f] to when text(err) == "too big" or contains(text(err), "too big") then "too_big" otherwise "unreadable"
     each f in keys(ok)
         when not contains(here, f) and f != "README.md"
             set out[f] to "missing"
@@ -254,6 +263,8 @@ export task approve(name)
     each f in here
         when name == "" or f == name or f == name + ".syn"
             try
+                when file_info(d + "/" + f)["size"] > MAX_FILE_BYTES
+                    raise("too big")
                 let h be digest(d + "/" + f)
                 when not contains(ok, f) or ok[f] != h
                     set ok[f] to h
@@ -275,10 +286,12 @@ task gate(e, st)
         when st[f] == "link"
             set e["error"] to "links are not allowed in the tools folder: " + f + " (a `use` would run what is behind it, never approved). Replace it with the real files and run `lampson tools approve`"
             give e
-        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise " changed since it was approved")) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "unreadable" then " cannot be read (a link, or locked)" otherwise (when st[f] == "too_big" then " is over the limit (" + text(MAX_FILE_BYTES) + " bytes per file, " + text(MAX_FILES) + " .syn files)" otherwise " changed since it was approved"))) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
     give e
 
--- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error)
+-- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error).
+-- Es la puerta de names/get/catalog: si algo de la carpeta falla de una forma que no vimos, es "no hay herramientas
+-- .syn" y un aviso, nunca un error que llegue a registry_of y deje sin turno a todos los agentes.
 export task scan()
     require exec
     require time
@@ -287,8 +300,12 @@ export task scan()
     require file("workspace")
     require file("workspace/*")
     require env("LAMPSON_*")
-    let st be approval()
-    give apply((e) => gate(e, st), scan_files())
+    try
+        let st be approval()
+        give apply((e) => gate(e, st), scan_files())
+    recover err
+        eprint("lampson: app tools skipped (" + dir() + "): " + text(err))
+        give []
 
 -- todas las herramientas de la carpeta (también las rotas, con su error). Caché en disco por nombre+tamaño+fecha.
 export task scan_files()
@@ -398,7 +415,11 @@ export task instructions(tool_names)
     let mine be where(names(), (n) => contains(tool_names, n))
     when length(mine) == 0
         give ""
-    let st be approval()
+    let st be {}
+    try
+        set st to approval()
+    recover err
+        give ""
     when not contains(st, "README.md") or st["README.md"] != "ok"
         give ""
     try

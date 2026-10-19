@@ -92,6 +92,10 @@ Segunda revisión (`08_segunda_revision_sdk_tools.md`), hecho:
   se puede leer también (con `try`: antes tumbaba el registro de todos los agentes), uno aprobado y borrado solo se
   muestra (`approve("")` lo saca; si vuelve con otro contenido da "changed"), el 503 de `seen` tiene un mensaje
   fijo (el detalle va al log de la app) y un `seen` async en `handle_tool_request` es un error claro.
+- **Sexta revisión** (`12_sexta_revision_sdk_tools.md`): `scan()` (la puerta de `names`, `get` y `catalog`) e
+  `instructions` con `try`: un error de la carpeta es "no hay herramientas .syn" y un aviso, nunca un turno caído.
+  Tope: más de 1 MB por archivo o más de 500 `.syn` frena las herramientas (no se cachea el hash por fecha: con
+  `bash` la fecha se vuelve atrás).
 - SDK: `toolsHandler({ seen })` / `handle_tool_request(seen=)` / `tools_asgi(seen=)` para compartir el `call_id`
   entre instancias.
 

@@ -387,6 +387,10 @@ when env("OS", "") == "Windows_NT"
     proc_wait(proc_spawn("cmd", ["/c", "mklink", "/J", jsyn, replace(TDIR + "/sub", "/", "\\")], {}))
     check(contains(text(apptools.get("rt_pedido")["error"]), "rt_trampa.syn") and contains(runtime.registry_of(runtime.get("build")), "read"), "apptools: un .syn que no se puede leer frena las herramientas y los demás agentes siguen")
     proc_wait(proc_spawn("cmd", ["/c", "rmdir", jsyn], {}))
+-- tope: un .syn de más de 1 MB frena las herramientas sin leerlo entero en cada escaneo
+write_file(TDIR + "/sub/rt_grande.syn", "-- " + join(apply((i) => "0123456789", range(110000)), ""))
+check(apptools.approval()["sub/rt_grande.syn"] == "too_big" and contains(text(apptools.get("rt_pedido")["error"]), "over the limit"), "apptools: un .syn de más de 1 MB frena las herramientas")
+rm_file(TDIR + "/sub/rt_grande.syn")
 check(apptools.call("rt_techo", {}, {}) == "sin .env", "apptools: el .env de la carpeta no llega a la herramienta (--no-env-file)")
 check(contains(apptools.call("rt_sube", {}, {}), "not permitted"), "apptools: un require dentro del task, fuera de los de arriba, se niega (--cap-set)")
 each f in ["_datos.syn", "rt_pedido.syn", "rt_fuga.syn", "rt_roto.syn", "rt_todo_env.syn", "rt_techo.syn", "rt_sube.syn", ".env"]
