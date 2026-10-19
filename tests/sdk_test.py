@@ -249,6 +249,16 @@ except Exception as e:
     rel_ok = False
     print("    " + str(e))
 check(rel_ok, "local['command'] relativo se resuelve contra el directorio de la app")
+# Linux/Mac: close() mata el árbol entero (launcher → npx → synsema), no solo el primer proceso
+if os.name != "nt":
+    mark = "lampson_tree_%d" % os.getpid()
+    tree = Lampson(local={"spawn": {"command": "bash", "args": ["-c", "(exec -a %s sleep 300) & echo '{\"kind\":\"ready\",\"data\":{}}'; trap '' TERM HUP; while true; do sleep 1; done" % mark]}})
+    time.sleep(0.5)
+    alive = lambda: subprocess.run(["pgrep", "-f", mark], capture_output=True, text=True).stdout.split()
+    had = alive()
+    tree.close()
+    time.sleep(0.5)
+    check(had and not alive(), "close() en Linux/Mac: no quedan hijos ni nietos vivos")
 
 body = '{"job":"m1","text":"hola"}'
 sig = "sha256=" + hmac.new(b"s3cret", body.encode(), hashlib.sha256).hexdigest()

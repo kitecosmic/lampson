@@ -186,6 +186,15 @@ let z3err = null;
 try { f1.tool('z3_union', { inputSchema: z3('ZodObject', { shape: () => ({ x: z3('ZodUnion', { options: [] }) }) }), execute: async () => 1 }); } catch (e) { z3err = e; }
 check(z3err && /zod 4|zod-to-json-schema/.test(z3err.message), 'zod 3 con algo que no cubre (union): el error dice cómo seguir');
 await f1.close(); await f2.close();
+// Linux/Mac: close() mata el árbol entero (launcher → npx → synsema), no solo el primer proceso
+if (process.platform !== 'win32') {
+  const mark = 'lampson_treejs_' + process.pid;
+  const tree = new Lampson({ onWarning: null, local: { spawn: { command: 'bash', args: ['-c', `(exec -a ${mark} sleep 300) & echo '{"kind":"ready","data":{}}'; trap "" TERM HUP; while true; do sleep 1; done`] } } });
+  await tree.transport.ready; await new Promise(r => setTimeout(r, 500));
+  const alive = () => spawnSync('pgrep', ['-f', mark]).stdout.toString().trim().split(/\s+/).filter(Boolean).length;
+  const had = alive(); await tree.close(); await new Promise(r => setTimeout(r, 500));
+  check(had > 0 && alive() === 0, 'close() en Linux/Mac: no quedan hijos ni nietos vivos');
+}
 
 const body = '{"job":"m1","text":"hola"}';
 const sig = 'sha256=' + createHmac('sha256', 's3cret').update(body).digest('hex');

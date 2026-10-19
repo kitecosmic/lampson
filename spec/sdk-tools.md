@@ -384,3 +384,7 @@ Encontradas al probar 0.5.1 instalado desde npm y PyPI (`15_lampson_051_pruebas.
   cómo seguir. Documentado en el README y en el sitio.
 - **Avisos dos veces en JS:** el `onWarning` por defecto muestra cada mensaje distinto una vez por proceso, aunque
   haya varias instancias. Los eventos `warning` del stream no cambian: son datos para la app.
+- **`close()` en Linux/Mac (los dos SDK):** el proceso de Lampson arranca en su propio grupo (`start_new_session` /
+  `detached`) y, si no termina solo en 5 s, se mata el grupo entero (`os.killpg` / `process.kill(-pid)`). Antes se
+  mataba solo el primer proceso y synsema (o npx en el medio) podía quedar vivo. Probado en WSL (Ubuntu 20.04):
+  con `main` el nieto quedaba vivo, con el arreglo no. En Windows sigue `taskkill /T`.

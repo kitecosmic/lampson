@@ -53,6 +53,7 @@ import re
 import typing
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -354,8 +355,10 @@ class _Local:
                        for c in command] if command else None
             argv = (command or _lampson_command()) + ["run", "--stdio", "--workspace", ws]
             cwd = ws
+        # Linux/Mac: its own session (process group), so close() can kill the launcher, npx and synsema together
         self.proc = subprocess.Popen(argv, cwd=cwd, env=child_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
+                                     stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1,
+                                     start_new_session=os.name != "nt")
         self.stderr = []
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         self.lock = threading.Lock()   # one request at a time: the protocol answers in order
@@ -480,7 +483,10 @@ class _Local:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"], capture_output=True)
                 else:
-                    self.proc.kill()
+                    try:
+                        os.killpg(self.proc.pid, signal.SIGKILL)   # the whole group (start_new_session)
+                    except OSError:
+                        self.proc.kill()
 
 
 class Lampson:

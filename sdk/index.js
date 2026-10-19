@@ -254,7 +254,8 @@ async function readNodeBody(req) {
 function killTree(child) {
   try {
     if (process.platform === 'win32') spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    else child.kill('SIGKILL');
+    // Linux/Mac: the child leads its own process group (spawn detached), so -pid reaches the launcher, npx and synsema
+    else { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
   } catch {}
 }
 
@@ -288,7 +289,8 @@ class LocalTransport {
     this.warnings = [];
     this.onWarning = onWarning;
     this.tools = new Map();     // name → { wire, schema, execute }
-    this.child = spawn(command, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    // detached on Linux/Mac = its own process group, for killTree (on Windows it would open a console; taskkill /T there)
+    this.child = spawn(command, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
     this.pending = new Map();   // id → { onEvent, done }
     this.seq = 0;
     this.stderr = [];
