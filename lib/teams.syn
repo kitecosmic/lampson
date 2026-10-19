@@ -569,6 +569,21 @@ export task has_work(scope, agent)
             give true
     give false
 
+-- ¿le asignaron una tarea desde su último turno? (otro la creó con él de dueño, o le pasó una existente)
+export task assigned_since(scope, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/*")
+    open()
+    let cur be sql("SELECT last FROM cursors WHERE agent = ? AND scope = ?", [agent, scope])
+    let after be when length(cur) == 0 then 0 otherwise cur[0]["last"]
+    each r in sql("SELECT * FROM ledger WHERE scope = ? AND id > ? AND actor != ? AND kind IN ('added', 'updated')", [scope, after, agent])
+        when r["kind"] == "added" and ends_with(r["text"], "→ " + agent)
+            give true
+        when r["kind"] == "updated" and contains(r["text"], "owner " + agent)
+            give true
+    give false
+
 task deps_done(scope, t)
     each d in json_decode(field(t, "depends", "[]"))
         let x be task_get(scope, floor(number(d)))
@@ -589,10 +604,15 @@ export task round_due(team, agent)
     require file(".lampson")
     require file(".lampson/*")
     require time
-    when team["round_minutes"] <= 0
-        give false
     open()
     let scope be "team:" + team["id"]
+    -- sin rondas: lo despierta solo una tarea que le asignaron desde su último turno (los mensajes ya llegan solos).
+    -- Visto 2026-10-19: el CEO repartió #60 al CPO y #61 al CTO sin escribirles, y el equipo quedó quieto 10 minutos
+    when team["round_minutes"] <= 0
+        when not assigned_since(scope, agent)
+            give false
+        let up0 be sql_exec("INSERT INTO rounds (agent, scope, last_at) VALUES (?, ?, ?) ON CONFLICT(agent, scope) DO UPDATE SET last_at = excluded.last_at", [agent, scope, now()])
+        give true
     let r be sql("SELECT last_at FROM rounds WHERE agent = ? AND scope = ?", [agent, scope])
     let last be when length(r) == 0 then 0 otherwise r[0]["last_at"]
     when now() - last < team["round_minutes"] * 60

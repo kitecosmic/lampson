@@ -16,6 +16,7 @@ use "./approvals.syn" as approvals
 export let TICK_SECONDS be 3
 -- lo que el hub muestra de este workspace (inicio, /equipos) sin abrir su base: equipos, objetivos y lo que espera
 export let SUMMARY_FILE be ".lampson/teams-summary.json"
+export let ASSIGNED_TEXT be "[assigned] You have a new task on the board (see your open tasks below). Start on it; if something is unclear, `send` whoever assigned it."
 export let ROUND_TEXT be "[round] Your periodic round: look at your open tasks and the team's news above, and move your work forward. If there is nothing for you to do, reply with one short line and stop — don't invent work."
 
 task flag_budget(team, agent)
@@ -211,6 +212,6 @@ export task tick()
             when teams.over_budget(team, mem["agent"])
                 flag_budget(team, mem["agent"])
             otherwise when teams.round_due(team, mem["agent"])
-                deliver_to(team, mem["agent"], "lampson", ROUND_TEXT)
+                deliver_to(team, mem["agent"], "lampson", when team["round_minutes"] <= 0 then ASSIGNED_TEXT otherwise ROUND_TEXT)
                 set n to n + 1
     give n
