@@ -71,8 +71,8 @@ while [ $# -gt 0 ]; do
     shift
 done
 export LAMPSON_HOME="$here"
-# motor mínimo: el hub y los workspaces declaran `trust proxy` (Synsema 0.6.42+; ver lib/origin.syn)
-min_engine="0.6.42"
+# motor mínimo: `trust proxy` (0.6.42+) y, para las herramientas de la app, --cap-set, --no-env-file y http_sign (0.6.44)
+min_engine="0.6.44"
 engine="$(synsema --version 2>/dev/null | sed 's/^[^0-9]*//')"
 if [ -z "$engine" ] || [ "$(printf '%s\n%s\n' "$min_engine" "$engine" | sort -V | head -n1)" != "$min_engine" ]; then
     echo "lampson necesita synsema $min_engine o más nuevo (tenés '${engine:-ninguno}'): synsema update" >&2; exit 1

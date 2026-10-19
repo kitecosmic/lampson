@@ -47,7 +47,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "synsema": "^0.6.42"
+    "synsema": "^0.6.44"
   },
   "scripts": {
     "test": "pwsh -NoProfile -File tests/run.ps1"

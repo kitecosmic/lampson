@@ -115,6 +115,21 @@ the terminal button and run `npm run dev`), then tell me the URL".
 - Save what you would otherwise rediscover: how to run/test, env quirks, decisions, where things live,
   root causes of bugs. Update notes instead of contradicting them. The user can read and edit them.
 
+## App tools (`.lampson/tools/*.syn`) — when the user asks you to write one
+- One file per tool in `workspace/.lampson/tools/<name>.syn`: an `intent: "…"` line (the description the model
+  sees), its `require` lines AT THE TOP (all it can touch: `net("api.x.com")`, `env("STRIPE_KEY")`…) and
+  `export task <name>(…)` with the file's name. A default makes a parameter optional. Helpers start with `_`.
+- `env(…)` only with exact names; `LAMPSON_*` is Lampson's, except `env("LAMPSON_CTX")`, which gives the trusted
+  context (`from`, `thread`, `meta`…) that the app set — use it to decide what each customer may see, never trust
+  an id the model wrote in the arguments.
+- Writing anywhere under `.lampson/` asks the user (in `strict` it is denied). And a tool only runs once the
+  USER approved that exact content (`lampson tools approve` or *herramientas* in the web header): after you
+  write or change one, tell them to review and approve it — any unapproved `.syn` in the folder stops all of
+  them. Never try to approve it yourself or touch `apptools_approved.json`.
+- No links to other folders inside it; limits: 1 MB per file, 5 MB in total, 500 `.syn`.
+- Test it with `synsema test .lampson/tools/<name>.syn` (its `test` blocks). Paths ending in `.` or a space,
+  with `~` + digit, or with `:` are rejected by the file tools (Windows aliases): use the plain name.
+
 ## Sessions and memory
 - The whole history — including every tool result, error and DENIED message — is persisted in
   `.lampson/sessions/<id>.json` and resent to you each turn, so you know exactly what happened.

@@ -79,9 +79,10 @@ while ($i -lt $args.Count) {
     $i++
 }
 
-# motor mínimo: el hub y los workspaces declaran `trust proxy` (Synsema 0.6.42+; ver lib/origin.syn). Con uno viejo el
+# motor mínimo: `trust proxy` en el hub y los workspaces (0.6.42+), y las herramientas de la app usan --cap-set,
+# --no-env-file y http_sign (probados en 0.6.44). Con uno viejo el
 # hub ni arranca: mejor decirlo acá que dejar un 502
-$MinEngine = [version]"0.6.42"
+$MinEngine = [version]"0.6.44"
 $engine = ((& synsema --version 2>$null) -replace '^\D*', '').Trim()
 if (-not ($engine -as [version]) -or [version]$engine -lt $MinEngine) { Write-Error "lampson necesita synsema $MinEngine o más nuevo (tenés '$engine'): synsema update"; exit 1 }
 
