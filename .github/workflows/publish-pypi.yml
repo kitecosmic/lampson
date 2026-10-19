@@ -27,6 +27,17 @@ jobs:
         run: |
           v=$(python -c "import tomllib;print(tomllib.load(open('sdk/python/pyproject.toml','rb'))['project']['version'])")
           [ "refs/tags/v$v" = "$GITHUB_REF" ] || { echo "tag $GITHUB_REF ≠ pyproject v$v"; exit 1; }
+      # npm first: without a global lampson, local mode runs `npx lampson@<this version>`, so a Python release whose
+      # npm twin is not out yet breaks on every such machine. Wait for it (publish.yml runs on the same tag); if npm
+      # failed, this fails too and nothing reaches PyPI.
+      - name: lampson@<version> must be on npm
+        run: |
+          v=$(python -c "import tomllib;print(tomllib.load(open('sdk/python/pyproject.toml','rb'))['project']['version'])")
+          for i in $(seq 1 90); do
+            [ "$(npm view "lampson@$v" version 2>/dev/null)" = "$v" ] && { echo "lampson@$v is on npm"; exit 0; }
+            sleep 10
+          done
+          echo "lampson@$v is not on npm after 15 min: not publishing to PyPI"; exit 1
       - name: build
         run: |
           python -m pip install --upgrade build
