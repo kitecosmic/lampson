@@ -51,6 +51,7 @@
 .panel .blist input { flex:none; height:30px; font:400 12px/1.4 var(--mono); background:transparent; padding:0 8px; margin:0 0 8px; width:100%; }
 .panel .bitems { flex:1; overflow-y:auto; overflow-x:hidden; min-height:0; }
 .panel .bcount { color:var(--ink-3); font:400 11px/1 var(--mono); padding-top:8px; border-top:1px solid var(--rule); flex:none; }
+.panel .bback { display:none; }
 .panel .bdetail { overflow-y:auto; overflow-x:hidden; min-height:0; min-width:0; padding:12px 6px 8px 18px; font:400 12.5px/1.5 var(--mono); }
 .panel .bempty { color:var(--ink-3); font:400 12.5px/1.5 var(--serif); padding:8px; }
 .panel .li { display:grid; grid-template-columns:14px minmax(0,1fr); gap:8px; align-items:start; padding:7px 8px; border-radius:var(--r); cursor:pointer; font:400 12px/1.35 var(--mono); min-width:0; }
@@ -197,3 +198,23 @@
 .panel .phelp .pacts { display:flex; align-items:center; gap:8px; }
 .panel .phelp .plinks a { color:var(--accent); cursor:pointer; text-decoration:none; }
 .panel .phelp .plinks a:hover { text-decoration:underline; text-underline-offset:.2em; }
+
+/* celular (≤ 900 px): modales a pantalla completa; en «browse» la lista arriba y el detalle abajo. Vive acá y no en
+   mobile.css porque el inicio (hub.html: gestionar, dispositivos) también abre paneles y no carga mobile.css */
+@media (max-width:900px) {
+  .modal { align-items:stretch; justify-content:stretch; }
+  .panel, .panel.lg, .panel.md, .panel.sm { width:100vw; height:100dvh; max-height:none; border:0; border-radius:0; box-shadow:none; padding:calc(10px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
+  /* lista → detalle (js/panel.js): sin «det» solo la lista; con «det» solo el detalle, con «← volver» arriba */
+  .panel .browse { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+  .panel .browse.det { grid-template-rows:auto minmax(0,1fr); }
+  .panel .browse:not(.det) .bdetail, .panel .browse.det .blist { display:none; }
+  .panel .browse.det .bback { display:block; justify-self:start; margin:8px 0 0; padding:8px 10px 8px 0; background:none; border:0; color:var(--accent); font:400 13px/1 var(--mono); cursor:pointer; }
+  .panel .blist { border-right:0; padding:10px 0 8px; }
+  .panel .bdetail { padding:12px 2px 8px; }
+  .panel input, .panel select, .panel textarea { font-size:16px; }
+  .panel .pghost { width:36px; height:36px; flex:none; }
+  /* cabecera del modal: la ✕ siempre a la vista (la ruta de «sub» la empujaba fuera de la pantalla) */
+  .panel .phead { gap:8px; min-width:0; }
+  .panel .phead .sub { display:none; }
+  .panel .phead h3 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+}

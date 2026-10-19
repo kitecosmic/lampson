@@ -3,7 +3,8 @@
 //   Panel.open({ eyebrow, title, sub, size: 'lg'|'md'|'sm', layout: 'browse'|'tabs'|'form',
 //                headActions: [{label, title, onClick, wide?}],   // botones chicos en la cabecera (p.ej. «?»; wide: con texto)
 //                noClose: bool,                             // sin ✕/Esc (onboarding)
-//                onClose(), select: clave de la fila a dejar elegida al abrir (browse),
+//                onClose(), select: clave de la fila a dejar elegida al abrir (browse), detail: en el celular, abrir ya
+//                en el detalle de esa fila (por defecto sí si hay select; false si select es solo la fila por defecto),
 //     browse: { placeholder, listWidth, load(q) → rows, render(row, q) → html de la fila, key(row) → id estable,
 //               nodot: true (filas sin la columna del punto), detail(row, q) → html del panel derecho (puede ser async), wire(row, box) → engancha handlers,
 //               onPick(row) → Enter / doble clic, count(rows, q) → texto del pie, emptyHtml, help: html },
@@ -12,7 +13,8 @@
 //   Panel.close() · Panel.refresh() (browse: recarga la lista conservando la selección) · Panel.detail() (re-render
 //   del detalle) · Panel.selectKey(k) · Panel.box (el elemento) · Panel.err(texto) (línea de error del pie) · Panel.is(id)
 //
-// Teclado en browse: ↑↓ mueven la selección (el detalle sigue), Enter = onPick, Esc cierra. Un solo panel abierto.
+// En el celular (≤ 900 px) browse es lista → detalle: tocar una fila abre su detalle a pantalla completa, «← volver»
+// regresa a la lista. Teclado en browse: ↑↓ mueven la selección (el detalle sigue), Enter = onPick, Esc cierra. Un solo panel abierto.
 const Panel = (() => {
   let cur = null, rows = [], sel = 0, timer = null, seq = 0, overlay = null, pendingKey = null;
   const ICON_X = '✕';
@@ -37,7 +39,7 @@ const Panel = (() => {
     let body = '';
     if (spec.layout === 'browse') {
       const w = spec.browse.listWidth ? `style="--list-w:${spec.browse.listWidth}"` : '';
-      body = `<div class="browse" ${w}><div class="blist"><input class="bsearch" spellcheck="false" autocomplete="off" placeholder="${esc(spec.browse.placeholder || 'buscar…')}"><div class="bitems"></div><div class="bcount"></div></div><div class="bdetail"></div></div>` + (spec.browse.help ? `<div class="phelp" style="display:none">${spec.browse.help}</div>` : '');
+      body = `<div class="browse${(spec.detail !== undefined ? spec.detail : spec.select != null) ? ' det' : ''}" ${w}><button class="bback" type="button">← volver</button><div class="blist"><input class="bsearch" spellcheck="false" autocomplete="off" placeholder="${esc(spec.browse.placeholder || 'buscar…')}"><div class="bitems"></div><div class="bcount"></div></div><div class="bdetail"></div></div>` + (spec.browse.help ? `<div class="phelp" style="display:none">${spec.browse.help}</div>` : '');
     } else if (spec.layout === 'tabs') {
       body = `<div class="ptabs">${spec.tabs.tabs.map(t => `<span class="ptab" data-tab="${esc(t.id)}">${esc(t.label)}</span>`).join('')}</div><div class="pbody">${spec.tabs.tabs.map(t => `<div class="pane" data-pane="${esc(t.id)}" style="display:none">${t.html}</div>`).join('')}</div>` + (spec.tabs.footer ? `<div class="pfoot">${spec.tabs.footer}<span class="err"></span></div>` : '');
     } else {
@@ -59,13 +61,15 @@ const Panel = (() => {
   // ---- browse ----
   function wireBrowse(spec) {
     const b = box(), inp = b.querySelector('.bsearch');
+    b.querySelector('.bback').onclick = () => b.querySelector('.browse').classList.remove('det');
     inp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(refresh, 220); });
     inp.addEventListener('keydown', (e) => {
       if (!rows.length) return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); select((sel + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length); const it = b.querySelectorAll('.bitems .li')[sel]; it && it.scrollIntoView({ block: 'nearest' }); }
       else if (e.key === 'Enter' && spec.browse.onPick) { e.preventDefault(); const r = rows[sel]; if (r) { close(); spec.browse.onPick(r); } }
     });
-    inp.focus(); refresh();
+    if (!mobile()) inp.focus();
+    refresh();
   }
   function query() { const i = box().querySelector('.bsearch'); return i ? i.value.trim() : ''; }
   async function refresh() {
@@ -82,7 +86,7 @@ const Panel = (() => {
     if (!rows.length) items.innerHTML = `<div class="bempty">${q ? 'nada coincide con «' + esc(q) + '»' : (spec.browse.emptyHtml || 'nada todavía')}</div>`;
     rows.forEach((r, i) => {
       const d = document.createElement('div'); d.className = 'li' + (spec.browse.nodot ? ' nodot' : '') + (i === sel ? ' sel' : ''); d.innerHTML = spec.browse.render(r, q);
-      d.onclick = () => select(i); if (spec.browse.onPick) d.ondblclick = () => { close(); spec.browse.onPick(r); };
+      d.onclick = () => { select(i); showDetail(); }; if (spec.browse.onPick) d.ondblclick = () => { close(); spec.browse.onPick(r); };
       items.appendChild(d);
     });
     box().querySelector('.bcount').textContent = spec.browse.count ? spec.browse.count(rows, q) : `${rows.length}`;
@@ -90,7 +94,9 @@ const Panel = (() => {
   }
   function select(i) { sel = i; box().querySelectorAll('.bitems .li').forEach((x, j) => x.classList.toggle('sel', j === i)); detail(); }
   // seleccionar por clave (spec.browse.key): para abrir el panel ya parado en un elemento («+ nuevo», una tarea)
-  function selectKey(k) { if (!cur || cur.layout !== 'browse' || !cur.browse.key) return false; const i = rows.findIndex(r => cur.browse.key(r) === k); if (i < 0) return false; select(i); return true; }
+  function selectKey(k) { if (!cur || cur.layout !== 'browse' || !cur.browse.key) return false; const i = rows.findIndex(r => cur.browse.key(r) === k); if (i < 0) return false; select(i); showDetail(); return true; }
+  function mobile() { return matchMedia('(max-width:900px)').matches; }
+  function showDetail() { const br = box().querySelector('.browse'); if (br) { br.classList.add('det'); box().querySelector('.bdetail').scrollTop = 0; } }
   async function detail() {
     if (!cur || cur.layout !== 'browse') return;
     const spec = cur, my = ++seq, d = box().querySelector('.bdetail'), r = rows[sel];

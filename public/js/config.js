@@ -46,7 +46,7 @@ async function openCfg(section, onboarding) {
   const v = r.values || {};
   Panel.open({
     id: 'config', eyebrow: 'configuración', title: onboarding ? 'Bienvenido a Lampson' : 'Configuración', sub: 'lampson/.lampson/config.json', layout: 'browse', noClose: !!onboarding,
-    select: section || 'general',
+    select: section || 'general', detail: !!section,
     browse: {
       placeholder: 'buscar…', listWidth: '260px', nodot: true, key: s => s.id,
       load: async (q) => CFG_SECTIONS.filter(s => !q || (s.name + ' ' + s.meta).toLowerCase().includes(q.toLowerCase())),
@@ -238,6 +238,6 @@ async function openCfg(section, onboarding) {
 }
 // proveedor: la pill de la cabecera y el onboarding abren la misma vista, parados en «Proveedor»
 function openSetup(onboarding) { openCfg('provider', onboarding); }
-$('#cfgBtn').onclick = () => openCfg('general');
+$('#cfgBtn').onclick = () => openCfg();
 $('#model').onclick = () => openSetup(false);
-if (location.hash === '#config') setTimeout(() => openCfg('general'), 400);
+if (location.hash === '#config') setTimeout(() => openCfg(), 400);

@@ -50,7 +50,7 @@ function pairWire(box) {
 function openDevices() {
   Panel.open({
     id: 'devices', eyebrow: 'acceso remoto', title: 'Dispositivos', sub: authMe.local ? 'celulares y tablets que pueden entrar a esta PC' : 'entraste desde un dispositivo emparejado', layout: 'browse',
-    select: authMe.local ? '__pair' : null,
+    select: authMe.local ? '__pair' : null, detail: false,
     onClose: stopPairTimer,
     browse: {
       placeholder: 'buscar dispositivo…', listWidth: '280px', key: d => d.id,

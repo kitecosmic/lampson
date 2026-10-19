@@ -76,19 +76,6 @@
   .msheet button:active { background:var(--paper-2); }
   .msheet .mcancel { text-align:center; color:var(--ink-3); font:400 12px/1 var(--mono); margin-top:4px; border-top:1px solid var(--rule); border-radius:0; }
 
-  /* modales (configuración, sesiones, plugins…): pantalla completa; en «browse» la lista arriba y el detalle abajo */
-  .modal { align-items:stretch; justify-content:stretch; }
-  .panel, .panel.lg, .panel.md, .panel.sm { width:100vw; height:100dvh; max-height:none; border:0; border-radius:0; box-shadow:none; padding:calc(10px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom)); }
-  .panel .browse { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,38%) minmax(0,1fr); }
-  .panel .blist { border-right:0; border-bottom:1px solid var(--rule); padding:10px 0 8px; }
-  .panel .bdetail { padding:12px 2px 8px; }
-  .panel input, .panel select, .panel textarea { font-size:16px; }
-  .panel .pghost { width:36px; height:36px; flex:none; }
-  /* cabecera del modal: la ✕ siempre a la vista (la ruta de «sub» la empujaba fuera de la pantalla) */
-  .panel .phead { gap:8px; min-width:0; }
-  .panel .phead .sub { display:none; }
-  .panel .phead h3 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
   /* terminal y visor de archivos: el ancho de la pantalla */
   #termpane .vh { overflow-x:auto; }
   #viewer pre { font-size:12px; }

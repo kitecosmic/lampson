@@ -22,7 +22,7 @@ if (BASE && $('#home')) { $('#home').href = HUB_BASE + '/'; $('#home').title = '
 const WS_NEW = { slug: '__new' };
 function openWorkspaces(selectSlug) {
   Panel.open({
-    id: 'workspaces', eyebrow: 'workspaces', title: 'Workspaces', sub: 'cada uno corre en su propio proceso', layout: 'browse', select: selectSlug || WS_SLUG || null,
+    id: 'workspaces', eyebrow: 'workspaces', title: 'Workspaces', sub: 'cada uno corre en su propio proceso', layout: 'browse', select: selectSlug || WS_SLUG || null, detail: !!selectSlug,
     browse: {
       placeholder: 'buscar workspace…', listWidth: '300px', key: w => w.slug,
       load: async (q) => { await fetchWorkspaces(); const list = wsList.filter(w => !q || (w.name + ' ' + w.path).toLowerCase().includes(q.toLowerCase())); return q ? list : [...list, WS_NEW]; },
