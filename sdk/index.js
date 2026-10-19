@@ -421,7 +421,8 @@ class Lampson {
       // (the one that charges). Each call_id runs once — per process unless opts.seen is shared
       if (msg.call_id != null) {
         let dup;
-        try { dup = await seen(String(msg.call_id)); } catch (e) { return [503, { error: 'cannot check call_id (seen failed: ' + ((e && e.message) || e) + '): not run' }]; }
+        // a fixed message: this text reaches the model, and a store's error can carry its host or password
+        try { dup = await seen(String(msg.call_id)); } catch (e) { console.error('lampson: seen failed:', e); return [503, { error: 'cannot check call_id: not run' }]; }
         if (dup) return [409, { error: 'call_id ' + msg.call_id + ' already ran' }];
       }
       return [200, await executeTool(this.serverTools.get(msg.name), msg.name, msg.args, msg.ctx)];

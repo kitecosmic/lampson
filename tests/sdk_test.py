@@ -199,6 +199,18 @@ def _caido(cid):
 
 fstatus2, _ = srv2.handle_tool_request("POST", captured[0][0], captured[0][1], seen=_caido)
 check(fstatus2 == 503, "servidor: si seen falla → 503 y no corre")
+
+
+async def _seen_async(cid):
+    return False
+
+
+try:
+    srv2.handle_tool_request("POST", captured[0][0], captured[0][1], seen=_seen_async)
+    async_err = None
+except TypeError as e:
+    async_err = e
+check(async_err is not None and "tools_asgi" in str(async_err), "servidor: un seen async en handle_tool_request → error claro (no 409 siempre)")
 tools_srv.shutdown()
 subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="remove", LAMPSON_KEY_ID=kid2), capture_output=True)
 

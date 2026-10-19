@@ -557,8 +557,13 @@ class Lampson:
         if call_id is not None and seen is not False:
             try:
                 dup = (seen or self._seen_here)(str(call_id))
-            except Exception as e:   # the store is down: do not run (a repeat could slip through)
-                return 503, {"error": "cannot check call_id (seen failed: %s): not run" % e}
+            except Exception as e:   # the store is down: do not run (a repeat could slip through). A fixed message:
+                print("lampson: seen failed: %r" % e, file=sys.stderr)   # it reaches the model; e may carry a password
+                return 503, {"error": "cannot check call_id: not run"}
+            if inspect.isawaitable(dup):
+                if hasattr(dup, "close"):
+                    dup.close()
+                raise TypeError("seen is async: use tools_asgi(seen=...), or a plain def with handle_tool_request")
             if dup:
                 return 409, {"error": "call_id %s already ran" % call_id}
         return None, msg
@@ -595,8 +600,9 @@ class Lampson:
                     dup = (seen or self._seen_here)(str(out["call_id"]))
                     if inspect.isawaitable(dup):
                         dup = await dup
-                except Exception as e:   # the store is down: do not run
-                    status, out, dup = 503, {"error": "cannot check call_id (seen failed: %s): not run" % e}, False
+                except Exception as e:   # the store is down: do not run; a fixed message (it reaches the model)
+                    print("lampson: seen failed: %r" % e, file=sys.stderr)
+                    status, out, dup = 503, {"error": "cannot check call_id: not run"}, False
                 if dup:
                     status, out = 409, {"error": "call_id %s already ran" % out["call_id"]}
             if status is None:

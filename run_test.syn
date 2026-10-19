@@ -373,9 +373,17 @@ apptools.approve("sub/rt_h.syn")
 write_file(TDIR + "/rt_fuga.syn", read_file(TDIR + "/rt_fuga.syn") + "\n")
 check(contains(text(apptools.get("rt_pedido")["error"]), "rt_fuga.syn"), "apptools: otra herramienta cambiada (se puede usar como módulo) también frena")
 apptools.approve("")
+rm_file(TDIR + "/sub/rt_h.syn")
+check(contains(text(apptools.get("rt_pedido")["error"]), "is gone"), "apptools: un archivo aprobado que desaparece frena (no se puede esconder)")
+check(contains(apptools.approve(""), "sub/rt_h.syn (removed)") and apptools.get("rt_pedido")["error"] == nothing, "apptools: approve sin nombre saca los que el dev borró")
+when env("OS", "") == "Windows_NT"
+    -- una junction a una carpeta de afuera: `use "./rt_ext/x.syn"` la atravesaría
+    let jlink be replace(TDIR + "/rt_ext", "/", "\\")
+    proc_wait(proc_spawn("cmd", ["/c", "mklink", "/J", jlink, replace(TDIR + "/sub", "/", "\\")], {}))
+    check(contains(text(apptools.get("rt_pedido")["error"]), "links are not allowed"), "apptools: una junction en la carpeta frena todas")
+    proc_wait(proc_spawn("cmd", ["/c", "rmdir", jlink], {}))
 check(apptools.call("rt_techo", {}, {}) == "sin .env", "apptools: el .env de la carpeta no llega a la herramienta (--no-env-file)")
 check(contains(apptools.call("rt_sube", {}, {}), "not permitted"), "apptools: un require dentro del task, fuera de los de arriba, se niega (--cap-set)")
-rm_file(TDIR + "/sub/rt_h.syn")
 each f in ["_datos.syn", "rt_pedido.syn", "rt_fuga.syn", "rt_roto.syn", "rt_todo_env.syn", "rt_techo.syn", "rt_sube.syn", ".env"]
     rm_file(TDIR + "/" + f)
 rm_file(ADIR + "/rt-tools.agent.json")

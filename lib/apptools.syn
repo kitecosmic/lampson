@@ -187,7 +187,24 @@ task syn_files(d, rel)
         give out
     give out
 
--- {archivo: "ok" | "new" | "changed"}. (approveTools del SDK aprueba UNA vez, al arrancar `run --stdio`: lo que
+-- links a carpetas dentro de la carpeta (junction, symlink): `use "./ext/o.syn"` los atraviesa (el chequeo del motor
+-- es por el texto de la ruta) y list_dir no entra, así que lo de adentro nunca se aprobaría (2026-10-19). list_dir los
+-- da como archivo; file_info sigue el link y dice carpeta. (Synsema 0.6.44 no tiene is_link: synsema-faltantes.md)
+task links_in(d, rel)
+    let out be []
+    try
+        each e in list_dir(d + (when rel == "" then "" otherwise "/" + rel))
+            let p be when rel == "" then e["name"] otherwise rel + "/" + e["name"]
+            when e["is_dir"]
+                set out to out + links_in(d, p)
+            otherwise when file_info(d + "/" + p)["is_dir"]
+                set out to append(out, p)
+    recover err
+        give out
+    give out
+
+-- {archivo: "ok" | "new" | "changed" | "missing" | "link"}. Un archivo aprobado que ya no está cuenta: si no, esconderlo
+-- (borrarlo, taparlo con un link) no frenaba nada. (approveTools del SDK aprueba UNA vez, al arrancar `run --stdio`: lo que
 -- cambie después, aunque sea el agente, sigue el camino normal)
 export task approval()
     require exec
@@ -199,9 +216,15 @@ export task approval()
     let d be dir()
     let ok be approved_map()
     let out be {}
-    each f in watched(d)
+    let here be watched(d)
+    each f in here
         let h be digest(d + "/" + f)
         set out[f] to when not contains(ok, f) then "new" otherwise (when ok[f] == h then "ok" otherwise "changed")
+    each f in keys(ok)
+        when not contains(here, f) and f != "README.md"
+            set out[f] to "missing"
+    each l in links_in(d, "")
+        set out[l] to "link"
     give out
 
 -- aprobar lo que está ahora en la carpeta: un archivo (`estado_pedido` o `_comun.syn`) o, con "", todos → los que cambió
@@ -214,7 +237,16 @@ export task approve(name)
     let d be dir()
     let ok be approved_map()
     let done be []
-    each f in watched(d)
+    let here be watched(d)
+    -- los aprobados que ya no están (el dev los borró): fuera, con "" (aprobar todo) o nombrándolos
+    let kept be {}
+    each f in keys(ok)
+        when contains(here, f) or (name != "" and f != name and f != name + ".syn")
+            set kept[f] to ok[f]
+        otherwise
+            set done to append(done, f + " (removed)")
+    set ok to kept
+    each f in here
         when name == "" or f == name or f == name + ".syn"
             let h be digest(d + "/" + f)
             when not contains(ok, f) or ok[f] != h
@@ -232,7 +264,10 @@ task gate(e, st)
     when length(bad) > 0
         let own be where(bad, (f) => f == e["file"])
         let f be when length(own) > 0 then own[0] otherwise bad[0]
-        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise " changed since it was approved") + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
+        when st[f] == "link"
+            set e["error"] to "links are not allowed in the tools folder: " + f + " (a `use` would run what is behind it, never approved). Replace it with the real files and run `lampson tools approve`"
+            give e
+        set e["error"] to (when f == e["file"] then f otherwise "the tools folder's " + f) + (when st[f] == "new" then " is not approved yet" otherwise (when st[f] == "missing" then " was approved and is gone" otherwise " changed since it was approved")) + ": review it and run `lampson tools approve " + (when f == e["file"] then e["name"] otherwise f) + "` (it can touch: " + ceiling(e) + ")"
     give e
 
 -- todas las herramientas de la carpeta, con la aprobación al día (también las rotas o sin aprobar, con su error)
