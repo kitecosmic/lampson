@@ -53,6 +53,23 @@ Pruebas:
 - **Arreglado en el camino:** el buzón abría el turno sin `from`, así que en modo servidor el `ctx.from` de las
   herramientas `.syn` llegaba vacío.
 
+**Revisión del agente de frameworks** (`07_revision_sdk_tools.md`, 2026-10-19). Arreglado:
+- **B1, el agente reescribía sus herramientas:** escribir o editar dentro de `.lampson/` (o de la carpeta de
+  herramientas) pide aprobación incluso en yolo y se niega en strict; un `bash` que nombra `.lampson` es peligroso
+  (`lib/permission.syn`). Un comando de shell ofuscado todavía puede escribir ahí en los modos que no son strict:
+  el cierre completo sería un hash aprobado por archivo.
+- **B3, IPv6 no canónico:** `host_class` expande la IPv6 y solo da público a `2000::/3` (menos 6to4 y Teredo); las
+  mapeadas, compatibles y NAT64 se clasifican por su IPv4. Sin lista, una callback no acepta ninguna IP escrita.
+- **El techo de las `.syn` (pregunta 6):** `synsema run --no-env-file --cap-set <sus require>`. El `.env` de la
+  carpeta no se carga, un `require` que no está arriba se niega, y `env(…)` solo con nombres exactos, sin
+  `LAMPSON_*` salvo `LAMPSON_CTX` (si no, la herramienta no carga y el aviso dice por qué).
+- `tools_url` con http solo para loopback de verdad, y sin `#fragmento`.
+- SDK: `toolsHandler()` / `handle_tool_request()` / `tools_asgi()` contestan 409 a un `call_id` repetido
+  (por proceso, 600 s) y 400 a un cuerpo que no es un objeto; Python usa `fullmatch`.
+
+Sin hacer, esperan a Joel: **B2** (la conversación no está separada por key) y la **pregunta 5** (keys nuevas
+sin lista: ¿callbacks sí o no?).
+
 **Pendiente:**
 1. **Tipos en la firma de un `task`**, del lado del motor: con eso el esquema sale completo del archivo.
 2. `ctx` para plugins (`PLUGIN_CTX`): fácil, pero cambia los plugins, así que queda para cuando haga falta.

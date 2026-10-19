@@ -377,6 +377,7 @@ class Lampson {
     this.toolsUrl = opts.toolsUrl || '';
     this.toolsSecret = opts.toolsSecret || '';
     this.serverTools = new Map();
+    this.seenCalls = new Map();   // call_id → ms until it can be forgotten (toolsHandler: replays answer 409)
   }
   withAgent(msg) {
     return this.agent && msg && typeof msg === 'object' && !msg.agent && !msg.to ? Object.assign({}, msg, { agent: this.agent }) : msg;
@@ -401,6 +402,15 @@ class Lampson {
       if (!v) return [401, { error: 'invalid or missing Lampson signature' }];
       let msg;
       try { msg = JSON.parse(Buffer.isBuffer(body) ? body.toString('utf8') : String(body)); } catch { return [400, { error: 'body must be JSON' }]; }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return [400, { error: 'body must be a JSON object' }];
+      // the signature is valid for ±300 s: a captured request replayed in that window would run the tool again
+      // (the one that charges). Each call_id runs once per process — serverless instances each keep their own
+      const now = Date.now();
+      for (const [id, until] of this.seenCalls) if (until < now) this.seenCalls.delete(id);
+      if (msg.call_id != null) {
+        if (this.seenCalls.has(String(msg.call_id))) return [409, { error: 'call_id ' + msg.call_id + ' already ran' }];
+        this.seenCalls.set(String(msg.call_id), now + 600000);
+      }
       return [200, await executeTool(this.serverTools.get(msg.name), msg.name, msg.args, msg.ctx)];
     };
     return async (req, res) => {

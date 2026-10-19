@@ -124,7 +124,9 @@ shop.tool("stock", { description: "Units in stock", inputSchema: z.object({ prod
 ```
 
 Or write the tool in Synsema — `.lampson/tools/stock.syn`, one file per tool — and its `require`s are everything it can
-touch: a message that tricks the model into sending data elsewhere gets `Capability not granted`.
+touch: a message that tricks the model into sending data elsewhere gets `Capability not granted`. It reads only
+the variables it names with `env("NAME")` (never Lampson's own, never the folder's `.env`), and the agent cannot
+edit it without your approval.
 
 - **An agent is a file**: `.lampson/agents/shop.agent.json` (or `~/lampson/agents/` for every project) — its prompt,
   the exact tools it may use (optionally limited to some paths, with per-tool approval) and its model.

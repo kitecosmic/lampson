@@ -111,6 +111,86 @@ task ipv4_class(o)
         give "private"
     give "public"
 
+-- "0db8" → 3512; nothing si no es hex de 1 a 4 dígitos
+task hex16(s)
+    when not matches(s, "[0-9a-f]{1,4}")
+        give nothing
+    let n be 0
+    each ch in split(s, "")
+        set n to n * 16 + index_of("0123456789abcdef", ch)
+    give n
+
+-- los 8 grupos de una IPv6 (con "::" y un IPv4 al final, "::ffff:1.2.3.4") o nothing si no es una IPv6 válida
+task ipv6_groups(h)
+    let a be split(h, "%")[0]
+    let tail be []
+    let segs be split(a, ":")
+    let last be segs[length(segs) - 1]
+    when contains(last, ".")
+        let o be ipv4_octets(last)
+        when o == nothing
+            give nothing
+        set tail to [o[0] * 256 + o[1], o[2] * 256 + o[3]]
+        set a to slice(a, 0, length(a) - length(last)) + "0"
+    let halves be split(a, "::")
+    when length(halves) > 2
+        give nothing
+    let left be where(split(halves[0], ":"), (g) => g != "")
+    let right be when length(halves) == 2 then where(split(halves[1], ":"), (g) => g != "") otherwise []
+    when length(tail) > 0
+        set right to when length(halves) == 2 then slice(right, 0, length(right) - 1) otherwise right
+        set left to when length(halves) == 2 then left otherwise slice(left, 0, length(left) - 1)
+    let n be length(left) + length(right) + length(tail)
+    when (length(halves) == 1 and n != 8) or n > 8 or (length(halves) == 2 and n == 8)
+        give nothing
+    let out be []
+    each g in left
+        let v be hex16(g)
+        when v == nothing
+            give nothing
+        set out to append(out, v)
+    when length(halves) == 2
+        each i in range(8 - n)
+            set out to append(out, 0)
+    each g in right
+        let v be hex16(g)
+        when v == nothing
+            give nothing
+        set out to append(out, v)
+    give out + tail
+
+-- solo 2000::/3 es internet; dentro, 6to4 (2002::/16) y Teredo (2001:0::/32) llevan una IPv4 adentro → privado.
+-- IPv4 mapeadas (::ffff:a.b.c.d), compatibles (::a.b.c.d) y NAT64 (64:ff9b::a.b.c.d) se clasifican por esa IPv4
+task ipv6_class(h)
+    let g be ipv6_groups(h)
+    when g == nothing
+        give "private"
+    when g == [64768, 3778, 0, 0, 0, 0, 0, 596]
+        give "blocked"
+    let v4 be [floor(g[6] / 256), g[6] % 256, floor(g[7] / 256), g[7] % 256]
+    when slice(g, 0, 5) == [0, 0, 0, 0, 0] and (g[5] == 65535 or (g[5] == 0 and g[6] != 0))
+        give ipv4_class(v4)
+    when g[0] == 100 and g[1] == 65435 and slice(g, 2, 6) == [0, 0, 0, 0]
+        give ipv4_class(v4)
+    when g[0] < 8192 or g[0] > 16383 or g[0] == 8194 or (g[0] == 8193 and g[1] == 0)
+        give "private"
+    give "public"
+
+-- ¿el host es una IP escrita (IPv4, IPv6, o las formas numéricas raras) y no un nombre?
+export task is_ip_literal(host)
+    let h be lower(text(host))
+    give contains(h, ":") or matches(h, "[0-9.]+") or matches(h, "0x[0-9a-fx.]+")
+
+-- loopback de verdad: localhost, 127.0.0.0/8, ::1 (en cualquier forma)
+export task is_loopback(host)
+    let h be lower(text(host))
+    when h == "localhost" or ends_with(h, ".localhost")
+        give true
+    let o be ipv4_octets(h)
+    when o != nothing
+        give o[0] == 127
+    give contains(h, ":") and ipv6_groups(h) == [0, 0, 0, 0, 0, 0, 0, 1]
+
 export task host_class(host)
     let h be lower(text(host))
     when h == "metadata.google.internal" or h == "metadata.goog" or h == "fd00:ec2::254"
@@ -118,16 +198,9 @@ export task host_class(host)
     let o be ipv4_octets(h)
     when o != nothing
         give ipv4_class(o)
-    -- IPv6: loopback, unspecified, ULA fc00::/7, link-local fe80::/10, IPv4 mapeadas ::ffff:a.b.c.d
+    -- IPv6 por su valor expandido: comparar el texto dejaba pasar [0::1] y [0000::1] como públicos (2026-10-19)
     when contains(h, ":")
-        when h == "::1" or h == "::"
-            give "private"
-        when starts_with(h, "::ffff:")
-            let inner be ipv4_octets(slice(h, 7, length(h)))
-            give when inner != nothing then ipv4_class(inner) otherwise "private"
-        when starts_with(h, "fc") or starts_with(h, "fd") or starts_with(h, "fe8") or starts_with(h, "fe9") or starts_with(h, "fea") or starts_with(h, "feb")
-            give "private"
-        give "public"
+        give ipv6_class(h)
     when h == "localhost" or ends_with(h, ".localhost") or ends_with(h, ".internal") or ends_with(h, ".local") or ends_with(h, ".home.arpa") or ends_with(h, ".lan")
         give "private"
     -- formas numéricas ambiguas (2130706433, 0x7f000001, 0177.0.0.1): clásicos de bypass → tratar como privado

@@ -15,6 +15,11 @@
 -- nada en la carpeta del dev. Por qué así (2026-10-18, Synsema 0.6.44): un módulo importado con `use` no puede tener
 -- `require` arriba, y `use` solo acepta rutas relativas al archivo que importa, dentro de su carpeta.
 --
+-- Techo del proceso (2026-10-19): `synsema run --no-env-file --cap-set <sus require>` — el .env de la carpeta no se
+-- carga y lo que no está en los `require` de arriba del archivo lo niega el motor, aunque se escriba dentro de un
+-- task. `env(…)` solo con nombres exactos, y nada que empiece con LAMPSON_ salvo LAMPSON_CTX: el proceso hijo hereda
+-- el entorno de Lampson (las keys de los proveedores, el secreto del webhook) y `env("*")` lo leía entero.
+--
 -- Contexto de confianza: la herramienta que declara `require env("LAMPSON_CTX")` recibe ahí {from, thread, agent,
 -- session, meta, channel} del sobre — lo pone la app, el modelo no lo ve ni lo escribe. Sus argumentos sí los escribe
 -- el modelo: validarlos siempre.
@@ -123,7 +128,14 @@ task load_one(d, file)
         give e
     set e["description"] to text(f["intent"])
     set e["requires"] to apply((q) => {"cap": text(q["cap"]), "scope": when q["scope"] == nothing then "" otherwise text(q["scope"])}, field_list(f, "requires"))
-    set e["ctx"] to length(where(e["requires"], (q) => q["cap"] == "env" and (q["scope"] == "LAMPSON_CTX" or q["scope"] == "LAMPSON_*" or q["scope"] == "*"))) > 0
+    each q in e["requires"]
+        when q["cap"] == "env" and (not matches(q["scope"], "[A-Za-z_][A-Za-z0-9_]*") or (starts_with(q["scope"], "LAMPSON_") and q["scope"] != "LAMPSON_CTX"))
+            set e["error"] to "require env(\"" + q["scope"] + "\"): name each variable exactly; LAMPSON_* is Lampson's own (only LAMPSON_CTX is for tools)"
+            give e
+        when contains(q["scope"], ",")
+            set e["error"] to "require " + q["cap"] + "(\"" + q["scope"] + "\"): a scope with a comma cannot be passed to the tool's ceiling"
+            give e
+    set e["ctx"] to length(where(e["requires"], (q) => q["cap"] == "env" and q["scope"] == "LAMPSON_CTX")) > 0
     set e["spend"] to length(where(e["requires"], (q) => q["cap"] == "spend")) > 0
     let src be ""
     try
@@ -158,7 +170,8 @@ export task scan()
     when length(files) == 0
         give []
     set files to sort(files)
-    let sig be d
+    -- v2: load_one valida los env (2026-10-19); una caché vieja no los revisó
+    let sig be "v2|" + d
     each fl in sort(apply((e) => e["name"], where(list_dir(d), (e) => not e["is_dir"])))
         let fi be file_info(d + "/" + fl)
         set sig to sig + "|" + fl + ":" + text(fi["size"]) + ":" + text(fi["modified"])
@@ -205,6 +218,13 @@ task schema(e)
         when not p["optional"]
             set req to append(req, p["name"])
     give {"type": "object", "properties": props, "required": req}
+
+-- el techo del proceso: sus require + leer los argumentos + escribir la respuesta
+task cap_set(e)
+    let caps be ["stdout", "env=LAMPSON_TOOL_ARGS"]
+    each q in e["requires"]
+        set caps to append(caps, q["cap"] + (when q["scope"] != "" then "=" + q["scope"] otherwise ""))
+    give join(caps, ",")
 
 -- techo legible: "net(api.mitienda.com), env(LAMPSON_CTX)" — lo que puede tocar, para el catálogo y los avisos
 export task ceiling(e)
@@ -264,7 +284,7 @@ export task call(name, args, ctx)
     let envs be {"LAMPSON_TOOL_ARGS": json_encode(when args == nothing then {} otherwise args)}
     when e["ctx"]
         set envs["LAMPSON_CTX"] to json_encode(when ctx == nothing then {} otherwise ctx)
-    let r be run_proc(["run", "-"], d, envs, prog, TIMEOUT)
+    let r be run_proc(["run", "--no-env-file", "--cap-set", cap_set(e), "-"], d, envs, prog, TIMEOUT)
     let out be trim(r["out"] + (when trim(r["err"]) != "" then "\n" + r["err"] otherwise ""))
     when r["timed_out"]
         give "ERROR: tool '" + name + "' timed out after " + text(TIMEOUT) + "s (killed). Output so far:\n" + slice(out, 0, MAX_OUT)

@@ -46,6 +46,10 @@ each h in ["localhost", "api.localhost", "127.0.0.1", "127.9.9.9", "10.0.0.1", "
 each h in ["169.254.169.254", "169.254.170.2", "metadata.google.internal", "::ffff:169.254.169.254", "100.100.100.200"]
     check(url.host_class(h) == "blocked", "metadata bloqueada: " + h)
 check(url.host_class("172.32.0.1") == "public" and url.host_class("100.128.0.1") == "public", "bordes de rangos privados")
+each h in ["0::1", "0000::1", "::0:1", "0:0:0:0:0:0:0:1", "::ffff:7f00:1", "::127.0.0.1", "64:ff9b::a00:1", "2002:7f00:1::1", "fe80::1%eth0", "ff02::1", "zz::1"]
+    check(url.host_class(h) == "private", "IPv6 por su valor, privado: " + h)
+check(url.host_class("2606:4700::1111") == "public" and url.host_class("64:ff9b::8.8.8.8") == "public", "IPv6 pública (2000::/3, NAT64 a una IPv4 pública)")
+check(url.is_loopback("[0::1]") == false and url.is_loopback("0::1") and url.is_loopback("127.3.0.1") and not url.is_loopback("10.0.0.1"), "is_loopback: ::1 en cualquier forma y 127/8, nada más")
 check(url.sensitive("https://api.openai.com/v1?key=sk-abcdefghijklmnopqrstuvwxyz1234567890") != nothing, "sk- key en URL")
 check(url.sensitive("https://x.com/?api_key=abc") != nothing and url.sensitive("https://x.com/?token=abc") != nothing and url.sensitive("https://x.com/?access%5Ftoken=abc") != nothing, "params sensibles (incluso codificados)")
 check(url.sensitive("https://x.com/task-manager-app-v2-something-long") == nothing and url.sensitive("https://x.com/?token=") == nothing and url.sensitive("https://x.com/?q=code") == nothing, "sin falsos positivos: slug con 'sk-', param vacío, 'code'")
@@ -189,6 +193,10 @@ check(permission.evaluate("fetch", {"url": "http://192.168.1.5/"}, "strict")["de
 check(permission.evaluate("fetch", {"url": "http://169.254.169.254/"}, "yolo")["decision"] == "deny", "metadata: deny incluso en yolo")
 check(permission.evaluate("fetch", {"url": "https://x.com/?token=abc"}, "yolo")["decision"] == "deny", "token en URL: deny incluso en yolo")
 check(permission.evaluate("fetch", {"url": "nada"}, "ask")["decision"] == "allow", "URL inválida: allow (la tool explica)")
+check(permission.evaluate("write", {"path": ".lampson/tools/x.syn"}, "yolo")["decision"] == "ask", "escribir una herramienta .syn: ask incluso en yolo (le subiría el techo)")
+check(permission.evaluate("edit", {"path": "./.lampson/agents/a.agent.json"}, "strict")["decision"] == "deny", "editar .lampson/ en strict: deny")
+check(permission.evaluate("write", {"path": "src/app.js"}, "strict")["decision"] == "allow", "escribir fuera de .lampson/: igual que antes")
+check(permission.evaluate("bash", {"command": "echo x > .lampson/tools/x.syn"}, "strict")["decision"] == "deny", "bash que toca .lampson/ en strict: deny")
 check(permission.describe_call("fetch", {"url": "https://x.com/a", "format": "text"}) == "fetch https://x.com/a (text)" and permission.describe_call("fetch", {"url": "https://x.com/a"}) == "fetch https://x.com/a", "describe_call")
 check(contains(tools.catalog_subset(["fetch"])[0]["description"], "Markdown"), "en el catálogo")
 

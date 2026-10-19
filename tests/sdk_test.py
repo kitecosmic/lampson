@@ -156,9 +156,13 @@ def py_eco(x: str, ctx: dict = None) -> dict:
     return {"eco": x, "from": (ctx or {}).get("from", {}).get("id")}
 
 
+captured = []
+
+
 class ToolsHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        captured.append((dict(self.headers), raw))   # el pedido real que firmó Lampson, para repetirlo
         status, out = srv2.handle_tool_request("POST", dict(self.headers), raw)
         data = json.dumps(out).encode()
         self.send_response(status)
@@ -182,6 +186,8 @@ try:
 except urllib.error.HTTPError as e:
     fstatus = e.code
 check(fstatus == 401, "servidor: un pedido sin la firma de Lampson → 401")
+rstatus, rout = srv2.handle_tool_request("POST", captured[0][0], captured[0][1])
+check(rstatus == 409, "servidor: el mismo pedido firmado, repetido → 409: " + json.dumps(rout))
 tools_srv.shutdown()
 subprocess.run(["synsema", "run", "run.syn"], env=dict(os.environ, LAMPSON_KEY_CMD="remove", LAMPSON_KEY_ID=kid2), capture_output=True)
 

@@ -11,6 +11,7 @@
 
 use "./tools/url.syn" as u
 use "./computer.syn" as computer
+use "./apptools.syn" as apptools
 
 -- Tier 1: nunca. Coincidencia por substring, case-insensitive.
 -- (el comando se evalúa con un espacio final añadido, así "rm -rf / " matchea la raíz pero NO "rm -rf /tmp/x")
@@ -31,7 +32,8 @@ export let DANGEROUS be [
     "npm publish", "cargo publish", "pip upload", "twine upload",
     "docker rm", "docker system prune", "kubectl delete",
     "chmod", "chown", "> ~/", "crontab",
-    "> .env", ">.env", ">> .env", "tee .env", "> ./.env"
+    "> .env", ">.env", ">> .env", "tee .env", "> ./.env",
+    ".lampson"
 ]
 
 task contains_any(haystack, needles)
@@ -50,6 +52,16 @@ task is_secret_env(base)
         when base == ok
             give false
     give true
+
+-- ¿la ruta cae en la config del proyecto (.lampson/: agentes, herramientas .syn) o en la carpeta de herramientas?
+-- Ahí un agente se subiría su propio techo: editar estado_pedido.syn y agregarle `require exec` (2026-10-19)
+task in_lampson_dir(p)
+    let parts be where(split(p, "/"), (s) => s != "" and s != ".")
+    when contains(parts, ".lampson")
+        give true
+    let td be lower(slice(apptools.dir(), length("workspace/"), length(apptools.dir())))
+    let rel be join(parts, "/")
+    give rel == td or starts_with(rel, td + "/")
 
 -- (`and` no cortocircuita en Synsema: indexar args["action"] sin la clave explota → helper con when anidado)
 task is_install(args)
@@ -98,6 +110,11 @@ export task evaluate(name, args, mode)
         let p be when contains(args, "path") then lower(replace(text(args["path"]), "\\", "/")) otherwise ""
         let parts be split(p, "/")
         let base be parts[length(parts) - 1]
+        when in_lampson_dir(p)
+            -- como instalar un plugin: humano siempre, incluso en yolo; strict lo niega
+            when mode == "strict"
+                give {"decision": "deny", "reason": "strict mode (writes Lampson's project config or app tools)"}
+            give {"decision": "ask", "reason": "writes " + text(args["path"]) + ": Lampson's project config or an app tool (what it can do is set there)"}
         when is_secret_env(base)
             when mode == "yolo"
                 give {"decision": "allow", "reason": "yolo mode (.env)"}

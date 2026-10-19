@@ -68,8 +68,9 @@ export task create_with(name, agents, opts)
 
 -- ¿esta key puede pedir un callback a esta URL? sin lista = cualquiera; con lista = solo esos prefijos
 -- ¿esta key puede mandar una callback a `url`? Con lista: mismo esquema, host y puerto, y el path de la lista como
--- prefijo de carpeta ("https://app.com/hooks" deja /hooks y /hooks/x, no /hooks-x). Sin lista: cualquier host público
--- — nunca loopback, red privada ni metadatos de la nube. Antes (hasta 2026-10-18) era starts_with sobre la URL
+-- prefijo de carpeta ("https://app.com/hooks" deja /hooks y /hooks/x, no /hooks-x). Sin lista: un NOMBRE público
+-- — nunca una IP escrita, loopback, red privada ni metadatos de la nube. (Un nombre que resuelve a 127.0.0.1 pasa:
+-- el techo de red de Synsema 0.6.44 compara nombres, no la IP con la que conecta.) Antes (hasta 2026-10-18) era starts_with sobre la URL
 -- entera: "https://app.com" dejaba pasar "https://app.com.evil.net", y sin lista, cualquier URL (SSRF).
 export task callback_allowed(rec, url)
     let u be urls.parse(url)
@@ -77,7 +78,7 @@ export task callback_allowed(rec, url)
         give false
     let cbs be when contains(rec, "callbacks") then rec["callbacks"] otherwise []
     when length(cbs) == 0
-        give urls.host_class(u["host"]) == "public"
+        give not urls.is_ip_literal(u["host"]) and urls.host_class(u["host"]) == "public"
     each pre in cbs
         let p be urls.parse(pre)
         when p["ok"] and p["scheme"] == u["scheme"] and p["host"] == u["host"] and p["port"] == u["port"]

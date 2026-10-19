@@ -280,7 +280,7 @@ def verify_tool_request(method, url, headers, body, secret, now=None):
     hmac-sha256), +-300 s. -> {"keyid", "created"} or None."""
     if not secret:
         return None
-    mi, ms = _SIG_INPUT.match(_header(headers, "signature-input")), _SIG.match(_header(headers, "signature"))
+    mi, ms = _SIG_INPUT.fullmatch(_header(headers, "signature-input")), _SIG.fullmatch(_header(headers, "signature"))
     if not mi or not ms:
         return None
     created = int(mi.group(2))
@@ -475,6 +475,8 @@ class Lampson:
         self.tools_url = tools_url or ""
         self.tools_secret = tools_secret or ""
         self._server_tools = {}
+        self._seen_calls = {}   # call_id -> time it can be forgotten (handle_tool_request: replays answer 409)
+        self._seen_lock = threading.Lock()
         if local is not None:
             if on_warning is False:
                 on_warning = lambda w: print("lampson: " + w, file=sys.stderr)
@@ -521,15 +523,35 @@ class Lampson:
             return env
         return dict(env, tools=[s["wire"] for s in self._server_tools.values()], tools_url=self.tools_url)
 
-    def handle_tool_request(self, method, headers, body):
-        """Server mode, any framework: verify Lampson's signature on a tool call and run it -> (status, dict).
-        Pass the raw body (bytes) exactly as received; the signed URL is tools_url, not the request's."""
+    def _tool_call(self, method, headers, body):
+        """Signature, JSON object, call_id not seen -> (None, msg) to run it, or (status, error) to answer."""
         if not verify_tool_request(method, self.tools_url, headers, body, self.tools_secret):
             return 401, {"error": "invalid or missing Lampson signature"}
         try:
             msg = json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
         except ValueError:
             return 400, {"error": "body must be JSON"}
+        if not isinstance(msg, dict):
+            return 400, {"error": "body must be a JSON object"}
+        # the signature is valid for +-300 s: a captured request replayed in that window would run the tool again
+        # (the one that charges). Each call_id runs once per process; several workers each keep their own
+        call_id = msg.get("call_id")
+        if call_id is not None:
+            now = time.time()
+            with self._seen_lock:
+                for k in [k for k, until in self._seen_calls.items() if until < now]:
+                    del self._seen_calls[k]
+                if str(call_id) in self._seen_calls:
+                    return 409, {"error": "call_id %s already ran" % call_id}
+                self._seen_calls[str(call_id)] = now + 600
+        return None, msg
+
+    def handle_tool_request(self, method, headers, body):
+        """Server mode, any framework: verify Lampson's signature on a tool call and run it -> (status, dict).
+        Pass the raw body (bytes) exactly as received; the signed URL is tools_url, not the request's."""
+        status, msg = self._tool_call(method, headers, body)
+        if status is not None:
+            return status, msg
         name = msg.get("name")
         return 200, _execute_tool(self._server_tools.get(name), name, msg.get("args"), msg.get("ctx"))
 
@@ -548,29 +570,25 @@ class Lampson:
                 more = ev.get("more_body", False)
             body = b"".join(chunks)
             headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope.get("headers", [])}
-            if not verify_tool_request(scope.get("method", "POST"), self.tools_url, headers, body, self.tools_secret):
-                status, out = 401, {"error": "invalid or missing Lampson signature"}
-            else:
-                try:
-                    msg = json.loads(body.decode("utf-8"))
-                    spec = self._server_tools.get(msg.get("name"))
-                    if spec is not None and inspect.iscoroutinefunction(spec["fn"]):
-                        try:
-                            args = dict(msg.get("args") or {})
-                            for k, model in spec["models"].items():
-                                if k in args:
-                                    args[k] = model.model_validate(args[k])
-                            if spec["ctx"]:
-                                args["ctx"] = dict(msg.get("ctx") or {})
-                            o = await spec["fn"](**args)
-                            out = {"output": o.model_dump() if hasattr(o, "model_dump") else o}
-                        except Exception as e:
-                            out = {"error": "%s: %s" % (type(e).__name__, e)}
-                    else:
-                        out = await asyncio.to_thread(_execute_tool, spec, msg.get("name"), msg.get("args"), msg.get("ctx"))
-                    status = 200
-                except ValueError:
-                    status, out = 400, {"error": "body must be JSON"}
+            status, out = self._tool_call(scope.get("method", "POST"), headers, body)
+            if status is None:
+                msg = out
+                spec = self._server_tools.get(msg.get("name"))
+                if spec is not None and inspect.iscoroutinefunction(spec["fn"]):
+                    try:
+                        args = dict(msg.get("args") or {})
+                        for k, model in spec["models"].items():
+                            if k in args:
+                                args[k] = model.model_validate(args[k])
+                        if spec["ctx"]:
+                            args["ctx"] = dict(msg.get("ctx") or {})
+                        o = await spec["fn"](**args)
+                        out = {"output": o.model_dump() if hasattr(o, "model_dump") else o}
+                    except Exception as e:
+                        out = {"error": "%s: %s" % (type(e).__name__, e)}
+                else:
+                    out = await asyncio.to_thread(_execute_tool, spec, msg.get("name"), msg.get("args"), msg.get("ctx"))
+                status = 200
             data = json.dumps(out, default=str).encode("utf-8")
             await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json")]})
             await send({"type": "http.response.body", "body": data})

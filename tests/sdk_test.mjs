@@ -123,12 +123,22 @@ srv2.tool('sdk_eco', {
   parameters: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
   execute: async (args, ctx) => { remoteSeen.push(ctx); return { eco: args.x, from: ctx.from && ctx.from.id }; },
 });
-const toolsServer = http.createServer(srv2.toolsHandler()).listen(47998, '127.0.0.1');
+const handler2 = srv2.toolsHandler();
+let captured = null;   // el pedido real que firmó Lampson, para repetirlo
+const toolsServer = http.createServer(async (req, res) => {
+  const chunks = []; for await (const c of req) chunks.push(c);
+  req.body = Buffer.concat(chunks);
+  if (!captured) captured = { headers: Object.assign({}, req.headers), body: req.body };
+  return handler2(req, res);
+}).listen(47998, '127.0.0.1');
 await sleep(200);
 const r1 = await srv2.ask({ agent: 'rt-sdk', thread: 'sdk-js-8', from: { id: 'u-5' }, text: 'usa-tool sdk_eco {"x":"remoto"}' });
 check(/"eco": "remoto"/.test(r1.text) && /"from": "u-5"/.test(r1.text), 'servidor: Lampson llamó a la función de la app, firmada, con el ctx: ' + r1.text.slice(0, 80));
 const forged = await fetch('http://127.0.0.1:47998/tools', { method: 'POST', body: JSON.stringify({ call_id: 'x', name: 'sdk_eco', args: { x: 'a' }, ctx: { from: { id: 'u-99' } } }) });
 check(forged.status === 401 && !remoteSeen.some(c => c.from && c.from.id === 'u-99'), 'servidor: un pedido sin la firma de Lampson → 401 y la función no corre');
+const ranBefore = remoteSeen.length;
+const replay = await fetch('http://127.0.0.1:47998/tools', { method: 'POST', headers: { 'signature-input': captured.headers['signature-input'], 'signature': captured.headers['signature'], 'content-digest': captured.headers['content-digest'] }, body: captured.body });
+check(replay.status === 409 && remoteSeen.length === ranBefore, 'servidor: el mismo pedido firmado, repetido → 409 y la función no corre de nuevo');
 const srvBad = new Lampson({ url: 'http://127.0.0.1:47996/w/test/', key, toolsUrl: 'http://127.0.0.1:47998/tools', toolsSecret: secret2 });
 srvBad.tool('sdk_eco', { execute: () => 1 });
 let e403t = null;

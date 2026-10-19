@@ -577,6 +577,7 @@ check(post("/messages", {"to": "rt-buf", "thread": "api:cb-allowed", "text": "ho
 let kn be apikeys.create("test-nolist", ["rt-buf"])
 check(post("/messages", {"to": "rt-buf", "thread": "api:cb-ssrf", "text": "hola", "callback": "http://127.0.0.1:8080/api/hub"}, kn)["status"] == 403, "key sin lista: loopback → 403 (nada de SSRF al hub)")
 check(not apikeys.callback_allowed({}, "http://169.254.169.254/latest/meta-data") and not apikeys.callback_allowed({}, "http://10.0.0.5/x") and apikeys.callback_allowed({}, "https://example.com/cb"), "key sin lista: metadatos y red privada no; un host público sí")
+check(not apikeys.callback_allowed({}, "http://[0::1]:8080/x") and not apikeys.callback_allowed({}, "http://[0000::1]/x") and not apikeys.callback_allowed({}, "https://8.8.8.8/x"), "key sin lista: ninguna IP escrita ([0::1] era el hub)")
 let lst be {"callbacks": ["https://app.com/hooks"]}
 check(not apikeys.callback_allowed(lst, "https://app.com.evil.net/hooks"), "lista: https://app.com no deja pasar app.com.evil.net (antes, starts_with)")
 check(apikeys.callback_allowed(lst, "https://app.com/hooks") and apikeys.callback_allowed(lst, "https://app.com/hooks/x") and not apikeys.callback_allowed(lst, "https://app.com/hooks-x") and not apikeys.callback_allowed(lst, "http://app.com/hooks") and not apikeys.callback_allowed(lst, "https://app.com:8443/hooks"), "lista: mismo esquema, host y puerto; el path como carpeta")

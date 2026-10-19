@@ -131,8 +131,8 @@ export task parse(body, rec)
         when tu == ""
             give {"ok": false, "status": 400, "error": "tools needs tools_url: the URL where your app answers the tool calls"}
         let tp be urls.parse(tu)
-        when not tp["ok"] or (tp["scheme"] != "https" and urls.host_class(tp["host"]) != "private")
-            give {"ok": false, "status": 400, "error": "tools_url must be an https URL (http only for localhost)"}
+        when not tp["ok"] or contains(tu, "#") or (tp["scheme"] != "https" and not urls.is_loopback(tp["host"]))
+            give {"ok": false, "status": 400, "error": "tools_url must be an https URL without #fragment (http only for localhost)"}
         when length(field(rec, "callbacks", [])) == 0 or not apikeys.callback_allowed(rec, tu)
             give {"ok": false, "status": 403, "error": "this API key cannot call tools at " + tu + ": add it to the key's list (`lampson key add --callback URL`)"}
         when apikeys.signing_secret(rec["id"]) == ""
