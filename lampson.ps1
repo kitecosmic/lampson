@@ -72,7 +72,7 @@ while ($i -lt $args.Count) {
         '^--?round$'            { $i++; $ObjRound = [string]$args[$i] }
         '^--?approve$'          { $ObjDecision = "approve" }
         '^--?deny$'             { $ObjDecision = "deny" }
-        '^--?(update|u)$'       { Write-Host "actualizando Lampson en $here"; git -C $here pull --ff-only origin main; Write-Host ("lampson " + (git -C $here rev-parse --short HEAD)); exit $LASTEXITCODE }
+        '^--?(update|u)$'       { Write-Host "actualizando Lampson en $here"; git -C $here pull --ff-only origin main; Write-Host ("lampson " + (git -C $here rev-parse --short HEAD) + " — si el hub está corriendo: lampson --hub restart"); exit $LASTEXITCODE }
         '^--?(help|h|\?)$'      { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 9 | ForEach-Object { $_.TrimStart('#',' ') }; exit 0 }
         default                 { if ($ObjCmd -ne "" -and $ObjId -eq "" -and @("show", "reply", "cancel") -contains $ObjCmd -and -not $a.StartsWith("-")) { $ObjId = $a } elseif ($ObjCmd -ne "" -and -not $a.StartsWith("-")) { $Message += $a } elseif ($ChannelCmd -ne "" -and -not $a.StartsWith("-")) { $ChannelName = $a } elseif (($PluginCmd -ne "" -or $ToolsCmd -ne "") -and -not $a.StartsWith("-")) { $PluginName = $a } elseif ($Key -ne "" -and -not $a.StartsWith("-")) { $KeyId = $a } elseif ($Run -and -not $a.StartsWith("-")) { $Message += $a } elseif ($Workspace -eq "" -and -not $a.StartsWith("-")) { $Workspace = $a } else { Write-Error "argumento desconocido: $a (probá lampson --help)"; exit 1 } }
     }
@@ -159,7 +159,7 @@ try {
     # --- arranque al iniciar sesión: Tarea Programada; sin permiso para crearla, un .vbs en la carpeta Inicio ---
     $startupVbs = Join-Path ([Environment]::GetFolderPath("Startup")) "lampson-hub.vbs"
     if ($Install -eq "install") {
-        $cmd = "cmd /c cd /d `"$here`" && set LAMPSON_HOME=$here&& synsema serve hub.syn > .lampson\hub.log 2>&1"
+        $cmd = "cmd /c cd /d `"$here`" && set LAMPSON_HOME=$here&& set LAMPSON_CMD=hub-regen&& synsema run cli.syn >nul 2>&1 & synsema serve hub.syn > .lampson\hub.log 2>&1"
         $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
         $out = schtasks /Create /F /TN "Lampson hub" /SC ONLOGON /TR $cmd 2>&1
         $ErrorActionPreference = $prev

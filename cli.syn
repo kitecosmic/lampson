@@ -5,6 +5,8 @@
 --   LAMPSON_CMD=prepare LAMPSON_WORKSPACE=<ruta>   lo mismo que ensure SIN hub ni proceso web: solo la carpeta del
 --       workspace (lo que usan `lampson run`, `run --stdio`, `key`, `channel` y `mcp serve`, que no necesitan servidor)
 --   LAMPSON_CMD=hub-status  → {alive}
+--   LAMPSON_CMD=hub-regen  → {changed}: rehace hub.syn desde hub.tpl.syn (systemd y la tarea de Windows lo corren antes de
+--       `synsema serve hub.syn`: sin esto, tras actualizar, el hub arranca con las rutas de la versión anterior)
 --   LAMPSON_CMD=hub-start | hub-stop | hub-reboot (stop + start: hub y workspaces; lo lanza ⚙ → Apagar o reiniciar)
 --   LAMPSON_CMD=list
 --   LAMPSON_CMD=pair  [LAMPSON_PAIR_URL=https://…]   código para emparejar un celular (lampson --pair dibuja el QR)
@@ -52,6 +54,8 @@ when cmd == "ensure" or cmd == "prepare"
     print(json_encode({"slug": w["slug"], "port": w["port"], "dir": ws.dir_of(w["slug"]), "url": "http://127.0.0.1:" + text(ws.HUB_PORT) + "/w/" + w["slug"], "alive": hc != nothing, "hub": ws.hub_alive(), "judge_provider": when contains(je, "SYNSEMA_JUDGE_PROVIDER") then je["SYNSEMA_JUDGE_PROVIDER"] otherwise "", "judge_model": when contains(je, "SYNSEMA_JUDGE_MODEL") then je["SYNSEMA_JUDGE_MODEL"] otherwise "", "judge_key": when contains(je, "TYPESAFE_API_KEY") then je["TYPESAFE_API_KEY"] otherwise ""}))
 otherwise when cmd == "hub-status"
     print(json_encode({"alive": ws.hub_alive(), "workspaces": ws.summary()}))
+otherwise when cmd == "hub-regen"
+    print(json_encode({"changed": ws.regen_hub()}))
 otherwise when cmd == "hub-start"
     when not ws.hub_alive()
         ws.start_hub()

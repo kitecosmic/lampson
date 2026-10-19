@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
         --round) shift; obj_round="$1" ;;
         --approve) obj_decision=approve ;;
         --deny) obj_decision=deny ;;
-        --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD)"; exit $? ;;
+        --update) echo "actualizando Lampson en $here"; git -C "$here" pull --ff-only origin main; echo "lampson $(git -C "$here" rev-parse --short HEAD) — si el hub está corriendo: lampson --hub restart"; exit $? ;;
         -*) echo "uso: lampson run [--agent ID] [--thread T|--session ID] [--json] [--yolo|--strict|--ask] [mensaje]" >&2; echo "uso: lampson [--web] [--hub start|stop|status|logs|restart] [--domain DOMINIO|off [--email EMAIL]] [--pair [URL]] [--install|--uninstall] [--workspace RUTA] [--agent PERFIL] [--yolo|--strict|--ask] [--update]" >&2; exit 1 ;;
         *) if [ -n "$obj_cmd" ] && [ -z "$obj_id" ] && { [ "$obj_cmd" = show ] || [ "$obj_cmd" = reply ] || [ "$obj_cmd" = cancel ]; }; then obj_id="$1"; elif [ -n "$obj_cmd" ]; then msg="${msg:+$msg }$1"; elif [ -n "$ch_cmd" ]; then ch_name="$1"; elif [ -n "$pl_cmd" ] || [ -n "$tl_cmd" ]; then pl_name="$1"; elif [ -n "$key" ]; then key_id="$1"; elif [ "$run" = 1 ]; then msg="${msg:+$msg }$1"; else ws="$1"; fi ;;
     esac
@@ -110,6 +110,8 @@ WorkingDirectory=$here
 Environment=LAMPSON_HOME=$here
 Environment="LAMPSON_SYNSEMA=$(command -v synsema)"
 Environment="PATH=$(dirname "$(command -v synsema)"):$PATH"
+# hub.syn se genera desde hub.tpl.syn: tras actualizar, rehacerlo antes de servirlo (el - deja arrancar igual si falla)
+ExecStartPre=-/usr/bin/env LAMPSON_CMD=hub-regen $(command -v synsema) run cli.syn
 ExecStart=$(command -v synsema) serve hub.syn
 Restart=always
 RestartSec=3
@@ -118,10 +120,11 @@ TimeoutStopSec=20
 WantedBy=default.target
 EOF
 }
-# una unit de antes de ese arreglo se reescribe sola (una vez) y el hub se reinicia con el PATH bueno
-if [ "$install" = "" ] && [ -f "$unit" ] && ! grep -q LAMPSON_SYNSEMA "$unit"; then
+# una unit de antes de esos arreglos (PATH del motor, hub.syn rehecho al arrancar) se reescribe sola (una vez) y el hub
+# se reinicia con ella
+if [ "$install" = "" ] && [ -f "$unit" ] && ! grep -q hub-regen "$unit"; then
     write_unit
-    systemctl --user daemon-reload && systemctl --user restart lampson-hub.service && echo "lampson: servicio del hub actualizado (PATH del motor)" >&2 || true
+    systemctl --user daemon-reload && systemctl --user restart lampson-hub.service && echo "lampson: servicio del hub actualizado" >&2 || true
 fi
 # dominio propio (opcional): HTTPS automático con Let's Encrypt delante del hub
 if [ "$domain" != "-" ]; then
