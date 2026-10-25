@@ -3,7 +3,7 @@ use "./common.syn" as c
 
 export task tool(path, old_string, new_string, replace_all)
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let real be c.ws(path)
     let shown be c.unws(real)
     c.check_observed(real, "edit")

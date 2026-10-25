@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/teams.css">
 <link rel="stylesheet" href="/css/views.css">
+<link rel="stylesheet" href="/css/inbox.css">
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body class="home">
@@ -18,6 +19,7 @@
   <span class="brand">lampson</span>
   <nav class="navtabs" data-on="tareas"></nav>
   <span class="spacer"></span>
+  <span class="inbox-slot" data-inbox></span>
   <span class="live" id="live" title="actualizado en vivo">en vivo</span>
   <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
 </header>
@@ -26,6 +28,7 @@
   <div id="list"></div>
 </main>
 <script src="/js/navtabs.js"></script>
+<script src="/js/inbox.js"></script>
 <script src="/js/tasks-home.js"></script>
 </body>
 </html>

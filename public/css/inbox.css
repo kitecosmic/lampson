@@ -1,0 +1,100 @@
+/* inbox.css — lo que te espera (preguntas, aprobaciones, merges, pases a otro equipo), igual en todas las pantallas:
+   la bandeja (⚑ en la cabecera → panel a la derecha, a pantalla completa en el celular) y el aviso de un objetivo en
+   su propia página. Lo dibuja js/inbox.js. */
+
+/* un aviso: el ícono de lo que es, quién y qué quiere, y la respuesta a mano */
+.aviso { --k:var(--accent); display:grid; grid-template-columns:36px minmax(0, 1fr); gap:12px; padding:12px 14px 12px 12px; background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--r-lg); box-shadow:inset 3px 0 0 var(--k); }
+.aviso.k-ask { --k:var(--amber); }
+.aviso.k-ok { --k:var(--rubric); }
+.aviso.k-pass, .aviso.k-git { --k:var(--accent); }
+.aviso.fresh { animation:avin .45s cubic-bezier(.2,.8,.2,1); }
+.aviso.going { opacity:.55; transition:opacity .2s; }
+@keyframes avin { from { opacity:0; translate:0 -8px; } }
+.av-ico { width:36px; height:36px; border-radius:50%; display:grid; place-items:center; background:color-mix(in srgb, var(--k) 16%, transparent); }
+.av-ico .ico { width:20px; height:20px; fill:none; stroke:var(--k); stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+.av-ico .ico circle.dot, .av-ico .ico circle.bit { fill:var(--k); stroke:none; }
+.av-body { min-width:0; display:flex; flex-direction:column; gap:8px; }
+/* el header del aviso no es la cabecera de la página: sin lo que cada pantalla le pone a `header` */
+.aviso .av-body > header { position:static; height:auto; margin:0; padding:0; background:none; border:0; box-shadow:none; }
+.av-body header { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:2px 12px; }
+.av-who { font:400 14.5px/1.35 var(--serif); color:var(--ink-2); }
+.av-who b { font-weight:600; color:var(--ink); }
+.av-meta { font:400 11.5px/1.3 var(--mono); color:var(--ink-3); }
+.av-meta a { color:var(--ink-2); }
+.av-q { font:400 14px/1.5 var(--serif); color:var(--ink); max-height:9.5em; overflow:auto; }
+.av-q p { margin:0 0 4px; } .av-q ul { margin:0 0 4px; padding-left:18px; }
+.aviso .av-q b { font:inherit; font-weight:600; color:inherit; letter-spacing:normal; text-transform:none; }
+blockquote.av-q { margin:0; padding:8px 12px; border-left:2px solid var(--rule-2); background:var(--paper-2); border-radius:0 var(--r-sm) var(--r-sm) 0; }
+.av-lbl { margin:0; font:600 12px/1.3 var(--mono); color:var(--ink-3); }
+.av-why { margin:0; font:400 13px/1.45 var(--serif); color:var(--ink-2); }
+.av-cmd { margin:0; padding:8px 10px; font:400 12px/1.5 var(--mono); color:var(--ink); background:var(--paper-2); border-radius:var(--r-sm); white-space:pre-wrap; word-break:break-word; max-height:7.5em; overflow:auto; }
+.av-acts { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.av-acts input { flex:1 1 200px; min-width:0; font:400 13.5px/1.4 var(--serif); background:var(--paper); color:var(--ink); border:1px solid var(--rule-2); border-radius:var(--r); padding:7px 10px; }
+.av-acts input:focus { outline:none; border-color:var(--ink-3); box-shadow:0 0 0 3px var(--accent-bg); }
+.av-exp { margin-left:auto; font:400 11.5px/1 var(--mono); color:var(--ink-3); }
+/* el merge: qué rama entra a cuál, y qué trae */
+.av-merge { display:flex; flex-direction:column; gap:6px; }
+.av-flow { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; }
+.av-flow code { font:600 12.5px/1.2 var(--mono); color:var(--ink); background:var(--paper-2); border:1px solid var(--rule); border-radius:var(--r-sm); padding:3px 7px; }
+.av-flow .arr { width:22px; height:11px; fill:none; stroke:var(--ink-3); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.av-badge { margin-left:auto; font:600 11.5px/1 var(--mono); padding:4px 8px; border-radius:var(--r-pill); }
+.av-badge.ok { color:var(--ok); background:color-mix(in srgb, var(--ok) 14%, transparent); }
+.av-badge.bad { color:var(--rubric); background:color-mix(in srgb, var(--rubric) 14%, transparent); }
+.av-stat { margin:0; font:400 12.5px/1.4 var(--mono); color:var(--ink-2); }
+.av-merge .add { color:var(--ok); } .av-merge .del { color:var(--rubric); }
+.av-commits { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:3px; }
+.av-commits li { display:flex; gap:8px; align-items:baseline; font:400 13.5px/1.4 var(--serif); color:var(--ink); min-width:0; }
+.av-commits .sha { flex:none; font:400 11.5px/1 var(--mono); color:var(--ink-3); }
+.av-commits .sj { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.av-commits .by { flex:none; margin-left:auto; font:400 11.5px/1 var(--mono); color:var(--ink-3); }
+.av-commits .more { color:var(--ink-3); font-size:12.5px; }
+.av-files summary { cursor:pointer; font:400 12px/1.4 var(--mono); color:var(--ink-2); }
+.av-files ul { list-style:none; margin:6px 0; padding:0; display:flex; flex-direction:column; gap:2px; max-height:9em; overflow:auto; }
+.av-files li { display:flex; gap:8px; font:400 12px/1.4 var(--mono); }
+.av-files .fp { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); }
+.av-warn { margin:0; font:400 13px/1.45 var(--serif); color:var(--rubric); }
+.av-warn code { font-family:var(--mono); font-size:12px; }
+@media (prefers-reduced-motion: reduce) { .aviso.fresh { animation:none; } }
+.aviso button.ok { color:var(--paper); background:var(--ok); border-color:var(--ok); }
+.aviso button.no { color:var(--rubric); border-color:var(--rubric); }
+
+/* el botón de la cabecera: solo aparece si algo te espera */
+.inbox-btn { display:inline-flex; align-items:center; gap:6px; font:600 12px/1 var(--mono); color:var(--paper); background:var(--rubric); border:1px solid var(--rubric); border-radius:var(--r-pill); padding:6px 11px; cursor:pointer; }
+.inbox-btn:hover { opacity:.88; color:var(--paper); background:var(--rubric); border-color:var(--rubric); }
+.inbox-btn[hidden] { display:none; }
+@media (max-width:640px) { .inbox-btn .t { display:none; } }
+
+/* la bandeja */
+.inbox-veil { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.28); }
+.inbox-veil[hidden], .inbox[hidden] { display:none; }
+.inbox { position:fixed; z-index:61; top:0; right:0; bottom:0; width:min(560px, 100vw); display:flex; flex-direction:column; background:var(--paper); border-left:1px solid var(--rule); box-shadow:-12px 0 40px rgba(0,0,0,.18); }
+.inbox-head { flex:none; display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--rule); }
+.inbox-head h2 { margin:0; flex:1; font:600 18px/1.2 var(--serif); color:var(--ink); }
+.inbox-head h2 small { font:400 12px/1 var(--mono); color:var(--ink-3); margin-left:6px; }
+.inbox-head button { padding:6px 10px; }
+.inbox-list { flex:1; overflow:auto; padding:12px 16px 24px; display:flex; flex-direction:column; gap:10px; }
+.inbox-ws { margin:8px 0 0; font:600 11.5px/1 var(--mono); letter-spacing:.04em; text-transform:uppercase; color:var(--ink-3); }
+.inbox-ws:first-child { margin-top:0; }
+.inbox .av-q { max-height:18em; }
+.inbox-empty { margin:24px 0; font:400 14px/1.5 var(--serif); color:var(--ink-3); text-align:center; }
+@media (max-width:640px) { .inbox { width:100vw; border-left:0; } .inbox-head { padding:calc(12px + env(safe-area-inset-top)) 14px 12px; } .inbox-list { padding:12px 12px calc(20px + env(safe-area-inset-bottom)); } }
+
+/* en la página de un objetivo: su pregunta, en el lugar */
+.ob-ask { margin:14px 0 0; }
+.ob-ask .av-q { max-height:none; }
+
+/* en la pantalla en vivo: la misma pregunta en una línea (el grafo y el tablero no se corren); tocarla abre la bandeja
+   en ese aviso */
+.ob-strip { --k:var(--amber); display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:6px 12px 6px 6px; background:var(--surface); border:1px solid var(--rule-2); border-radius:var(--r-lg); box-shadow:inset 3px 0 0 var(--k); cursor:pointer; color:var(--ink-2); }
+.ob-strip:hover { border-color:var(--k); background:var(--surface); color:var(--ink-2); }
+.ob-strip.k-ok { --k:var(--rubric); }
+.ob-strip.k-pass { --k:var(--accent); }
+.ob-strip .av-ico { flex:none; width:30px; height:30px; }
+.ob-strip .sx { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:400 14px/1.4 var(--serif); }
+.ob-strip .sx b { font-weight:600; color:var(--ink); }
+.ob-strip .g { color:var(--ink); }
+.ob-strip .go { flex:none; font:600 12.5px/1 var(--mono); color:var(--paper); background:var(--ink); border-radius:var(--r); padding:7px 11px; }
+@media (max-width:640px) { .ob-strip .go { padding:7px 9px; } .ob-strip .sx { white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-size:13.5px; } }
+/* al llegar desde la línea, el aviso se marca un momento */
+.aviso.lit { animation:avlit 1.6s ease-out; }
+@keyframes avlit { 0%, 30% { box-shadow:inset 3px 0 0 var(--k), 0 0 0 3px color-mix(in srgb, var(--k) 45%, transparent); } 100% { box-shadow:inset 3px 0 0 var(--k), 0 0 0 3px transparent; } }

@@ -19,7 +19,7 @@ task walk(dir, pat, acc, depth)
 
 export task tool(pattern, path)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let found be walk(c.ws(path), pattern, [], 0)
     when length(found) == 0
         give "no files matched " + pattern

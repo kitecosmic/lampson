@@ -7,7 +7,7 @@ export task tool(action, name, command, tail)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when action == "start"
         when command == nothing or command == ""
             raise("start needs a command")

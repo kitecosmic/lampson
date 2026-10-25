@@ -6,7 +6,7 @@
 -- quién hizo cada commit. La copia principal (la de la persona, con main) no se toca.
 --   * .lampson/ queda en .git/info/exclude (exclusión local: no cambia ningún archivo del repo)
 --   * lib/loop.syn traduce: las tools de archivos y bash del agente operan en su copia; para él es la raíz
---   * un merge/push que sale de su copia (toca la historia compartida) pide aprobación a la persona (lib/loop.syn)
+--   * la regla del asiento (abajo): autonomía total en su copia; integrar a main y el push los aprueba la persona
 use "./tools/common.syn" as c
 
 export let DIR be ".lampson/worktrees"
@@ -16,7 +16,7 @@ task git(args, cwd)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     try
         let r be run(G, args, 30, {"cwd": cwd})
         give {"ok": r["exit_code"] == 0, "out": trim(r["stdout"] + "\n" + r["stderr"])}
@@ -28,7 +28,7 @@ export task is_repo()
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     give git(["rev-parse", "--verify", "HEAD"], c.ROOT)["ok"]
 
 -- la copia de `agent` (la crea si falta). → {ok, root, branch, error}; root es relativa al workspace
@@ -36,7 +36,7 @@ export task ensure(team_id, agent, author)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let rel be DIR + "/" + agent
     let branch be "team/" + team_id + "/" + agent
     when not is_repo()
@@ -61,6 +61,40 @@ export task ensure(team_id, agent, author)
     git(["config", "--worktree", "user.email", author["email"]], c.ROOT + "/" + rel)
     give {"ok": true, "root": rel, "branch": branch, "error": ""}
 
+-- la copia de un asiento, al día con la rama principal antes de su turno. Sin trabajo propio pendiente (nada suyo
+-- que main no tenga, nada sin commitear) avanza sola a main; si tiene, se le avisa cuánto quedó atrás. (Visto en O-16:
+-- las copias estaban 8 a 22 commits detrás, el CPO leyó un CHANGELOG de tres versiones atrás y propuso features que ya
+-- estaban: un tercio del gasto en rehacerlo.) → {behind, ahead, moved, note} (note: lo que el agente tiene que saber)
+export task sync(team_id, agent)
+    require exec
+    require time
+    require file("workspace")
+    require file("workspace/**")
+    let rel be DIR + "/" + agent
+    let branch be "team/" + team_id + "/" + agent
+    let out be {"behind": 0, "ahead": 0, "moved": false, "note": ""}
+    when not is_repo() or not git(["rev-parse", "--verify", "--quiet", "refs/heads/" + branch], c.ROOT)["ok"]
+        give out
+    let into be main_branch()
+    when into == branch or into == "HEAD"
+        give out
+    let bh be git(["rev-list", "--count", branch + ".." + into], c.ROOT)
+    let ah be git(["rev-list", "--count", into + ".." + branch], c.ROOT)
+    set out["behind"] to when bh["ok"] then int(bh["out"]) otherwise 0
+    set out["ahead"] to when ah["ok"] then int(ah["out"]) otherwise 0
+    when out["behind"] == 0
+        give out
+    let has_copy be file_exists(c.ROOT + "/" + rel + "/.git")
+    let dirty be when has_copy then git(["status", "--porcelain"], c.ROOT + "/" + rel)["out"] != "" otherwise false
+    when out["ahead"] == 0 and not dirty
+        let mv be when has_copy then git(["merge", "--ff-only", "-q", into], c.ROOT + "/" + rel) otherwise git(["branch", "-f", branch, into], c.ROOT)
+        when mv["ok"]
+            set out["moved"] to true
+            set out["note"] to "Lampson brought your copy up to date with " + into + " before this turn (" + text(out["behind"]) + " new commit" + (when out["behind"] == 1 then "" otherwise "s") + " integrated by the team)."
+            give out
+    set out["note"] to "Your branch is " + text(out["behind"]) + " commit" + (when out["behind"] == 1 then "" otherwise "s") + " behind " + into + " (the team integrated work since you branched)" + (when out["ahead"] > 0 then " and has " + text(out["ahead"]) + " of your own not in it" otherwise "") + (when dirty then ", with uncommitted changes" otherwise "") + ". Before you read or build on the project, bring " + into + " in: `git merge " + into + "` in your copy" + (when dirty then " (commit or stash first)" otherwise "") + "."
+    give out
+
 -- el asiento de un equipo que se borra: su copia se va (lo que tenía sin commitear queda en un commit «wip»); su rama
 -- se borra si ya está en la rama principal, y si no, se renombra a archive/<equipo>/<agente>-<fecha>: el trabajo no se
 -- pierde, pero un equipo nuevo con el mismo nombre arranca de cero. → {copy, branch} (qué pasó con cada una)
@@ -68,7 +102,7 @@ export task retire(team_id, agent)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let rel be DIR + "/" + agent
     let branch be "team/" + team_id + "/" + agent
     let out be {"copy": "", "branch": ""}
@@ -95,7 +129,7 @@ export task main_branch()
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let r be git(["rev-parse", "--abbrev-ref", "HEAD"], c.ROOT)
     give when r["ok"] then r["out"] otherwise "main"
 
@@ -106,7 +140,7 @@ export task preview(command)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let cmd be " " + replace(text(command), "\n", " ") + " "
     when not is_repo()
         give nothing
@@ -156,7 +190,7 @@ task with_diff(o, a, b)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let out be o
     let commits be []
     let lg be git(["log", "--no-merges", "--format=%h%x09%an%x09%s", "-n", "12", a + ".." + b], c.ROOT)
@@ -179,35 +213,300 @@ task with_diff(o, a, b)
     give out
 
 -- las tools que operan en la copia del agente, y cómo se traducen sus args
-export let FILE_TOOLS be ["read", "write", "edit", "ls", "find", "grep"]
+export let FILE_TOOLS be ["read", "write", "edit", "ls", "find", "grep", "lsp"]
 
 export task rooted(name, args, root)
     let a be args
-    when name == "bash"
-        set a["command"] to "cd \"" + root + "\" && " + text(args["command"])
+    when name == "bash" or name == "process"
+        when contains(args, "command") and args["command"] != nothing and text(args["command"]) != ""
+            set a["command"] to "cd \"" + root + "\" && " + text(args["command"])
         give a
     let p be when contains(args, "path") and args["path"] != nothing then replace(text(args["path"]), "\\", "/") otherwise "."
     while starts_with(p, "./")
         set p to slice(p, 2, length(p))
     when p == "." or p == ""
         set a["path"] to root
-    otherwise when starts_with(p, root + "/") or p == root or starts_with(p, ".lampson/spill/")
+    otherwise when starts_with(p, root + "/") or p == root or starts_with(p, ".lampson/spill/") or absolute_path(p) != ""
         set a["path"] to p
     otherwise
         set a["path"] to root + "/" + p
     give a
 
--- ¿este comando toca la historia compartida desde una copia de agente? push siempre; merge/rebase/update-ref/branch -f
--- cuando sale de su copia (-C, cd o ../): adentro de su copia puede traer main a su rama sin pedir nada
-export task touches_shared(command)
-    let cmd be " " + lower(replace(text(command), "\n", " ")) + " "
-    when not contains(cmd, "git")
+-- ---------- la regla del asiento (equipos con git) ----------
+-- Un equipo es una organización: cada asiento tiene TODAS las herramientas y autonomía total en su copia (su puesto) y
+-- en las de la gente a su cargo (un jefe arregla lo de los suyos; el líder, lo de todos). La persona es el directorio:
+-- aprueba solo lo que cruza el borde — tocar su copia del proyecto (integrar a main, una vez por objetivo) y cada push
+-- — y nada sale del proyecto. bash no lo encierra el sistema operativo: acá se lee el comando como lo leería el shell
+-- (sin el texto entre comillas ni los heredocs, siguiendo cada cd) y se frena lo que cae fuera de su puesto, con un
+-- mensaje que dice que es una regla del equipo y no un error del comando (si no, el modelo cree que se equivocó de
+-- sintaxis y prueba variantes o inventa la causa).
+export let GIT_READ be ["log", "diff", "show", "status", "branch", "rev-parse", "merge-base", "ls-files", "ls-tree", "blame", "shortlog", "describe", "cat-file", "rev-list", "grep", "for-each-ref", "fetch", "tag", "reflog", "help", "version"]
+-- comandos que solo miran: con ellos un asiento lee en todo el proyecto
+export let READ_CMDS be ["cat", "head", "tail", "less", "more", "ls", "dir", "tree", "pwd", "echo", "printf", "grep", "egrep", "fgrep", "rg", "find", "wc", "diff", "cmp", "stat", "file", "du", "df", "sort", "uniq", "cut", "tr", "jq", "basename", "dirname", "realpath", "readlink", "which", "type", "test", "[", "true", "false", "sleep", "date", "env", "printenv", "nl", "od", "xxd", "md5sum", "sha1sum", "sha256sum", "column", "fold", "cd", "pushd", "popd", "exit"]
+let RULE be "NOT RUN — your command is fine (this is not a syntax or tool error): it breaks a team rule. "
+
+-- hasta dónde sube una ruta relativa desde la copia: «../dev» 1, «../../..» 3 (la copia principal), 4 o más sale del
+-- proyecto. Un rango de git (main..HEAD) no es una ruta: los «..» tienen que estar sueltos o entre separadores.
+export task climbs(cmd)
+    let most be 0
+    each m in regex_find_all(cmd, "(^|[\\s\"'=:(<>])((\\.\\.[\\\\/])*\\.\\.)([\\\\/]|$|[\\s\"';&|)])")
+        let n be length(split(m, "..")) - 1
+        when n > most
+            set most to n
+    give most
+
+-- la primera ruta absoluta del comando ("" si no hay): /algo, C:\…, ~, $HOME. /dev/null y las URLs no cuentan.
+export task absolute_path(cmd)
+    let t be regex_replace(" " + lower(cmd) + " ", "/dev/(null|stdout|stderr)", " ")
+    set t to regex_replace(t, "[a-z][a-z0-9+.-]*://\\S*", " ")
+    let m be regex_find_all(t,"(^|[\\s\"'=<>(;&|])(/[a-z0-9_.~$-]|/\\s|[a-z]:[\\\\/]|~[\\\\/\\s]|\\$home\\b|\\$\\{home\\}|%userprofile%)")
+    give when length(m) == 0 then "" otherwise trim(regex_replace(m[0], "^[\\s\"'=<>(;&|]", ""))
+
+-- el comando sin lo que es texto y no ruta: el cuerpo de un heredoc, y lo que va entre comillas con espacios (un
+-- mensaje de commit, un patrón de grep, el código de un python -c: «PATCH /tasks/:id» no es una ruta). Entre comillas
+-- sin espacios («"../dev"») sí puede ser una ruta y queda, sin las comillas. Los saltos de línea separan comandos.
+export task plain(cmd)
+    let lines be split(replace(text(cmd), "\r", ""), "\n")
+    let kept be []
+    let endtag be ""
+    each l in lines
+        when endtag != ""
+            when trim(l) == endtag
+                set endtag to ""
+        otherwise
+            set kept to append(kept, l)
+            let h be regex_find_all(l, "(^|[^<])<<-?\\s*['\"]?[A-Za-z_][A-Za-z0-9_]*")
+            when length(h) > 0
+                set endtag to regex_replace(h[0], "^[^<]?<<-?\\s*['\"]?", "")
+    let s be join(kept, " ; ")
+    let out be ""
+    let i be 0
+    let n be length(s)
+    while i < n
+        let ch be slice(s, i, i + 1)
+        when ch == "'" or ch == "\""
+            let j be i + 1
+            let body be ""
+            while j < n and slice(s, j, j + 1) != ch
+                when ch == "\"" and slice(s, j, j + 1) == "\\" and j + 1 < n
+                    set body to body + slice(s, j, j + 2)
+                    set j to j + 2
+                otherwise
+                    set body to body + slice(s, j, j + 1)
+                    set j to j + 1
+            -- «tr '\n' ','»: un escape solo no es una ruta (con \ → / se leería «/n», absoluta); un patrón con |
+            -- tampoco («grep "x\|/done"»): ninguna ruta lleva |
+            set out to out + (when matches(body, ".*\\s.*") or body == "" or matches(body, "^(\\\\[a-z0-9]+)+$") or contains(body, "|") then " Q " otherwise body)
+            set i to j + 1
+        otherwise
+            set out to out + ch
+            set i to i + 1
+    give out
+
+-- los comandos de una línea de shell (&&, ||, ; y |)
+export task segments(cmd)
+    give where(apply(split(regex_replace(cmd, "&&|\\|\\||;|\\|", "\n"), "\n"), (s) => trim(s)), (s) => s != "")
+
+-- el subcomando de git de un segmento ("git -C ../dev --no-pager diff x" → "diff"); "" si no es git
+export task git_sub(seg)
+    let w be where(split(regex_replace(trim(seg), "\\s+", " "), " "), (x) => x != "")
+    when length(w) == 0 or w[0] != "git"
         give ""
-    when matches(cmd, ".*\\bgit\\b.*\\bpush\\b.*")
-        give "git push"
-    let leaves be contains(cmd, " -c ") or contains(cmd, "../") or contains(cmd, "..\\") or matches(cmd, ".*\\bcd\\b.*")
-    when leaves and matches(cmd, ".*\\bgit\\b.*\\b(merge|rebase|update-ref|cherry-pick|reset)\\b.*")
-        give "git merge/rebase/reset outside your working copy"
-    when matches(cmd, ".*\\bgit\\b.*\\bbranch\\b.*\\s-(f|d|D)\\b.*") or matches(cmd, ".*\\bgit\\b.*\\bupdate-ref\\b.*")
-        give "git branch -f/-d or update-ref"
+    let i be 1
+    while i < length(w)
+        let t be w[i]
+        when t == "-c" or t == "-C" or t == "--git-dir" or t == "--work-tree"
+            set i to i + 2
+        otherwise when starts_with(t, "-")
+            set i to i + 1
+        otherwise
+            give t
     give ""
+
+-- una ruta desde un lugar del proyecto. Un lugar es la lista de carpetas desde la raíz de la copia principal ([] es la
+-- raíz; [".lampson", "worktrees", "dev"] la copia de dev); si empieza con «..» quedó fuera del proyecto.
+-- «@root» es la raíz del proyecto (así se reescribe su ruta absoluta).
+export task walk(start, p)
+    let out be start
+    let q be replace(p, "\\", "/")
+    when starts_with(q, "@root")
+        set out to []
+        set q to slice(q, 5, length(q))
+    each part in split(q, "/")
+        when part == ".."
+            when length(out) > 0 and out[length(out) - 1] != ".."
+                set out to slice(out, 0, length(out) - 1)
+            otherwise
+                set out to append(out, "..")
+        otherwise when part != "" and part != "."
+            set out to append(out, part)
+    give out
+
+-- qué es un lugar: {kind: mine | peer | lampson | main | outside, agent}
+export task zone(loc, me)
+    when length(loc) > 0 and loc[0] == ".."
+        give {"kind": "outside", "agent": ""}
+    when length(loc) >= 3 and loc[0] == ".lampson" and loc[1] == "worktrees"
+        give {"kind": when loc[2] == lower(me["agent"]) then "mine" otherwise "peer", "agent": loc[2]}
+    when length(loc) > 0 and loc[0] == ".lampson"
+        give {"kind": "lampson", "agent": ""}
+    give {"kind": "main", "agent": ""}
+
+-- ¿la palabra es una ruta? (tiene separadores o es «..»/«.»); un rango de git (main..HEAD) o una URL no
+task pathish(w)
+    when w == ".." or w == "." or starts_with(w, "@root")
+        give true
+    when contains(w, "://") or not (contains(w, "/") or contains(w, "\\"))
+        give false
+    give true
+
+-- los que dependen de un asiento, directa o indirectamente (me.below lo arma runtime.syn con teams.below)
+task below(me)
+    give when contains(me, "below") and me["below"] != nothing then apply(me["below"], (x) => lower(text(x))) otherwise []
+
+task seat_deny(why, note)
+    give {"decision": "deny", "reason": "team rule: " + why, "note": RULE + note, "grant": false}
+
+-- ¿puede cambiar algo en ese lugar? → nothing (sí) o el veredicto (deny / ask para integrar)
+task may_change(z, me, what)
+    let mine be "team/" + lower(me["team"]) + "/" + lower(me["agent"])
+    when z["kind"] == "mine"
+        give nothing
+    when z["kind"] == "peer"
+        when me["lead"] or contains(below(me), z["agent"])
+            give nothing
+        give seat_deny("not your copy", "`" + what + "` would change " + z["agent"] + "'s copy (../" + z["agent"] + "), and " + z["agent"] + " does not work under you. Read it as much as you want; to change it, bring their branch into your copy (git merge team/" + lower(me["team"]) + "/" + z["agent"] + "), or tell " + z["agent"] + " what to fix with `send`.")
+    when z["kind"] == "main"
+        when not me["lead"] and length(below(me)) == 0
+            give seat_deny("the person's copy", "`" + what + "` would change the main checkout (../../..), the person's own copy. Whoever leads or reviews integrates into it. Commit on your branch (" + mine + ") and `send` " + (when me["boss"] != "" then me["boss"] otherwise "your lead") + " that it is ready.")
+        when me["integration_ok"]
+            give nothing
+        give {"decision": "ask", "reason": "works in the person's own copy of the project (" + me["main"] + ": integrating, fixing, tagging) — the person approves once per objective: after that, this objective doesn't ask again", "note": "", "grant": true}
+    when z["kind"] == "lampson"
+        give seat_deny("Lampson's folder", "`" + what + "` would change Lampson's own folder (.lampson). The copies are ../<agent> and the main checkout is ../../..")
+    give seat_deny("outside the project", "`" + what + "` points outside the project, and nobody in a team works outside the project. Bash starts in your copy; use paths relative to it (other copies: ../<agent>, the main checkout: ../../..).")
+
+-- qué hace un asiento con un comando de bash. me = {agent, team, lead (bool), below (los que dependen de él), boss,
+-- main (rama principal), home (ruta absoluta del proyecto, opcional), integration_ok (bool: la persona ya aprobó
+-- trabajar en su copia en este objetivo)} → {decision: allow|ask|deny, reason, note (lo que lee el modelo si no corre),
+-- grant (aprobarlo vale para el resto del objetivo)}
+export task seat_bash(command, me)
+    let mine be "team/" + lower(me["team"]) + "/" + lower(me["agent"])
+    let cmd be " " + lower(replace(plain(command), "\\", "/")) + " "
+    let home be when contains(me, "home") and me["home"] != nothing then lower(replace(text(me["home"]), "\\", "/")) otherwise ""
+    when home != ""
+        set home to regex_replace(home, "/+$", "")
+        set cmd to replace(cmd, home, "@root")
+        -- git bash escribe C:/x como /c/x
+        when matches(home, "^[a-z]:/.*")
+            set cmd to replace(cmd, "/" + slice(home, 0, 1) + slice(home, 2, length(home)), "@root")
+    let abs be absolute_path(regex_replace(cmd, "@root\\S*", " "))
+    when abs != ""
+        give seat_deny("outside the project", "Your working copy is your workplace: bash starts there and relative paths are relative to it. This command names an absolute path outside the project (" + abs + "), and nobody in a team works outside the project. Use paths relative to your copy (other copies: ../<agent>, the main checkout: ../../..).")
+    when matches(cmd, ".*\\bgit\\b.*\\bpush\\b.*")
+        when not me["lead"]
+            give seat_deny("push is the lead's", "Only the lead pushes, with the person's approval. Commit on your branch (" + mine + ") and `send` " + (when me["boss"] != "" then me["boss"] otherwise "your lead") + " that it is ready.")
+        give {"decision": "ask", "reason": "git push — leaves this machine (the person approves each push)", "note": "", "grant": false}
+    -- desde su copia, .lampson/worktrees/… no existe: lo nombra quien cree estar en la raíz del proyecto
+    when contains(regex_replace(cmd, "@root\\S*", " "), ".lampson/worktrees")
+        give seat_deny("wrong path", "You are already inside your own copy (bash starts there), so `.lampson/worktrees/…` does not exist from here. The other copies are ../<agent> and the main checkout is ../../..")
+    -- cada segmento desde donde lo dejó el cd anterior: «cd ../../.. && git merge x» trabaja en la copia principal
+    let here be [".lampson", "worktrees", lower(me["agent"])]
+    let pending be nothing
+    each s in segments(cmd)
+        let w be where(split(regex_replace(s, "\\s+", " "), " "), (x) => x != "")
+        -- X=1 cmd: el comando es el que sigue a las variables
+        while length(w) > 0 and matches(w[0], "^[a-z_][a-z0-9_]*=.*")
+            set w to slice(w, 1, length(w))
+        when length(w) > 0
+            let cmd0 be w[0]
+            when cmd0 == "cd" or cmd0 == "pushd"
+                let dest be when length(w) > 1 then w[1] otherwise "~"
+                when dest == "~" or starts_with(dest, "$home")
+                    give seat_deny("outside the project", "`cd` alone goes to your home folder, outside the project. Bash starts in your copy; use paths relative to it.")
+                when dest != "-" and not starts_with(dest, "$")
+                    set here to walk(here, dest)
+                when zone(here, me)["kind"] == "outside"
+                    give seat_deny("outside the project", "`" + s + "` leaves the project. Bash starts in your copy; the other copies are ../<agent> and the main checkout is ../../.. — nothing above it.")
+            otherwise
+                -- dónde actúa: donde está parado y cada ruta que nombra
+                let places be [here]
+                each x in slice(w, 1, length(w))
+                    let vx be regex_replace(regex_replace(x, "^-[a-z-]*=", ""), "^[0-9]*[<>]+&?", "")
+                    when pathish(vx)
+                        set places to append(places, walk(here, vx))
+                let sub be git_sub(s)
+                let redirect be contains(regex_replace(s, "[0-9]*>&[0-9-]+|&?[0-9]*>>?\\s*/dev/(null|stdout|stderr)", " "), ">")
+                let reads be not redirect and ((cmd0 == "git" and contains(GIT_READ, sub) and not matches(" " + s + " ", ".*\\s-(d|D|f|m|M|-delete|-force)\\s.*")) or (cmd0 != "git" and contains(READ_CMDS, cmd0) and not (cmd0 == "find" and matches(s, ".*-(delete|exec|execdir|ok)\\b.*"))) or (cmd0 == "sed" and not matches(s, ".*\\s-[a-z]*i.*")))
+                each loc in places
+                    let z be zone(loc, me)
+                    when z["kind"] == "outside"
+                        give seat_deny("outside the project", "`" + s + "` points outside the project, and nobody in a team works outside the project. Use paths relative to your copy (other copies: ../<agent>, the main checkout: ../../..).")
+                    when not reads
+                        let vc be may_change(z, me, s)
+                        when vc != nothing
+                            when vc["decision"] == "deny"
+                                give vc
+                            set pending to vc
+                -- ramas: mover o borrar la de alguien que no depende de vos, no; la principal es integrar
+                when (sub == "update-ref" or sub == "branch") and not reads
+                    each b in regex_find_all(s, "team/[a-z0-9._-]+/[a-z0-9._-]+")
+                        let owner be split(b, "/")[2]
+                        when b != mine and not me["lead"] and not contains(below(me), owner)
+                            give seat_deny("not your branch", "`" + b + "` is " + owner + "'s branch, and " + owner + " does not work under you. You move or delete your own branches (" + mine + ") and those of whoever works under you.")
+                    when matches(" " + s + " ", ".*[\\s/]" + lower(me["main"]) + "\\s.*")
+                        let vb be may_change({"kind": "main", "agent": ""}, me, s)
+                        when vb != nothing
+                            when vb["decision"] == "deny"
+                                give vb
+                            set pending to vb
+    when pending != nothing
+        give pending
+    give {"decision": "allow", "reason": "within your seat", "note": "", "grant": false}
+
+-- las tools de archivos de un asiento: leer en todo el proyecto; cambiar donde puede cambiar bash
+export task seat_file(name, args, me)
+    when name != "write" and name != "edit"
+        give {"decision": "allow", "reason": "reading", "note": "", "grant": false}
+    let p be when contains(args, "path") and args["path"] != nothing then replace(text(args["path"]), "\\", "/") otherwise "."
+    let home be when contains(me, "home") and me["home"] != nothing then regex_replace(replace(text(me["home"]), "\\", "/"), "/+$", "") otherwise ""
+    when home != "" and starts_with(lower(p), lower(home))
+        set p to "@root" + slice(p, length(home), length(p))
+    when absolute_path(p) != "" and not starts_with(p, "@root")
+        give seat_deny("outside the project", "`" + text(args["path"]) + "` is outside the project. Paths are relative to your copy (other copies: ../<agent>, the main checkout: ../../..).")
+    let v be may_change(zone(walk([".lampson", "worktrees", lower(me["agent"])], p), me), me, name + " " + text(args["path"]))
+    when v != nothing
+        give v
+    give {"decision": "allow", "reason": "within your seat", "note": "", "grant": false}
+
+-- integrar a la rama principal: la persona lo aprueba una vez por objetivo (me.objective); sin objetivo, cada vez.
+-- En un archivo y no en state_*: la regla corre también en la terminal y en los tests, no solo en serve
+export let GRANTS_FILE be ".lampson/team-integrations.json"
+
+task grants()
+    require file(".lampson")
+    require file(".lampson/**")
+    try
+        let g be json_decode(read_file(GRANTS_FILE))
+        give when type_of(g) == "map" then g otherwise {}
+    recover err
+        give {}
+
+task grant_key(me)
+    give me["team"] + ":" + text(me["objective"])
+
+export task integration_ok(me)
+    require file(".lampson")
+    require file(".lampson/**")
+    when not contains(me, "objective") or me["objective"] == 0
+        give false
+    give contains(grants(), grant_key(me))
+
+export task grant_integration(me)
+    require file(".lampson")
+    require file(".lampson/**")
+    require time
+    when contains(me, "objective") and me["objective"] != 0
+        let g be grants()
+        set g[grant_key(me)] to now()
+        write_file(GRANTS_FILE, json_encode(g))

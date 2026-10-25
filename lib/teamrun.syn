@@ -4,7 +4,11 @@
 -- (lib/mailbox.syn), como un mensaje de un cliente: una conversación por agente y equipo (thread "team:<id>"),
 -- nunca dos turnos a la vez, ráfagas juntas. Cada turno arranca con lo que llegó + lo que pasó en el equipo desde su
 -- último turno + sus tareas (teams.turn_text).
---   * mensajes: los que `send` dejó pendientes en la base → al buzón del destinatario
+--   * mensajes: los que `send` dejó pendientes en la base → al buzón del destinatario. A quien está libre se le
+--     espera QUIET_SECONDS por si llega otro (los de una ráfaga van juntos en UN turno); a quien está trabajando le
+--     llegan en el momento (a mitad de turno). Los de un objetivo que ya terminó no despiertan a nadie.
+--   * cada turno: la copia del asiento al día con main (lib/worktree.syn → sync) y la conversación limpia
+--     (lib/runtime.syn → open, teams.fresh_turn)
 --   * rondas: un agente con trabajo (novedades de otros o tareas suyas abiertas) cada round_minutes del equipo
 --   * presupuesto: un agente que pasó su tope diario no recibe turnos (sus mensajes esperan al día siguiente);
 --     queda UNA entrada en el registro por día
@@ -12,8 +16,14 @@ use "./teams.syn" as teams
 use "./mailbox.syn" as mailbox
 use "./runtime.syn" as runtime
 use "./approvals.syn" as approvals
+use "./worktree.syn" as worktree
 
 export let TICK_SECONDS be 3
+-- mensajes a un asiento libre: se entregan cuando pasan QUIET_SECONDS sin otro nuevo para él, o MAX_WAIT_SECONDS
+-- desde el primero. (Visto en O-16: el CEO le mandó dos mensajes al CTO en 21 s; el primero lo despertó y el segundo
+-- le llegó a mitad del turno, contestando algo ya resuelto.)
+export let QUIET_SECONDS be 12
+export let MAX_WAIT_SECONDS be 40
 -- lo que el hub muestra de este workspace (inicio, /equipos) sin abrir su base: equipos, objetivos y lo que espera
 export let SUMMARY_FILE be ".lampson/teams-summary.json"
 export let ASSIGNED_TEXT be "[assigned] You have a new task on the board (see your open tasks below). Start on it; if something is unclear, `send` whoever assigned it."
@@ -22,7 +32,7 @@ export let ROUND_TEXT be "[round] Your periodic round: look at your open tasks a
 task flag_budget(team, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     let k be "teams:budget:" + team["id"] + ":" + agent + ":" + format_time(now(), "%Y-%m-%d")
     when state_get(k) == nothing
@@ -32,14 +42,15 @@ task flag_budget(team, agent)
 -- un turno para `agent` en su conversación del equipo
 export task deliver_to(team, agent, sender, head)
     require db(".lampson/teams.db")
+    require exec
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let spec be runtime.get(agent)
     when spec == nothing
         teams.log("team:" + team["id"], "lampson", "error", "", "no agent file for '" + agent + "' — create .lampson/agents/" + agent + ".agent.json")
@@ -55,21 +66,30 @@ export task deliver_to(team, agent, sender, head)
         when m["agent"] != agent and mailbox.working(m["agent"], "team:" + team["id"])
             set busy to append(busy, m["agent"])
     let now_line be when length(busy) == 0 then "" otherwise "\nWorking right now (your messages reach them when their turn ends — wait for them, don't reassign their tasks): " + join(busy, ", ")
-    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head) + now_line, "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
+    -- su copia al día con main antes de un turno nuevo (en medio de uno no: los archivos cambiarían bajo sus pies)
+    let git_line be ""
+    when team["worktrees"] and not mailbox.working(agent, "team:" + team["id"])
+        try
+            let sy be worktree.sync(team["id"], agent)
+            set git_line to when sy["note"] != "" then "\n[git] " + sy["note"] otherwise ""
+        recover err
+            set git_line to ""
+    let sobre be {"to": agent, "thread": "team:" + team["id"], "session": "", "from": sender, "text": teams.turn_text(team, agent, head) + git_line + now_line, "images": [], "channel": "team", "meta": {"team": team["id"], "from": sender}}
     mailbox.submit(sobre, {"mode": when spec["permission"] != "" then "" otherwise "strict", "buffer": mailbox.buffer_of(spec, false)})
     give true
 
 -- un turno del objetivo `o` en su conversación (thread objective:<id>)
 export task deliver_objective(o)
     require db(".lampson/teams.db")
+    require exec
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let spec be runtime.get(o["agent"])
     when spec == nothing
         teams.obj_set(o["id"], {"status": "failed", "result": "no agent file for '" + o["agent"] + "'"})
@@ -94,7 +114,7 @@ export task deliver_objective(o)
 export task objective_due(o)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     when o["status"] != "active"
         give false
@@ -125,9 +145,9 @@ export let STALL_TEXT be "[stalled] Nothing has moved in the team for 10 minutes
 task stalled(o)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let tm be teams.get(o["team"])
     when tm == nothing or now() - o["last_end"] < STALL_SECONDS
@@ -142,13 +162,16 @@ export task write_summary()
     require db(".lampson/teams.db")
     require time
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
-    -- roles: lo que /equipos del hub muestra de cada equipo (el rol, o el id del agente si no tiene)
-    let ts be apply(teams.all(), (t) => {"id": t["id"], "name": t["name"], "description": t["description"], "members": length(t["members"]), "lead": teams.lead_of(t), "roles": apply(t["members"], (m) => when contains(m, "role") and m["role"] != nothing and text(m["role"]) != "" then text(m["role"]) otherwise text(m["agent"]))})
+    require file.read("workspace/**")
+    -- roles: lo que /equipos del hub muestra de cada equipo (el rol, o el id del agente si no tiene); seats: el rol de
+    -- cada agente, para que la bandeja (public/js/inbox.js) diga «CTO te pregunta» y no «cto»
+    let ts be apply(teams.all(), (t) => {"id": t["id"], "name": t["name"], "description": t["description"], "members": length(t["members"]), "lead": teams.lead_of(t), "roles": apply(t["members"], (m) => when contains(m, "role") and m["role"] != nothing and text(m["role"]) != "" then text(m["role"]) otherwise text(m["agent"])), "seats": apply(t["members"], (m) => {"agent": m["agent"], "role": when contains(m, "role") and m["role"] != nothing and text(m["role"]) != "" then text(m["role"]) otherwise text(m["agent"])})})
     let objs be teams.obj_list()
     let open_o be where(objs, (o) => contains(["active", "waiting", "paused"], o["status"]))
     let closed be slice(where(objs, (o) => not contains(["active", "waiting", "paused"], o["status"])), 0, 5)
@@ -167,17 +190,20 @@ export task write_summary()
     give body
 
 export task tick()
+    require exec
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require env("LAMPSON_*")
     require db(".lampson/teams.db")
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let n be 0
     try
         write_summary()
@@ -190,23 +216,43 @@ export task tick()
     let teams_now be teams.all()
     when length(teams_now) == 0
         give n
+    -- los pendientes, por destinatario (scope + agente), en orden
+    let groups be {}
+    let order be []
     each m in teams.pending()
         let tid be slice(m["scope"], 5, length(m["scope"]))
         let found be where(teams_now, (t) => t["id"] == tid)
         when length(found) == 0
             teams.mark(m["id"], "dropped")
+        otherwise when teams.after_close(tid, m)
+            teams.mark(m["id"], "dropped")
         otherwise
-            let team be found[0]
-            when teams.over_budget(team, m["recipient"])
-                flag_budget(team, m["recipient"])
+            let gk be m["scope"] + "|" + m["recipient"]
+            when not contains(groups, gk)
+                set groups[gk] to []
+                set order to append(order, gk)
+            set groups[gk] to append(groups[gk], m)
+    each gk in order
+        let ms be groups[gk]
+        let m0 be ms[0]
+        let team be where(teams_now, (t) => t["id"] == slice(m0["scope"], 5, length(m0["scope"])))[0]
+        let rcpt be m0["recipient"]
+        let newest be ms[length(ms) - 1]["at"]
+        -- libre: espera un rato por si llega otro (la persona y la continuación de un turno cortado, enseguida)
+        let urgent be length(where(ms, (x) => x["sender"] == "person" or x["sender"] == "lampson")) > 0
+        let ready be urgent or mailbox.working(rcpt, m0["scope"]) or now() - newest >= QUIET_SECONDS or now() - m0["at"] >= MAX_WAIT_SECONDS
+        when ready
+            when teams.over_budget(team, rcpt)
+                flag_budget(team, rcpt)
             otherwise
-                let who be teams.member(team, m["sender"])
-                let head be when m["sender"] == "person" then "[message from the person who owns this team — act on it]\n" + m["text"] otherwise "[message from " + m["sender"] + (when who != nothing then " (" + who["role"] + ")" otherwise "") + "]\n" + m["text"]
-                when deliver_to(team, m["recipient"], m["sender"], head)
-                    teams.mark(m["id"], "delivered")
+                let head be join(apply(ms, (x) => teams.msg_head(team, x)), "\n\n")
+                when deliver_to(team, rcpt, m0["sender"], head)
+                    each x in ms
+                        teams.mark(x["id"], "delivered")
                     set n to n + 1
                 otherwise
-                    teams.mark(m["id"], "failed")
+                    each x in ms
+                        teams.mark(x["id"], "failed")
     each team in teams_now
         each mem in team["members"]
             when teams.over_budget(team, mem["agent"])

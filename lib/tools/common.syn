@@ -90,17 +90,17 @@ export task glob_match(name, pat)
 -- hash). Es un gate en CÓDIGO, no una regla de prompt: elimina "edita a ciegas y pisa" sin gastar tokens.
 export task file_hash(real)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     give decode(sha256(read_file(real)), "hex")
 
 export task mark_observed(real)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     share file_hash(real) as "observed:" + real
 
 export task check_observed(real, action)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     observe "observed:" + real as seen
     let shown be unws(real)
     when seen == nothing

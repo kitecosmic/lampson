@@ -24,6 +24,9 @@ intent: "Web chat for a coding agent: tools from an allow-list, least-privilege 
 
 require serve(8080)
 require net
+-- Synsema 0.6.46+: `require net` solo llega a direcciones públicas; LLMs locales, MCP, el hub y fetch a localhost/LAN
+require net("0.0.0.0/0")
+require net("::/0")
 require time
 require exec
 require random
@@ -35,19 +38,19 @@ require sign("LAMPSON_TOOLS")
 require db(".lampson/teams.db")
 require judge
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 require file.read("skills")
-require file.read("skills/*")
+require file.read("skills/**")
 require file.read("plugins")
-require file.read("plugins/*")
+require file.read("plugins/**")
 require file.read("agents")
-require file.read("agents/*")
+require file.read("agents/**")
 require file("memory")
-require file("memory/*")
+require file("memory/**")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 require file.read("public")
-require file.read("public/*")
+require file.read("public/**")
 
 use "./lib/provider.syn" as provider
 use "./lib/tools.syn" as tools

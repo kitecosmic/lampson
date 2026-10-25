@@ -24,7 +24,7 @@ task path_of(id)
 
 export task save(id, messages, meta)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     require env("LAMPSON_*")
     -- cada sesión queda marcada con el proyecto (slug del workspace) para que list() no mezcle proyectos
@@ -40,7 +40,7 @@ export task save(id, messages, meta)
 
 export task load(id)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let doc be json_decode(read_file(path_of(id)))
     give doc
 
@@ -55,7 +55,7 @@ export task from_other_run(doc)
 
 export task exists(id)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when not valid_id(id)
         give false
     try
@@ -68,7 +68,7 @@ export task exists(id)
 -- Sesiones viejas sin marca de proyecto se listan igual (anteriores a esta marca).
 export task list()
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require env("LAMPSON_*")
     let mine be memo.slug()
     let out be []
@@ -105,7 +105,7 @@ export task id_key(id)
 -- Lineal sobre los archivos (local, decenas o cientos de sesiones): suficiente; migrar a db si crece.
 export task search(q, limit)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require env("LAMPSON_*")
     let needle be lower(trim(text(q)))
     let out be []
@@ -141,7 +141,7 @@ export task delete(id)
     require exec
     require env("OS")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when not matches(id, "[a-zA-Z0-9_-]{1,40}")
         raise("invalid session id")
     when not exists(id)

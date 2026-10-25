@@ -119,7 +119,7 @@ task safe_id(id, step)
 -- cabeza + cola, el resto a disco
 export task spill(name, id, out)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     -- read y fetch se recortan solas (fetch: cabeza+cola con el texto completo ya en .lampson/spill)
     when name == "read" or name == "fetch" or length(out) <= SPILL_CAP
         give out
@@ -222,6 +222,8 @@ export task estimate_tokens(messages)
 -- resume todo menos el system y los últimos `keep_last` mensajes en un único mensaje user.
 export task compact(cfg, messages, keep_last)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     let n be length(messages)
     when n <= keep_last + 2
@@ -317,26 +319,36 @@ task execute(tc, opts, on_event)
     let verdict be permission.evaluate(name, args, when forced == "auto" then "yolo" otherwise opts["permission_mode"])
     when forced == "ask" and verdict["decision"] == "allow"
         set verdict to {"decision": "ask", "reason": "this agent asks before every " + name + " call"}
-    -- equipos (lib/worktree.syn): el agente trabaja en SU copia; tocar la historia compartida (merge a main, push…)
-    -- lo aprueba siempre la persona, en cualquier modo (salvo lo prohibido, que sigue prohibido)
+    -- equipos con git (lib/worktree.syn, la regla del asiento): una organización. En SU copia el asiento tiene
+    -- autonomía total, sin preguntar; la persona es el directorio y aprueba solo el borde: integrar a la rama principal
+    -- (una vez por objetivo) y el push. Lo que no es de su puesto no corre, con un mensaje que dice por qué. Lo prohibido
+    -- sigue prohibido; un asiento strict sigue sin hacer lo peligroso; una tool con approve: ask sigue preguntando.
     let wroot be when contains(opts, "root") and opts["root"] != nothing then text(opts["root"]) otherwise ""
-    when wroot != "" and name == "bash" and verdict["decision"] != "deny"
-        let shared be worktree.touches_shared(when contains(args, "command") then args["command"] otherwise "")
-        when shared != ""
-            set verdict to {"decision": "ask", "reason": "touches the shared history (" + shared + ") — the person approves · agent " + (when contains(opts, "agent_id") then text(opts["agent_id"]) otherwise "?")}
+    let seat be when wroot != "" and contains(opts, "seat") then opts["seat"] otherwise nothing
+    let grant be false
+    when seat != nothing and (name == "bash" or name == "process" or contains(worktree.FILE_TOOLS, name)) and not starts_with(verdict["reason"], "hardline")
+        let me be seat
+        set me["integration_ok"] to worktree.integration_ok(seat)
+        let sv be when name == "bash" or name == "process" then worktree.seat_bash(when contains(args, "command") and args["command"] != nothing then args["command"] otherwise "", me) otherwise worktree.seat_file(name, args, me)
+        when sv["decision"] != "allow"
+            set verdict to sv
+            set grant to sv["grant"]
+        otherwise when forced != "ask" and not (opts["permission_mode"] == "strict" and verdict["decision"] == "deny")
+            set verdict to sv
     when verdict["decision"] == "deny"
         emit(on_event, "tool_denied", {"call": tc, "reason": verdict["reason"]}, tag)
+        when contains(verdict, "note") and verdict["note"] != ""
+            give verdict["note"]
         give "DENIED by policy (" + verdict["reason"] + "). Do not retry this exact action; explain or propose an alternative."
-    -- equipos: un asiento que no es el líder no le pregunta a la persona (lib/runtime.syn → escalate_to = su jefe). Lo
-    -- que necesita aprobación sube por la cadena: su jefe lo resuelve, o lo lleva hasta el líder, que es quien pregunta
-    let boss be when contains(opts, "escalate_to") and opts["escalate_to"] != nothing then text(opts["escalate_to"]) otherwise ""
-    when boss != "" and verdict["decision"] == "ask"
-        emit(on_event, "tool_denied", {"call": tc, "reason": "needs approval — goes up to " + boss + " (" + verdict["reason"] + ")"}, tag)
-        give "NOT RUN: this needs approval (" + verdict["reason"] + "), and in a team approvals go up the chain of command — you don't ask the person. Ask your boss " + boss + " with `send`: say exactly what you want to run and why. They will do it, find another way, or take it up to the lead, who is the only one who asks the person."
+    -- en un equipo, lo que de verdad necesita aprobación va directo a la persona, con quién lo pide (antes subía de jefe
+    -- en jefe por mensajes: ningún agente puede aprobar, y cada salto costaba un turno)
+    when verdict["decision"] == "ask" and contains(opts, "scope") and starts_with(text(opts["scope"]), "team:")
+        set verdict["reason"] to verdict["reason"] + " · agent " + (when contains(opts, "agent_id") then text(opts["agent_id"]) otherwise "?")
     when verdict["decision"] == "ask"
         let approved be false
         let expired be false
         let waited_min be 0
+        let once be false
         when opts["ask_fn"] != nothing
             let ans be call(opts["ask_fn"], {"name": name, "args": args, "why": verdict["reason"]})
             -- la cola de aprobaciones (lib/mailbox.syn) dice además si nadie respondió; la terminal y el chat dan un bool
@@ -344,6 +356,7 @@ task execute(tc, opts, on_event)
                 set approved to ans["approved"] == true
                 set expired to ans["expired"] == true
                 set waited_min to ans["minutes"]
+                set once to contains(ans, "once") and ans["once"] == true
             otherwise
                 set approved to ans == true
         when not approved and expired
@@ -352,9 +365,13 @@ task execute(tc, opts, on_event)
         when not approved
             emit(on_event, "tool_denied", {"call": tc, "reason": "user declined (" + verdict["reason"] + ")"}, tag)
             give "DENIED by the user (" + verdict["reason"] + "). Do not retry this exact action; ask the user or propose an alternative."
+    -- la persona aprobó integrar este objetivo: los merges siguientes del mismo objetivo ya no preguntan
+    -- (salvo que haya dicho «solo esta vez»)
+    when grant and not once
+        worktree.grant_integration(seat)
     emit(on_event, "busy", {"label": permission.describe_call(name, args), "kind": "tool", "name": name}, tag)
     -- su copia: las tools de archivos y bash operan ahí; los paths que ve el modelo son relativos a ella
-    when wroot != "" and (name == "bash" or contains(worktree.FILE_TOOLS, name))
+    when wroot != "" and (name == "bash" or name == "process" or contains(worktree.FILE_TOOLS, name))
         set args to worktree.rooted(name, args, wroot)
     let out be ""
     try
@@ -391,10 +408,12 @@ task execute(tc, opts, on_event)
 
 export task run_turn(cfg, messages, opts, on_event)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let msgs be messages
     let steps be 0
     let spent be 0
@@ -460,12 +479,11 @@ export task run_turn(cfg, messages, opts, on_event)
                 emit(on_event, "inbox", "quedan 3 pasos en este turno: el harness le pidió que deje todo en orden", tag)
         let over_budget be spent >= budget * 0.95
         let last_step be steps == max_steps or over_budget
-        let cat be when last_step then [] otherwise catalog
         when last_step
             let why be when over_budget then "Token budget for this turn is exhausted (" + text(spent) + " of " + text(floor(budget)) + " tokens)" otherwise "Step limit reached for this turn (" + text(max_steps) + " tool calls)"
             set msgs to append(msgs, {"role": "user", "content": "[harness] " + why + ". Do NOT call tools now. Reply with a short status: what you completed, what is verified, and exactly what remains to do next. The user can say 'continue' to resume."})
         emit(on_event, "busy", {"label": "pensando", "kind": "llm"}, tag)
-        let r be provider.chat_retry(cfg, msgs, cat, 3)
+        let r be provider.chat_retry(cfg, msgs, catalog, 3)
         emit(on_event, "idle", nothing, tag)
         when r["error"] != nothing
             emit(on_event, "error", r["error"], tag)
@@ -478,7 +496,14 @@ export task run_turn(cfg, messages, opts, on_event)
         set spent to spent + provider.cost_tokens(r["usage"])
         emit(on_event, "usage", {"step": steps, "usage": r["usage"], "total": usage}, tag)
         let clean_text be strip_raw_tool_calls(r["text"])
-        let assistant be {"role": "assistant", "content": clean_text, "tool_calls": r["tool_calls"]}
+        -- el último paso manda el MISMO catálogo: los tools van primero en el prefijo y cambiarlos tira el caché
+        -- de prompt entero justo cuando el contexto es más grande (tool_choice "none" en Anthropic igual pierde el
+        -- de mensajes, que es lo grande; deepseek-harness también repite el prefijo idéntico). Si llama tools igual, no corren
+        let calls be r["tool_calls"]
+        when last_step and length(calls) > 0
+            emit(on_event, "inbox", "último paso: el modelo pidió " + text(length(calls)) + " tool(s) igual; no se ejecutan", tag)
+            set calls to []
+        let assistant be {"role": "assistant", "content": clean_text, "tool_calls": calls}
         -- razonamiento del paso (solo lo trae el wire para los presets glm): va en el mensaje para
         -- devolvérselo al modelo en el paso siguiente (thinking conservado, ver provider.chat_openai)
         when contains(r, "reasoning")
@@ -491,7 +516,7 @@ export task run_turn(cfg, messages, opts, on_event)
         -- nuevos, esa respuesta ya está vieja (visto 2026-10-16: «soy Lucía» llegó a mitad de turno y salió «decime
         -- tu nombre»). Se descarta el borrador, entran los mensajes y el modelo responde de nuevo — un paso más.
         let late be nothing
-        when length(r["tool_calls"]) == 0 and not last_step and contains(opts, "inbox_final") and opts["inbox_final"] == true and opts["inbox_fn"] != nothing
+        when length(calls) == 0 and not last_step and contains(opts, "inbox_final") and opts["inbox_final"] == true and opts["inbox_fn"] != nothing
             set late to call(opts["inbox_fn"], {"step": steps, "tag": tag})
         when late != nothing and length(late["messages"]) > 0
             set msgs to slice(msgs, 0, length(msgs) - 1)
@@ -499,10 +524,10 @@ export task run_turn(cfg, messages, opts, on_event)
             each m in late["messages"]
                 emit(on_event, "inbox", m, tag)
                 set msgs to append(msgs, {"role": "user", "content": m})
-        otherwise when length(r["tool_calls"]) == 0
+        otherwise when length(calls) == 0
             set final_text to clean_text
             give {"messages": msgs, "text": final_text, "steps": steps, "usage": usage, "stopped": when over_budget then "budget" otherwise (when last_step then "max_steps" otherwise "done")}
-        each tc in r["tool_calls"]
+        each tc in calls
             emit(on_event, "tool_call", tc, tag)
             -- repetición: misma tool + mismos args (JSON canónico); 3 y 5 → recordatorio en el resultado; 8 → rechazo
             let sig be tc["name"] + " " + canon(tc["args"])

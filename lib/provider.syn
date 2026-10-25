@@ -64,7 +64,7 @@ let KEY_ALIASES be {"glm-coding": "glm", "glm": "glm-coding"}
 task key_owner(n)
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when settings.raw_key(n) != "" or env(key_var(n), "") != ""
         give n
     when contains(KEY_ALIASES, n)
@@ -80,7 +80,7 @@ task env_default()
 export task default_provider()
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let s be settings.load()
     when s["provider"] != ""
         when contains(PRESETS, lower(s["provider"]))
@@ -90,7 +90,7 @@ export task default_provider()
 export task has_key(name)
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when name == "ollama"
         give true
     when key_owner(name) != ""
@@ -101,7 +101,7 @@ export task has_key(name)
 export task configured()
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     each n in keys(PRESETS)
         when n != "ollama" and has_key(n)
             give true
@@ -111,7 +111,7 @@ export task configured()
 export task providers()
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let cur be default_provider()
     let out be []
     each n in sort_by(keys(PRESETS), (x) => x)
@@ -133,6 +133,8 @@ export task normalize_model(name, model)
 -- Se usa en `/model` sin argumentos y en la ventana de modelo de la web, para no tipear nombres a ciegas.
 export task list_models(cfg)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     let headers be {"Authorization": bearer(cfg["key"])}
     when cfg["wire"] == "anthropic"
@@ -169,7 +171,7 @@ export task config_for(name, model)
     require env("LAMPSON_*")
     require secret("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let s be settings.load()
     let default_name be default_provider()
     let n be when name == nothing or name == "" then default_name otherwise lower(name)
@@ -213,7 +215,7 @@ export task config()
     require env("LAMPSON_*")
     require secret("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     give config_for("", "")
 
 task strip_slash(url)
@@ -276,7 +278,7 @@ task has_images(m)
 -- Verificado 2026-08-27: MiniMax-M3 (wire anthropic) describe imágenes; deepseek-chat y kimi-k2 no las aceptan.
 export task supports_vision(cfg)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let s be settings.load()
     when contains(s, "vision")
         give s["vision"] == true
@@ -543,19 +545,27 @@ task chat_anthropic(cfg, messages, catalog)
 
 export task chat(cfg, messages, catalog)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let ready be prepare(cfg, messages)
     when cfg["wire"] == "anthropic"
         give chat_anthropic(cfg, ready, catalog)
     give chat_openai(cfg, ready, catalog)
 
+-- esperas entre intentos (s): 2+4+8+15+30+30+30 ≈ 2 min
+let NET_WAITS be [2, 4, 8, 15, 30, 30, 30]
+
 -- Reintento simple con backoff para 429/5xx/red. Además: "empty response" (el razonador gastó TODO
 -- max_tokens pensando, sin emitir nada) reintenta con el DOBLE de max_tokens (hasta 65536) — así un
 -- LAMPSON_MAX_TOKENS modesto no mata un turno que necesitaba pensar largo.
-export task chat_retry(cfg, messages, catalog, attempts)
+export task chat_retry(cfg, messages, catalog, attempts0)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
+    let attempts be attempts0
     let n be 0
     let last be nothing
     let cur be cfg
@@ -566,6 +576,10 @@ export task chat_retry(cfg, messages, catalog, attempts)
             give last
         let e be last["error"]
         let retryable be starts_with(e, "network") or starts_with(e, "http 429") or starts_with(e, "http 5")
+        -- sin conexión (DNS, conexión rechazada o cortada): falla en el acto, así que se insiste ~2 min
+        -- antes de dar el turno por perdido. Un timeout no: cada intento ya esperó el plazo entero.
+        when starts_with(e, "network") and not contains(lower(e), "timed out") and not contains(lower(e), "timeout") and not contains(e, "os error 10060")
+            set attempts to max(attempts, length(NET_WAITS) + 1)
         when starts_with(e, "empty response") and cur["max_tokens"] < 65536
             let bigger be {}
             each k in keys(cur)
@@ -576,5 +590,5 @@ export task chat_retry(cfg, messages, catalog, attempts)
         when not retryable
             give last
         when n < attempts
-            sleep(n * 2)
+            sleep(NET_WAITS[min(n, length(NET_WAITS)) - 1])
     give last

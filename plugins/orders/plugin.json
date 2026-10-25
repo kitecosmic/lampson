@@ -3,7 +3,7 @@
   "description": "Take orders by chat: catalog, quotes with promos and delivery, orders saved with customer and address (and changed or cancelled while still new), stock kept up to date. Data in .lampson/orders/ of the project.",
   "kind": "syn",
   "entry": "plugin.syn",
-  "caps": "file=workspace/.lampson/orders,file=workspace/.lampson/orders/*",
+  "caps": "file=workspace/.lampson/orders,file=workspace/.lampson/orders/**",
   "timeout": 20,
   "instructions": "INSTRUCTIONS.md",
   "tools": [

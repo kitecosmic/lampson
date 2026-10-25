@@ -33,7 +33,9 @@ export let DANGEROUS be [
     "docker rm", "docker system prune", "kubectl delete",
     "chmod", "chown", "> ~/", "crontab",
     "> .env", ">.env", ">> .env", "tee .env", "> ./.env",
-    ".lampson"
+    -- lo que sube el techo de un agente (sus herramientas .syn, sus agentes, las aprobaciones). Antes era «.lampson» a
+    -- secas y frenaba todo comando de un equipo que nombrara una copia (.lampson/worktrees/…)
+    ".lampson/tools", ".lampson\\tools", ".lampson/agents", ".lampson\\agents", "apptools_approved"
 ]
 
 task contains_any(haystack, needles)

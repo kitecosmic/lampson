@@ -34,13 +34,13 @@ task read_cfg(key, envname)
 export task webhook_url()
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     give read_cfg("webhook_url", "LAMPSON_WEBHOOK_URL")
 
 export task public_url()
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let u be read_cfg("public_url", "LAMPSON_PUBLIC_URL")
     while length(u) > 0 and slice(u, length(u) - 1, length(u)) == "/"
         set u to slice(u, 0, length(u) - 1)
@@ -66,9 +66,11 @@ export task open(source, message, why, timeout_s)
     require time
     require random
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let id be "a" + slice(text(floor(now() * 1000)), 4, 13) + "-" + slice(token(16), 0, 6)
     let tok be token(32)
     let meta be {"id": id, "source": source, "message": message, "why": why, "created": now(), "expires_at": floor(now() + timeout_s), "status": "pending"}
@@ -122,9 +124,10 @@ export task wait(id, timeout_s)
         when answer == nothing
             sleep(0.5)
     let meta be meta_of(id)
-    let ok be answer == "yes"
+    let ok be answer == "yes" or answer == "once"
     when meta != nothing
         set meta["status"] to when answer == nothing then "expired" otherwise (when ok then "approved" otherwise "denied")
+        set meta["once"] to answer == "once"
         set meta["answered"] to now()
         set_meta(id, meta)
         bus_publish("approval.result", meta)
@@ -136,16 +139,17 @@ export task wait_detail(id, timeout_s)
     require time
     let ok be wait(id, timeout_s)
     let meta be meta_of(id)
-    give {"approved": ok, "expired": meta != nothing and meta["status"] == "expired", "minutes": floor(timeout_s / 60)}
+    give {"approved": ok, "expired": meta != nothing and meta["status"] == "expired", "once": meta != nothing and meta["once"] == true, "minutes": floor(timeout_s / 60)}
 
--- responder desde la UI (loopback, ya autenticado) o desde la terminal: sin token
+-- responder desde la UI (loopback, ya autenticado) o desde la terminal: sin token. decision: true, false o "once"
+-- (sí, solo esta vez: lo que valdría para el resto del objetivo, como trabajar en la copia de la persona, no queda)
 export task answer(id, decision)
     let meta be meta_of(id)
     when meta == nothing
         give false
     when meta["status"] != "pending"
         give false
-    let v be when decision then "yes" otherwise "no"
+    let v be when decision == "once" then "once" otherwise (when decision == true then "yes" otherwise "no")
     share v as "approval:answer:" + id
     give true
 

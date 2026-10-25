@@ -4,7 +4,7 @@
 require exec("synsema")
 require time
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 let mock be proc_spawn("synsema", ["serve", "tests/mock_llm.syn"], {"stderr": "merge"})
 let t0 be now()
 while now() - t0 < 4

@@ -22,7 +22,7 @@ task field(m, k, fallback)
 -- el último turno de una sesión, leído de su traza: {calls: [nombres], said, stopped, at}
 export task last_turn(sid)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let out be {"calls": [], "said": "", "stopped": "", "trigger": ""}
     when sid == ""
         give out
@@ -58,9 +58,9 @@ export task facts(o)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let out be []
     let tm be teams.get(o["team"])
     when tm == nothing
@@ -98,9 +98,9 @@ task dossier(o, fs)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let tm be teams.get(o["team"])
     let scope be "team:" + tm["id"]
     let ts be where(teams.tasks(scope), (t) => field(t, "objective", 0) == o["id"])
@@ -117,13 +117,15 @@ task dossier(o, fs)
 export task analysis(o)
     require db(".lampson/teams.db")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require env("LAMPSON_*")
     require secret("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let fs be facts(o)
     let cfg be provider.config()
     let brief be "You are diagnosing why a team of AI agents is stuck on an objective. Read the dossier and answer ONLY with JSON, no prose around it:\n{\"summary\": \"<3 to 6 short sentences, in the same language as the objective text, for the person who owns the team: what happened, why it is stuck, what to do>\", \"actions\": [{\"kind\": \"message\", \"agent\": \"<seat id>\", \"text\": \"<the message the person sends that seat, in the objective's language, concrete: what is true, what to do now, who to tell>\", \"why\": \"<one line>\"}, {\"kind\": \"task\", \"task\": <id>, \"status\": \"todo|doing|review|done|blocked\", \"why\": \"<one line>\"}]}\nAt most 3 actions, the smallest set that gets the work moving again. Prefer messaging the seat that has to act. Don't invent facts that aren't in the dossier.\nA message action is sent BY the person TO that seat, as the person's instruction to the team: never write it as a summary or a question for the person. If the team is waiting for a decision only the person can make (an approval, a choice), don't propose a message or a task move for it: say in the summary what they have to decide and where (the approval waiting for them, or the objective's question). Move a task only when that move lets someone start real work; never to «reflect» who has the ball.\n\n" + dossier(o, fs)

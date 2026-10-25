@@ -102,7 +102,7 @@ export task tool_names(p)
     require env("LAMPSON_*")
     require env("OS")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when contains(p["tools"], "computer_use")
         when not computer.available()
             give where(p["tools"], (n) => n != "computer_use")
@@ -112,9 +112,9 @@ export task registry_for(name)
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     require env("OS")
     let p be profile(name)
@@ -131,9 +131,9 @@ export task catalog_for(name)
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     require env("OS")
     let p be profile(name)
@@ -184,7 +184,7 @@ task one_line(s, max)
 -- log vivo del hijo (una línea por evento) — el padre y el humano lo pueden mirar mientras corre
 export task child_event(kind, data, tag)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let line be ""
     when kind == "assistant"
         set line to "[assistant] " + one_line(data, 600)
@@ -207,7 +207,7 @@ export task child_event(kind, data, tag)
 -- buzón del hijo: steer (mensajes del padre) y stop
 export task child_inbox(step, tag)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let stop_now be false
     try
         read_file(path(tag, "stop"))
@@ -229,7 +229,7 @@ export task child_inbox(step, tag)
 -- buzón del padre: hijos en background terminados y no entregados
 export task parent_inbox(step, tag)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let msgs be []
     each c in list_children()
         when c["status"] != "running" and not c["delivered"]
@@ -252,7 +252,7 @@ task ends_with(s, suffix)
 -- [{id, agent, brief, status, steps, tokens, started, finished, delivered, text}]
 export task list_children()
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let out be []
     try
         each e in list_dir(DIR)
@@ -272,7 +272,7 @@ export task prune(keep, max_age_s)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     -- un "running" de hace más de 6 h es un fantasma (lampson cerrado con el hijo vivo, o un crash viejo)
     let finished be where(list_children(), (c) => c["status"] != "running" or now() - c["started"] > 21600)
     let victims be []
@@ -299,7 +299,7 @@ export task prune(keep, max_age_s)
 -- pedir a todos los hijos vivos que paren (salida de lampson)
 export task stop_all()
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     each c in list_children()
         when c["status"] == "running"
             write_file(path(c["id"], "stop"), "stop")
@@ -308,19 +308,21 @@ export task stop_all()
 
 export task run_child(spec)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let id be spec["id"]
     let agent be spec["agent"]
     let p be PROFILES[agent]
@@ -353,38 +355,42 @@ export task run_child(spec)
 -- entrada para el agente en background (recibe JSON porque los parámetros del spawn se copian como valores)
 export task run_child_json(spec_json)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     give run_child(json_decode(spec_json))
 
 -- hilo con intérprete propio: solo puede llamar tasks top-level del programa de entrada. Declara sus
 -- capabilities (un agente no hereda las del padre: sin `require` propio, env()/net fallan adentro).
 agent Child
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     lampson_subagent(spec_json)
 
 task format_report(c)
@@ -403,19 +409,21 @@ task new_id(agent, i)
 
 export task delegate(agent, brief, context, tasks, background, action, id, message)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let act be when action == nothing or action == "" then "spawn" otherwise action
     when act == "list"
         let lines be []

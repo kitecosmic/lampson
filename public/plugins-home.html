@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/teams.css">
 <link rel="stylesheet" href="/css/views.css">
+<link rel="stylesheet" href="/css/inbox.css">
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body class="home">
@@ -18,6 +19,7 @@
   <span class="brand">lampson</span>
   <nav class="navtabs" data-on="plugins"></nav>
   <span class="spacer"></span>
+  <span class="inbox-slot" data-inbox></span>
   <span class="live" id="live" title="actualizado en vivo">en vivo</span>
   <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
 </header>
@@ -27,6 +29,7 @@
   <p class="vfoot">¿Te falta uno? Pedíselo al agente dentro de un proyecto: «haceme un plugin que…». Lo crea en ese proyecto y queda apagado hasta que vos lo enciendas. Para escribirlo vos, copiá la plantilla <code>plugins/example-hello</code>, o leé la <a href="https://lampson.org/es/docs/plugins" target="_blank" rel="noopener">guía completa de plugins</a>.</p>
 </main>
 <script src="/js/navtabs.js"></script>
+<script src="/js/inbox.js"></script>
 <script src="/js/plugins-home.js"></script>
 </body>
 </html>

@@ -6,9 +6,9 @@ require time
 require env("LAMPSON_*")
 require env("OS")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 use "./lib/tools/proc.syn" as proc
 use "./lib/tools/bash.syn" as bash
 

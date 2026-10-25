@@ -7,11 +7,12 @@
 //   GET  api/approvals + POST api/approve (las aprobaciones de la cola: p. ej. un merge a main desde la copia de un agente)
 const $ = (s) => document.querySelector(s);
 const BASE = (location.pathname.match(/^\/w\/[^/]+/) || [''])[0];
+// la pregunta de un objetivo en su página: el mismo aviso que la bandeja, con la respuesta en el lugar (js/inbox.js)
+const obAsk = (root) => root.querySelectorAll('[data-obask]').forEach((el) => window.Inbox && Inbox.objective(el, decodeURIComponent(BASE.slice(3)), +el.dataset.obask));
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const LANES = [['todo', 'por hacer'], ['doing', 'en curso'], ['review', 'en revisión'], ['done', 'hecho'], ['blocked', 'bloqueada']];
 const STATUS = { active: 'en curso', waiting: 'te espera', done: 'hecho', failed: 'falló', cancelled: 'cancelado', paused: 'sin presupuesto' };
 const KIND = { added: 'agregó', claimed: 'tomó', updated: 'movió', message: 'escribió', report: 'informó', asked: 'preguntó', 'approval requested': 'pide aprobación', approved: 'aprobó', denied: 'denegó', answered: 'respondió', done: 'terminó', failed: 'falló', cancelled: 'canceló', paused: 'pausado', budget: 'presupuesto', 'over cap': 'pasó su tope diario', objective: 'nuevo objetivo', 'handed off': 'pasó el trabajo a', continued: 'sigue donde quedó', stuck: 'se trabó', tokens: 'tokens', error: 'error' };
-const PRESETS = [['code', 'código (leer, editar, comandos)'], ['read', 'leer y correr comandos (no edita)'], ['none', 'ninguna (solo coordina)']];
 const ROUTINE = 'rutina:';   // created_by de las ejecuciones de una rutina (lib/schedule.syn → run_routine)
 const state = { approvals: [], teamsMeta: [], draft: null, sel: null, route: { page: 'list' }, team: null, objectives: [], agents: [], teams: [], routines: [], seen: new Set() };
 
@@ -94,92 +95,7 @@ setTheme(document.documentElement.getAttribute('data-theme') || 'dark');
 $('#theme').onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 
 // ---------- lo que espera a la persona ----------
-// ---------- lo que te espera: preguntas, aprobaciones, pases a otro equipo y merges ----------
-// Cada aviso dice quién (su rol y su equipo), qué quiere y, si es un merge, qué entra: la rama, sus commits, los
-// archivos y si choca (lib/worktree.syn → preview), así se aprueba sabiendo qué y no leyendo el comando.
-const ATTN_SVG = {
-  key: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4.5"/><path d="M11.3 11.7 20 3M16.5 6.5l2.5 2.5M14 9l2 2"/></svg>',
-  arrow: '<svg class="arr" viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h20M16 1.5 21 6l-5 4.5"/></svg>',
-};
-function seatOf(a) {
-  for (const t of state.teams) { const m = t.members.find((x) => x.agent === a); if (m) return { role: m.role || a, team: t }; }
-  return { role: a, team: null };
-}
-// por qué pide permiso, en palabras
-function whyText(why) {
-  const w = String(why || '').replace(/ · agent \S+$/, '');
-  let m;
-  if ((m = w.match(/dangerous pattern: (.+)$/))) return `Es un comando que puede borrar o cambiar cosas difíciles de recuperar (${m[1].trim()}).`;
-  if ((m = w.match(/asks before every (\S+) call/))) return `Este agente pide permiso antes de cada «${m[1]}».`;
-  if (/shared history/.test(w)) return 'Toca la historia compartida del proyecto: siempre lo aprobás vos.';
-  return w;
-}
-function mergeHtml(a) {
-  const p = a.preview;
-  if (!p) return `<pre class="av-cmd">${esc(a.message)}</pre>`;
-  if (p.missing) return `<p class="av-warn">La rama <code>${esc(p.branch)}</code> no existe: si lo aprobás, el comando va a fallar.</p><pre class="av-cmd">${esc(a.message)}</pre>`;
-  const add = p.files.reduce((n, f) => n + f.add, 0), del = p.files.reduce((n, f) => n + f.del, 0);
-  const badge = p.conflicts ? `<span class="av-badge bad">choca con ${esc(p.into)}</span>` : `<span class="av-badge ok">${p.ff ? 'avance directo' : 'sin conflictos'}</span>`;
-  const open = (state.attnOpen || new Set()).has(a.id);
-  return `<div class="av-merge">
-    <div class="av-flow"><code>${esc(p.branch)}</code>${ATTN_SVG.arrow}<code>${esc(p.into || 'remoto')}</code>${badge}</div>
-    ${p.count ? `<p class="av-stat">${p.count} commit${p.count === 1 ? '' : 's'} · ${p.files.length} archivo${p.files.length === 1 ? '' : 's'} <span class="add">+${add}</span> <span class="del">−${del}</span></p>
-    <ul class="av-commits">${p.commits.slice(0, 4).map((c) => `<li><span class="sha">${esc(c.sha)}</span><span class="sj">${esc(c.subject)}</span><span class="by">${esc(String(c.author).split(" · ")[0])}</span></li>`).join('')}${p.count > 4 ? `<li class="more">y ${p.count - 4} más</li>` : ''}</ul>
-    <details class="av-files" data-k="${esc(a.id)}"${open ? ' open' : ''}><summary>ver archivos y comando</summary><ul>${p.files.map((f) => `<li><span class="fp">${esc(f.path)}</span><span class="add">+${f.add}</span><span class="del">−${f.del}</span></li>`).join('')}</ul><pre class="av-cmd">${esc(a.message)}</pre></details>` : `<p class="av-stat">No trae nada nuevo: ${esc(p.into)} ya tiene todo lo de esta rama.</p>`}
-    ${p.conflicts ? '<p class="av-warn">Toca las mismas líneas que cambiaron en la rama principal: si lo aprobás, el merge se frena con conflictos y el agente tiene que resolverlos.</p>' : ''}
-  </div>`;
-}
-function avisoHtml(kind, { who, verb, meta, body, acts, id }) {
-  const icon = { ask: ICONS.say, ok: ATTN_SVG.key, pass: ICON_PASS, git: ICONS.git }[kind];
-  const fresh = !(state.attnSeen || (state.attnSeen = new Set())).has(id); state.attnSeen.add(id);
-  return `<article class="aviso k-${kind}${fresh ? ' fresh' : ''}"><span class="av-ico">${icon}</span><div class="av-body">
-    <header><span class="av-who"><b>${esc(who)}</b> ${verb}</span><span class="av-meta">${meta}</span></header>
-    ${body}<div class="av-acts">${acts}</div></div></article>`;
-}
-function renderAttention() {
-  const waiting = state.objectives.filter((o) => o.status === 'waiting');
-  const pend = state.approvals.filter((a) => a.status === 'pending');
-  const box = $('#attention');
-  box.hidden = waiting.length === 0 && pend.length === 0;
-  const keep = {};
-  box.querySelectorAll('input[data-id]').forEach((i) => (keep[i.dataset.id] = i.value));
-  const focused = document.activeElement && box.contains(document.activeElement) ? document.activeElement.dataset.id : null;
-  const metaOf = (team, ref, href, at) => `${team ? esc(team.name || team.id) + ' · ' : ''}${ref ? `<a data-nav href="${esc(href)}">${esc(ref)}</a> · ` : ''}${ago(at)}`;
-  const html = waiting.map((o) => {
-    const s = seatOf(o.agent), ap = o.question_kind === 'approval', meta = metaOf(s.team || teamOf(o.team), o.ref, url.obj(o.team, o.id), o.updated_at);
-    if (o.pass_pending) {
-      const m = String(o.question || '').match(/^hand over to team (\S+):\n?([\s\S]*)$/) || [];
-      return avisoHtml('pass', { id: 'o' + o.id, who: s.role, verb: `quiere pasarle el trabajo a <b>${esc(teamName(m[1] || ''))}</b>`, meta,
-        body: `<p class="av-lbl">Lo que le va a pedir:</p><blockquote class="av-q">${reportHtml(m[2] || '')}</blockquote>`,
-        acts: `<input data-id="${o.id}" placeholder="nota para ${esc(s.role)} (opcional)"><button class="ok" data-approve="${o.id}">Pasárselo</button><button class="no" data-deny="${o.id}">No pasarlo</button>` });
-    }
-    return avisoHtml(ap ? 'ok' : 'ask', { id: 'o' + o.id, who: s.role, verb: ap ? 'te pide aprobación' : 'te pregunta', meta,
-      body: `<div class="av-q">${reportHtml(o.question)}</div>`,
-      acts: ap ? `<input data-id="${o.id}" placeholder="nota (opcional)"><button class="ok" data-approve="${o.id}">Aprobar</button><button class="no" data-deny="${o.id}">Denegar</button>`
-        : `<input data-id="${o.id}" placeholder="tu respuesta"><button class="primary" data-answer="${o.id}">Responder</button>` });
-  }).join('') + pend.map((a) => {
-    const agent = (String(a.why || '').match(/agent (\S+)/) || [])[1], s = agent ? seatOf(agent) : { role: 'un agente', team: null };
-    const meta = metaOf(s.team, '', '', a.created), p = a.preview;
-    if (p) return avisoHtml('git', { id: a.id, who: s.role, verb: p.kind === 'push' ? `quiere subir <b>${esc(p.branch)}</b>` : `quiere llevar su trabajo a <b>${esc(p.into)}</b>`, meta,
-      body: mergeHtml(a), acts: `<button class="ok" data-qok="${esc(a.id)}">${p.kind === 'push' ? 'Aprobar push' : 'Aprobar merge'}</button><button class="no" data-qno="${esc(a.id)}">Denegar</button><span class="av-exp">vence ${esc(fmtWhen(a.expires_at))}</span>` });
-    return avisoHtml('ok', { id: a.id, who: s.role, verb: 'quiere correr un comando', meta,
-      body: `<pre class="av-cmd">${esc(a.message)}</pre><p class="av-why">${esc(whyText(a.why))}</p>`,
-      acts: `<button class="ok" data-qok="${esc(a.id)}">Aprobar</button><button class="no" data-qno="${esc(a.id)}">Denegar</button><span class="av-exp">vence ${esc(fmtWhen(a.expires_at))}</span>` });
-  }).join('');
-  // rehacerlo en cada pulso cortaría lo que estás escribiendo: solo si cambió
-  if (state.attnHtml === html) return;
-  state.attnHtml = html; box.innerHTML = html;
-  box.querySelectorAll('details[data-k]').forEach((d) => (d.ontoggle = () => { const s = state.attnOpen || (state.attnOpen = new Set()); if (d.open) s.add(d.dataset.k); else s.delete(d.dataset.k); }));
-  const act = (b, fn) => (b.onclick = async () => { b.closest('.aviso').classList.add('going'); b.closest('.av-acts').querySelectorAll('button').forEach((x) => (x.disabled = true)); await fn(); });
-  box.querySelectorAll('[data-qok]').forEach((b) => act(b, async () => { await api('approve', { id: b.dataset.qok, decision: true }); refresh(); }));
-  box.querySelectorAll('[data-qno]').forEach((b) => act(b, async () => { await api('approve', { id: b.dataset.qno, decision: false }); refresh(); }));
-  box.querySelectorAll('input[data-id]').forEach((i) => { if (keep[i.dataset.id]) i.value = keep[i.dataset.id]; if (focused === i.dataset.id) i.focus(); });
-  const note = (id) => (box.querySelector(`input[data-id="${id}"]`) || {}).value || '';
-  box.querySelectorAll('[data-approve]').forEach((b) => act(b, () => reply(+b.dataset.approve, note(b.dataset.approve), true)));
-  box.querySelectorAll('[data-deny]').forEach((b) => act(b, () => reply(+b.dataset.deny, note(b.dataset.deny), false)));
-  box.querySelectorAll('[data-answer]').forEach((b) => (b.onclick = () => { const t = note(b.dataset.answer); if (!t.trim()) { box.querySelector(`input[data-id="${b.dataset.answer}"]`).focus(); return; } b.closest('.aviso').classList.add('going'); reply(+b.dataset.answer, t, false); }));
-  box.querySelectorAll('input[data-id]').forEach((i) => (i.onkeydown = (e) => { if (e.key === 'Enter') { const b = i.parentElement.querySelector('[data-answer], [data-approve]'); if (b) b.click(); } }));
-}
+// ---------- lo que te espera: lo dibuja js/inbox.js (la bandeja ⚑ y la pregunta en la página del objetivo) ----------
 async function reply(id, text, approved) { await api(`objectives/${id}/reply`, { text, approved }); refresh(); }
 
 // ---------- tarjetas de objetivos y de rutinas ----------
@@ -300,11 +216,6 @@ function bindMentions(t, onChange) {
   });
   box.addEventListener('mousedown', (e) => { const el = e.target.closest('[data-i]'); if (el) { e.preventDefault(); pick(+el.dataset.i); } });
 }
-// la pregunta de un objetivo, en palabras: un pase pendiente dice a qué equipo y qué le va a pedir
-function questionHtml(o) {
-  const m = String(o.question || '').match(/^hand over to team (\S+):\n?([\s\S]*)$/);
-  return m ? `pasarle a <b>${esc(teamName(m[1]))}</b>: ${esc(m[2])}` : esc(o.question);
-}
 // de dónde vino y a quién se lo pasó (en vivo y en el informe)
 function passLinksHtml(o) {
   const out = [];
@@ -354,6 +265,19 @@ function boardHtml(tasks, moved) {
   }).join('');
 }
 // «over cap» (lib/teams.syn → team_turn_end): «670000 of 600000 daily tokens — …», dicho para la persona
+// un turno que falló («turn failed: …» en el registro) → qué pasó y qué hacer, en criollo
+function errHint(t) {
+  t = String(t || '');
+  const who = 'Después escribile al asiento para que retome.';
+  if (/os error 11001|host desconocido|no such host|name or service not known|getaddrinfo|dns/i.test(t)) return `Sin conexión con el proveedor del modelo: no se encontró su servidor (internet o DNS). Lampson reintentó unos 2 minutos. Revisá tu conexión. ${who}`;
+  if (/timed out|timeout|os error 10060/i.test(t)) return `El proveedor del modelo no respondió a tiempo. ${who}`;
+  if (/network:/i.test(t)) return `Se cortó la conexión con el proveedor del modelo. Revisá tu internet. ${who}`;
+  if (/http 40[13]|invalid.{0,20}key|unauthori[sz]ed|authentication/i.test(t)) return `El proveedor rechazó la API key. Revisala en Configuración → Proveedor. ${who}`;
+  if (/http 402|insufficient|balance|quota|billing|credit/i.test(t)) return `Sin saldo o cuota en el proveedor del modelo. Recargá o cambiá la API key en Configuración → Proveedor. ${who}`;
+  if (/http 429/i.test(t)) return `El proveedor limitó las llamadas (demasiadas seguidas). Esperá un momento. ${who}`;
+  if (/http 5\d\d/i.test(t)) return `El proveedor del modelo está fallando de su lado. Probá en unos minutos. ${who}`;
+  return `El turno se cortó. ${who}`;
+}
 function overText(r) {
   const m = String(r.text || '').match(/^(\d+) of (\d+)/); if (!m) return r.text;
   return `hoy lleva ${k(+m[1])} de ${k(+m[2])}` + (/no more turns/.test(r.text) ? ': sin más turnos hoy' : ': sigue porque el objetivo tiene presupuesto');
@@ -401,7 +325,7 @@ function logHtml(rows, el) {
     const key = el.id + ':' + r.id;
     const isNew = state.seen.size > 0 && !state.seen.has(key);
     fresh.push(key);
-    return `<li class="${isNew ? 'fresh' : ''}"><span class="t">${hhmm(r.at)}</span><span class="a">${esc(r.actor)}</span><span class="k ${esc(r.kind.split(' ')[0])}">${esc(KIND[r.kind] || r.kind)} ${esc(r.ref)}</span>${r.text && r.text !== 'null' ? `<span class="x">${esc(r.kind === 'over cap' ? overText(r) : r.text)}</span>` : ''}</li>`;
+    return `<li class="${isNew ? 'fresh' : ''}"><span class="t">${hhmm(r.at)}</span><span class="a">${esc(r.actor)}</span><span class="k ${esc(r.kind.split(' ')[0])}">${esc(KIND[r.kind] || r.kind)} ${esc(r.ref)}</span>${r.text && r.text !== 'null' ? `<span class="x">${esc(r.kind === 'over cap' ? overText(r) : r.text)}</span>` : ''}${r.kind === 'error' ? `<span class="x why">${esc(errHint(r.text))}</span>` : ''}</li>`;
   }).join('');
   el.innerHTML = html || '<li class="hint">Nada todavía.</li>';
   fresh.forEach((x) => state.seen.add(x));
@@ -576,7 +500,7 @@ async function loadObj() {
       ${s.turns.length ? `<button class="lnk" data-seat="${esc(s.agent)}">${isOpen ? 'ocultar pasos' : 'ver sus pasos'}</button>` : ''}</div>
       ${isOpen ? `<div class="steps">${seatTimelineHtml(s.turns, s.agent)}</div>` : ''}</div>`;
   };
-  const now = o.status === 'waiting' ? `<div class="box q"><h5>${o.pass_pending ? 'quiere pasarle el trabajo a otro equipo' : o.question_kind === 'approval' ? 'te pide aprobación' : 'te pregunta'}</h5><p>${questionHtml(o)}</p><p class="ds">Respondé arriba, en la franja de lo que te espera.</p></div>`
+  const now = o.status === 'waiting' ? `<div class="ob-ask" data-obask="${o.id}"></div>`
     : o.result ? `<div class="box res${o.status === 'failed' ? ' bad' : ''}"><h5>${o.status === 'failed' ? 'Por qué no se pudo' : 'Resultado'} <span class="who">informe de ${esc((seats.find((s) => s.lead) || {}).role || o.agent)}</span></h5>${reportHtml(o.result)}</div>`
     : o.progress ? `<div class="box"><h5>Ahora</h5>${reportHtml(o.progress)}</div>` : open ? '<div class="box"><h5>Ahora</h5><p>Arrancando: el líder está repartiendo el trabajo.</p></div>' : '';
   $('#objDetail').innerHTML = `
@@ -591,6 +515,7 @@ async function loadObj() {
     <h4 class="secttl">Tablero de este objetivo ${open ? '<span class="live2">● en vivo</span>' : ''}</h4>
     ${(o.tasks || []).length ? `<div class="board">${boardHtml(o.tasks, moved)}</div>` : '<p class="ihint">Todavía no hay tareas: el líder las crea al repartir el trabajo.</p>'}`;
   bindObjButtons(o);
+  obAsk($('#objDetail'));
   const cb = $('#objDetail [data-cap]'); if (cb) cb.onclick = () => capPop(cb, o, (o.seats || []).filter((s) => overCap(o, s)));
   if (state.drawer) renderDrawer(o);
   document.querySelectorAll('#objDetail [data-seat]').forEach((b) => (b.onclick = () => { const a = b.dataset.seat; if (openSeats.has(a)) openSeats.delete(a); else openSeats.add(a); loadObj(); }));
@@ -608,7 +533,6 @@ async function refreshObjectives() {
   state.objectives = r.data.objectives; state.agents = r.data.agents; state.teamsMeta = r.data.teams || [];
   const ap = await api('approvals');
   if (ap.ok) state.approvals = ap.data.approvals || [];
-  renderAttention();
   return true;
 }
 // las rutinas son tareas programadas con acción «objective» (lib/schedule.syn)
@@ -626,7 +550,6 @@ async function refreshRoutines() {
 // hablan») son de verdad: el editor las propone al unir dos asientos bajo el mismo jefe, y se borran como cualquiera.
 const flow = Flow.create($('#graph'));
 state.newAt = {};
-const TOOLS_LABEL = { code: 'edita y corre comandos', read: 'lee y corre comandos', none: 'solo coordina' };
 function hotPairs(team) {
   // conexiones que se encienden: mensajes de los últimos 25 s (registro: actor "message" ref "→ dest")
   const now = Date.now() / 1000; const hot = new Set();
@@ -653,7 +576,7 @@ function renderGraph() {
   const live = Object.fromEntries((team ? team.members : []).map((m) => [m.agent, m]));
   const hot = team ? hotPairs(team) : new Set();
   const nodes = members.map((m) => ({ id: m.agent, title: m.role || m.agent, desc: m.description || (d ? 'Tocalo para darle nombre y decir para qué está.' : ''), lead: m.agent === lead, loose: d && loose(d, m),
-    meta: m.missing ? 'falta su archivo de agente' : m.working ? 'trabajando…' : d && loose(d, m) ? 'suelto · al guardar le reporta al líder' : d ? TOOLS_LABEL[m.preset] || '' : (TOOLS_LABEL[presetOf(m.tools)] || '') + (m.spent_today ? ' · hoy ' + k(m.spent_today) : ''),
+    meta: m.missing ? 'falta su archivo de agente' : m.working ? 'trabajando…' : d && loose(d, m) ? 'suelto · al guardar le reporta al líder' : d ? '' : m.spent_today ? 'hoy ' + k(m.spent_today) : '',
     avatar: (m.role || m.agent).normalize('NFD').replace(/\p{M}/gu, '').slice(0, 2), working: (live[m.agent] || {}).working, missing: (live[m.agent] || {}).missing, at: state.newAt[m.agent] }));
   const edges = members.filter((m) => m.reports_to && members.some((x) => x.agent === m.reports_to)).map((m) => ({ kind: 'reports', from: m.reports_to, to: m.agent, hot: hot.has([m.agent, m.reports_to].sort().join('|')) }))
     .concat(talks.map(([x, y]) => ({ kind: 'talk', from: x, to: y, hot: hot.has([x, y].sort().join('|')) })));
@@ -719,30 +642,30 @@ function makeLeader(id) {
 }
 // ---------- plantillas: un equipo armado para empezar (después se edita en el lienzo) ----------
 // Plantillas de equipo. Cada asiento: [agente, rol, jefe, herramientas, qué hace (se ve en el editor), cómo trabaja (su
-// instrucción)]. Pensadas como equipos reales: cada uno hace SU parte y no rehace la de otro (el que construye no se
-// revisa solo; el que revisa no reconstruye; el líder reparte y controla, no ejecuta), con traspasos cortos. Así el
-// trabajo no se duplica y gasta menos. Ante algo riesgoso, cada asiento le pregunta a su jefe; el líder, a la persona.
-const WAYS = 'Cómo trabaja este equipo: hacé solo tu parte y no rehagas la de otro; si algo de otro está mal, decíselo con lo concreto (qué, dónde, cómo verlo). Mensajes cortos: qué hiciste, dónde quedó, qué falta. Leé solo lo que necesitás para tu tarea. Si algo te bloquea o es riesgoso, preguntale a quien te reporta.';
+// instrucción)]. Pensadas como equipos reales: cada uno responde por SU parte y no rehace la de otro (el que construye
+// no se revisa solo; el líder reparte primero), con traspasos cortos, así el trabajo no se duplica. Pero todos tienen
+// todas las herramientas (lib/runtime.syn → SEAT_TOOLS): si algo de otro está mal y es chico, lo arregla quien lo ve.
+const WAYS = 'Cómo trabaja este equipo: cada uno responde por su parte, y todos tienen todas las herramientas. No rehagas lo de otro: si algo de otro está mal, decíselo con lo concreto (qué, dónde, cómo verlo); si es chico y te frena, arreglalo vos y avisale. Mensajes cortos: qué hiciste, dónde quedó, qué falta. Leé solo lo que necesitás para tu tarea. Cada cosa se verifica una sola vez, por quien tiene esa tarea: no repitas pruebas ni revisiones que ya hizo otro sobre el mismo commit. Si algo te bloquea, preguntale a quien te reporta.';
 const TEMPLATES = [
   { id: 'startup', title: 'Startup', desc: 'Dirección, producto, tecnología y comunicación: cada uno en lo suyo, hacia un mismo objetivo.', members: [
-    ['ceo', 'CEO', '', 'read', 'Reparte el objetivo, sigue el avance y decide cuándo está terminado. No ejecuta: delega y controla.',
-      'Dirigís. Convertí el objetivo en tareas del tablero, cada una con un dueño claro, y mandale a cada uno lo que necesitás de él. Después seguí el avance y destrabá lo que se frene. No implementás, no revisás código ni escribís documentos: eso lo hace cada responsable. Cerrás cuando cada responsable confirmó su parte; los merges a main los hacés vos cuando el CTO aprobó.'],
+    ['ceo', 'CEO', '', 'read', 'Reparte el objetivo, sigue el avance y decide cuándo está terminado. Puede hacer lo que haga falta, pero primero reparte.',
+      'Dirigís. Convertí el objetivo en tareas del tablero, cada una con un dueño claro, y mandale a cada uno lo que necesitás de él. Para repartir no leas el código: el enfoque técnico y lo que hay que tocar lo ve el CTO. Después seguí el avance y destrabá lo que se frene: si algo está mal o trabado y arreglarlo vos es más rápido que explicarlo, arreglalo y avisale al responsable. Cerrás cuando cada responsable confirmó su parte; la integración a main la hacés vos cuando el CTO aprobó, sin volver a revisar lo aprobado: merge y las pruebas una sola vez.'],
     ['cpo', 'CPO', 'ceo', 'code', 'Convierte el objetivo en requisitos cortos y criterios de aceptación verificables.',
       'Escribís los requisitos: un documento corto con qué tiene que hacer y cómo se comprueba (criterios de aceptación verificables), y las decisiones de producto que hagan falta. No implementás ni revisás código. Cuando esté, avisales al CTO y al Dev dónde quedó.'],
-    ['cto', 'CTO', 'ceo', 'code', 'Decide el enfoque técnico y verifica lo que entrega el Dev: revisa y prueba. No implementa.',
-      'Sos el responsable técnico. Si hace falta, decidí el enfoque y decíselo al Dev en pocas líneas. Cuando el Dev entrega, revisá el cambio contra los requisitos y escribí y corré las pruebas que lo verifican. No implementás la funcionalidad: si algo falla, devolvéselo al Dev con lo concreto. Cuando aprobás, avisale al CEO que está listo para main.'],
+    ['cto', 'CTO', 'ceo', 'code', 'Decide el enfoque técnico y verifica lo que entrega el Dev: revisa, prueba y corrige lo chico.',
+      'Sos el responsable técnico. Si hace falta, decidí el enfoque y decíselo al Dev en pocas líneas. Cuando el Dev entrega, revisá el cambio contra los requisitos y escribí y corré las pruebas que lo verifican. La funcionalidad la implementa el Dev: si algo falla, devolvéselo con lo concreto; si es chico, arreglalo vos en su copia y avisale. Revisás una sola vez, sobre el commit que te pasa; la documentación no la revisás. Cuando aprobás, avisale al CEO que está listo para main.'],
     ['dev', 'Dev', 'cto', 'code', 'Implementa en su rama y entrega algo que corre. Las pruebas de verificación las hace el CTO.',
       'Implementás lo que pide tu tarea, en tu rama. Antes de entregar comprobá que funciona: que corre, sin errores ni advertencias, y que lo que ya andaba sigue andando. Las pruebas de verificación las escribe el CTO: no las dupliques. Entregá con un commit y un mensaje corto al CTO: qué cambiaste y dónde.'],
     ['cmo', 'CMO', 'ceo', 'code', 'Documenta y comunica lo que se hizo: guía para usuarios, notas de versión, anuncios.',
       'Comunicás lo que se hizo: documentación para quien lo usa, notas de versión y anuncios. Escribí a partir de lo ya entregado y aprobado (leé el código y lo que informó el CTO), no de supuestos. No tocás el código ni lo verificás: eso ya lo hizo el CTO. No levantes servidores ni corras pruebas.']],
     talks: [['cpo', 'cto'], ['cmo', 'cto']] },
   { id: 'software', title: 'Desarrollo de software', desc: 'Un líder técnico que reparte y aprueba, desarrollo que construye y QA que verifica.', members: [
-    ['lider', 'Líder técnico', '', 'read', 'Reparte el trabajo, decide el enfoque y da el OK final. No implementa ni prueba.',
-      'Liderás. Repartí el trabajo en tareas con dueño, decidí el enfoque cuando haga falta (en pocas líneas) y seguí el avance. No implementás ni probás: delegás y controlás. Cuando QA aprueba, hacés el merge a main y cerrás.'],
+    ['lider', 'Líder técnico', '', 'read', 'Reparte el trabajo, decide el enfoque y da el OK final. Puede hacer lo que haga falta, pero primero reparte.',
+      'Liderás. Repartí el trabajo en tareas con dueño, decidí el enfoque cuando haga falta (en pocas líneas) y seguí el avance; si algo se traba y arreglarlo vos es más rápido que explicarlo, arreglalo y avisale al responsable. Cuando QA aprueba, integrás a main sin volver a revisar (merge y las pruebas una sola vez) y cerrás.'],
     ['dev', 'Dev', 'lider', 'code', 'Implementa en su rama y entrega algo que corre. Las pruebas de verificación las hace QA.',
       'Implementás lo que pide tu tarea, en tu rama. Antes de entregar comprobá que funciona: que corre, sin errores ni advertencias, y que lo que ya andaba sigue andando. Las pruebas de verificación las escribe QA: no las dupliques. Entregá con un commit y un mensaje corto a QA: qué cambiaste y dónde.'],
     ['qa', 'QA', 'lider', 'code', 'Verifica lo que entrega el Dev contra lo pedido: revisa, escribe y corre las pruebas.',
-      'Verificás lo que entrega el Dev contra lo pedido: revisá el cambio y escribí y corré las pruebas que lo comprueban. No arreglás el código: si algo falla, devolvéselo al Dev con qué falla y cómo reproducirlo. Cuando pasa, avisale al líder que está listo.']],
+      'Verificás lo que entrega el Dev contra lo pedido: revisá el cambio y escribí y corré las pruebas que lo comprueban. Si algo falla, devolvéselo al Dev con qué falla y cómo reproducirlo; si es una línea, arreglala vos y avisale. Cuando pasa, avisale al líder que está listo.']],
     talks: [['dev', 'qa']] },
   { id: 'contenido', title: 'Contenido y marketing', desc: 'Un editor que planifica y aprueba, un redactor que escribe y un corrector que pule.', members: [
     ['editor', 'Editor', '', 'read', 'Planifica qué se publica, encarga cada pieza con un brief y aprueba. No redacta.',
@@ -812,7 +735,7 @@ function presetOf(tools) { const t = tools || []; if (!t.length) return 'none'; 
 function slugName() { return (BASE ? BASE.slice(3) : 'equipo').replace(/-[0-9a-f]{8}$/, '').replace(/[^a-z0-9-]/g, '').slice(0, 40) || 'equipo'; }
 // «ante algo riesgoso»: a quién le pregunta depende del asiento — cadena de mando (lib/loop.syn): solo el líder te pregunta
 // a vos; los demás se lo piden a su jefe, que lo hace o lo sube hasta el líder
-const permsFor = (lead, bossRole) => [['strict', 'no lo hace'], ['ask', lead ? 'te pregunta a vos' : 'se lo pide a su jefe' + (bossRole ? ' (' + bossRole + ')' : '')], ['yolo', 'lo hace sin preguntar']];
+const permsFor = () => [['strict', 'no lo hace'], ['ask', 'te pregunta a vos'], ['yolo', 'lo hace sin preguntar']];
 // la barra del equipo (debajo de la cabecera). Viendo: cuál, para qué y qué hacer; editando: nombre, para qué y guardar
 // debajo del nombre: cómo se guarda (nuevo) o la clave que no cambia (uno que ya existe)
 const slugNote = (d) => d.isNew ? (d.name && slugify(d.name) !== d.name ? 'se guarda como ' + esc(slugify(d.name)) : '') : (d.name !== d.id ? 'clave interna: ' + esc(d.id) + ' (no cambia)' : '');
@@ -889,9 +812,8 @@ function inspectorHtml() {
     <label>Rol <input id="mRole" value="${esc(m.role)}" placeholder="CTO"></label>
     <label>Para qué está <input id="mDesc" value="${esc(m.description)}" placeholder="una línea"></label>
     ${m.agent === L ? '<p class="ds">Es el líder: recibe los objetivos, reparte el trabajo y es el único que te pregunta a vos. Si está solo, lo hace todo.</p>' : `<label>Le reporta a <select id="mBoss"><option value="" ${m.reports_to ? '' : 'selected'}>nadie por ahora (al guardar, al líder)</option>${others.filter((x) => !below.has(x.agent)).map((x) => `<option value="${esc(x.agent)}" ${x.agent === m.reports_to ? 'selected' : ''}>${esc(x.role || x.agent)}${x.agent === L ? ' (líder)' : ''}</option>`).join('')}</select></label>`}
-    <label>Qué puede hacer <select id="mPreset">${PRESETS.map(([v, l]) => `<option value="${v}" ${v === m.preset ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-    <label>Ante algo riesgoso <select id="mPerm">${permsFor(m.agent === L, m.reports_to && (d.members.find((x) => x.agent === m.reports_to) || {}).role).map(([v, l]) => `<option value="${v}" ${v === m.permission ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <span class="ds">${m.agent === L ? 'Es el único del equipo que te consulta a vos.' : 'Nunca te pregunta a vos: si su jefe no puede decidirlo, sube hasta el líder, que es el único que te consulta.'}</span></label>
+    <label>Ante algo riesgoso <select id="mPerm">${permsFor().map(([v, l]) => `<option value="${v}" ${v === m.permission ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <span class="ds">Tiene todas las herramientas y en su puesto trabaja sin preguntar. Esto es para lo demás: lo que necesita tu aprobación (tu copia del proyecto, un push) te llega a vos, con su nombre.</span></label>
     <label>Tope diario de tokens <span class="unit"><input id="mCap" type="number" min="0" step="50000" value="${m.daily_tokens || ''}" placeholder="el del equipo: ${esc(k(d.budget_daily_tokens || 0))}"> tokens</span>
       <span class="ds">${(() => { const live = (teamOf(d.id) || { members: [] }).members.find((x) => x.agent === m.agent); return live ? `Hoy lleva ${k(live.spent_today || 0)}. ` : ''; })()}Vacío = el del equipo (en Opciones). Ponele más al que más trabaja.</span></label>
     <label>Cómo trabaja <textarea id="mSys" rows="4" placeholder="Sos el CTO: decidís cómo se construye, revisás el código de los demás…">${esc(m.system)}</textarea></label>
@@ -932,7 +854,6 @@ function bindEditor() {
   on('#mBoss', 'onchange', (e) => { if (e.target.value) connectDraft(e.target.value, m.agent); else { m.reports_to = ''; renderTeams(); } });
   on('#mSys', 'oninput', (e) => { m.system = e.target.value; touch(); });
   on('#mCap', 'oninput', (e) => (m.daily_tokens = Math.max(0, +e.target.value || 0)));
-  on('#mPreset', 'onchange', (e) => { m.preset = e.target.value; touch(); renderGraph(); });
   on('#mPerm', 'onchange', (e) => { m.permission = e.target.value; touch(); });
   on('#mLead', 'onclick', () => makeLeader(m.agent));
   on('#mDel', 'onclick', () => removeSeat(m.agent));
@@ -966,7 +887,7 @@ function route() {
   if (r.page === 'newteam' && !state.draft && !state.wizard) state.wizard = { tpl: 'software', name: '', desc: '' };
   if (r.page !== 'newteam') state.wizard = null;
   const fkey = r.form ? r.team + ':' + r.form : '';
-  if (fkey && (!state.form || state.form.team !== r.team)) state.form = { team: r.team, text: '', freq: 'daily', at: '09:00', every: 6, days: ['mon'], budget: 600000 };
+  if (fkey && (!state.form || state.form.team !== r.team)) state.form = { team: r.team, text: '', freq: 'daily', at: '09:00', every: 6, days: ['mon'], budget: 700000 };
   if (!fkey) state.form = null;
   state.formKey = null; state.drawer = null; state.liveKey = null;
   $('#objDetail').classList.remove('lvmode'); $('#objDrawer').hidden = true;

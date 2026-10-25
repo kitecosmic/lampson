@@ -40,7 +40,7 @@ let DIGEST_MAX be 30
 task open()
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     db_open(DB)
     sql_exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, title TEXT NOT NULL, notes TEXT DEFAULT '', owner TEXT DEFAULT '', status TEXT DEFAULT 'todo', depends TEXT DEFAULT '[]', created_by TEXT DEFAULT '', created_at REAL, updated_at REAL)")
     sql_exec("CREATE TABLE IF NOT EXISTS ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, at REAL, actor TEXT, kind TEXT, ref TEXT DEFAULT '', text TEXT DEFAULT '')")
@@ -50,6 +50,7 @@ task open()
     sql_exec("CREATE TABLE IF NOT EXISTS spend (day TEXT, agent TEXT, tokens INTEGER DEFAULT 0, PRIMARY KEY (day, agent))")
     sql_exec("CREATE TABLE IF NOT EXISTS seat_cont (objective INTEGER, agent TEXT, n INTEGER DEFAULT 0, PRIMARY KEY (objective, agent))")
     sql_exec("CREATE TABLE IF NOT EXISTS obj_sessions (objective INTEGER, agent TEXT, session TEXT, PRIMARY KEY (objective, agent))")
+    sql_exec("CREATE TABLE IF NOT EXISTS seat_notes (objective INTEGER, agent TEXT, note TEXT, at REAL, PRIMARY KEY (objective, agent))")
     sql_exec("CREATE TABLE IF NOT EXISTS objectives (id INTEGER PRIMARY KEY AUTOINCREMENT, agent TEXT NOT NULL, text TEXT NOT NULL, status TEXT DEFAULT 'active', progress TEXT DEFAULT '', question TEXT DEFAULT '', question_kind TEXT DEFAULT '', reply TEXT DEFAULT '', result TEXT DEFAULT '', round_seconds INTEGER DEFAULT 20, budget_tokens INTEGER DEFAULT 500000, spent INTEGER DEFAULT 0, turns INTEGER DEFAULT 0, last_start REAL DEFAULT 0, last_end REAL DEFAULT 0, created_by TEXT DEFAULT '', created_at REAL, updated_at REAL, team TEXT DEFAULT '')")
     -- bases creadas antes de los objetivos de equipo
     try
@@ -62,6 +63,12 @@ task open()
             sql_exec("ALTER TABLE objectives ADD COLUMN " + col)
         recover err
             set err to err
+    -- bases creadas antes de los mensajes numerados: seen = el último mensaje del destinatario que el remitente ya
+    -- tenía cuando escribió (lib/teamrun.syn avisa si se cruzaron)
+    try
+        sql_exec("ALTER TABLE messages ADD COLUMN seen INTEGER DEFAULT 0")
+    recover err
+        set err to err
     -- bases creadas antes de las tareas por objetivo: la columna, y las tareas que ya había (una sola vez, cuando se
     -- agrega): las de un objetivo solo, por su scope; las de un equipo, al último objetivo del equipo creado antes
     try
@@ -112,7 +119,7 @@ export task validate(raw, source)
 -- todos los equipos del proyecto: {teams, errors}
 export task scan()
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let teams be []
     let errors be []
     try
@@ -133,23 +140,37 @@ export task scan()
 
 export task all()
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     give scan()["teams"]
 
 export task get(id)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let f be where(all(), (t) => t["id"] == id)
     give when length(f) == 0 then nothing otherwise f[0]
 
 export task teams_of(agent)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     give where(all(), (t) => length(where(t["members"], (m) => m["agent"] == agent)) > 0)
 
 export task member(team, agent)
     let f be where(team["members"], (m) => m["agent"] == agent)
     give when length(f) == 0 then nothing otherwise f[0]
+
+-- los que dependen de `agent`, directa o indirectamente (el Dev del CTO; para el líder, todos): en sus copias puede
+-- trabajar (lib/worktree.syn, la regla del asiento)
+export task below(team, agent)
+    let out be []
+    let frontier be [agent]
+    while length(frontier) > 0
+        let nxt be []
+        each m in team["members"]
+            when contains(frontier, m["reports_to"]) and m["agent"] != agent and not contains(out, m["agent"])
+                set out to append(out, m["agent"])
+                set nxt to append(nxt, m["agent"])
+        set frontier to nxt
+    give out
 
 -- a quién le puede escribir `agent` en el equipo: su jefe, los que le reportan y los pares de "talks" (la pantalla los
 -- propone al unir dos asientos bajo el mismo jefe, pero se hablan solo si el par está: lo decide quien arma el equipo)
@@ -180,7 +201,7 @@ task managers(team, agent)
 -- el equipo de una llamada: el pedido (`team`) o el único del agente. {ok, team} / {ok: false, error}
 export task resolve(agent, wanted)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let mine be teams_of(agent)
     when wanted != nothing and text(wanted) != ""
         let f be where(mine, (t) => t["id"] == lower(text(wanted)))
@@ -196,61 +217,32 @@ export task resolve(agent, wanted)
 -- qué puede hacer un asiento, según las tools de su archivo: así nadie se asigna (ni le asignan) algo que no puede
 -- hacer. (Visto 2026-10-17: un CEO con «leer y correr comandos» se quedó con la implementación y, sin edit ni write,
 -- «editaba» con `echo edit-1`.)
-task can_do(agent)
-    require file.read("workspace")
-    require file.read("workspace/*")
-    let tools be nothing
-    each f in ["workspace/.lampson/agents/" + agent + ".agent.json", "agents/" + agent + ".agent.json"]
-        when tools == nothing and file_exists(f)
-            try
-                let spec be json_decode(read_file(f))
-                set tools to when contains(spec, "tools") then spec["tools"] otherwise nothing
-            recover err
-                set tools to nothing
-    when tools == nothing
-        give ""
-    when contains(tools, "edit") or contains(tools, "write")
-        give " — can edit files and run commands"
-    when contains(tools, "bash")
-        give " — can read and run commands, cannot edit files"
-    when length(tools) == 0
-        give " — coordinates only (no file tools)"
-    give " — can read, cannot edit files"
-
 -- lo que el agente tiene que saber de su equipo, para su prompt (lib/runtime.syn → system_for)
 export task instructions(agent)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let out be ""
     each t in teams_of(agent)
         let me be member(t, agent)
         let lines be []
         each m in t["members"]
-            set lines to append(lines, "- " + m["agent"] + ": " + m["role"] + (when m["reports_to"] != "" then " (reports to " + m["reports_to"] + ")" otherwise "") + can_do(m["agent"]))
+            set lines to append(lines, "- " + m["agent"] + ": " + m["role"] + (when m["reports_to"] != "" then " (reports to " + m["reports_to"] + ")" otherwise ""))
         let ps be peers(t, agent)
         let lead be lead_of(t)
-        -- los que dependen de él (directos o no): su jefe puede ver su trabajo y hacerse cargo si se traba
-        let subs be []
-        let frontier be [agent]
-        while length(frontier) > 0
-            let nxt be []
-            each m in t["members"]
-                when contains(frontier, m["reports_to"]) and not contains(subs, m["agent"]) and m["agent"] != agent
-                    set subs to append(subs, m["agent"])
-                    set nxt to append(nxt, m["agent"])
-            set frontier to nxt
-        -- la cadena de mando: cada uno le pregunta a su jefe; solo el líder le pregunta a la persona (y solo lo que el
-        -- equipo no puede resolver). Lo mismo con lo que necesita aprobación: lib/loop.syn no deja que un asiento que
-        -- no es el líder abra una aprobación a la persona (opts.escalate_to, lib/runtime.syn)
-        let chain be when agent == lead then "\nYou lead the team. The others bring their questions and anything that needs approval to their boss, and it comes up to you only if their boss can't solve it. Solve what you can: decide, unblock, re-plan. Ask the person (`objective` ask or request_approval) only what truly only they can decide or approve — they shouldn't hear about anything the team can handle." otherwise "\nChain of command: when you are stuck, unsure what to do, or need a decision, ask " + me["reports_to"] + " with `send` — never the person. Anything that needs approval (a merge, a push, a risky command) also goes to " + me["reports_to"] + ": you can't ask the person, only the lead does, and only if it is really needed. When someone who reports to you asks you something, answer it if you can; if you can't, ask your own boss."
-        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note; when you review a task in review, move it to done if it passes or back to doing with what to fix — if it is not yours to move, tell its owner), add the tasks you break work into. Never work on a task someone else owns. Give each task to someone who can do it (see what each member can do above); if a task needs a tool you don't have, hand it over instead of trying. Each turn starts with what changed in the team since your last turn. A teammate who hasn't answered is usually still in the middle of a turn: wait for their reply instead of asking again or giving their task to someone else — reassign only if they say they are blocked. If a teammate runs out of steps mid-turn, Lampson gives them another turn in the same conversation to finish; if they get stuck anyway, a message from you gives them a fresh turn to continue. Your final reply in a turn is not seen by anyone: to tell someone something, `send` it; to record progress, update the board." + chain + (when t["worktrees"] then "\nGit: if the project uses git, you work in your OWN working copy (it is your root for files and bash), on branch team/" + t["id"] + "/" + agent + ", and your commits carry your name. Use relative paths: absolute paths into the project point to the main checkout, not to your copy. Commit your work there and say which branch when you hand it over. The main checkout is ../../.. — merging into it (e.g. `git -C ../../.. merge team/" + t["id"] + "/<agent>`) or pushing touches the shared history: " + (when agent == lead then "Lampson asks the person to approve it first." otherwise "only the lead does it (Lampson asks the person to approve it) — hand your branch over to " + me["reports_to"] + ".") + (when length(subs) > 0 then " You can see the work of those who report to you (" + join(subs, ", ") + "): their commits with `git log/diff/show team/" + t["id"] + "/<agent>`, their uncommitted changes with `git -C ../<agent> status` and `git -C ../<agent> diff`. If one of them is stuck or slow, or two of them overlap, step in like a manager would: bring their branch into your copy (`git merge team/" + t["id"] + "/<agent>`), finish or fix it there, and tell them (and your boss) what you took over. Don't edit files inside their copies." otherwise " Don't edit files of other agents' copies.") otherwise "")
+        -- los que dependen de él (directos o no): trabaja también en sus copias, como un jefe que se sienta a arreglarlo
+        let subs be below(t, agent)
+        -- una organización: la persona es el directorio (da el objetivo, aprueba solo el borde); las dudas y decisiones
+        -- suben por la cadena de mando, y solo el líder le pregunta a la persona. Los permisos no suben por la cadena: la
+        -- regla del asiento (lib/worktree.syn) da autonomía total en su copia y lo de borde va directo a la persona
+        let chain be when agent == lead then "\nYou lead the team, and the person is your board of directors: they set the objective and only see what crosses the company's border. The others bring their questions and decisions to their boss, and it comes up to you only if their boss can't solve it. Solve what you can: decide, unblock, re-plan. Ask the person (`objective` ask) only what truly only they can decide — they shouldn't hear about anything the team can handle." otherwise "\nChain of command: when you are stuck, unsure what to do, or need a decision, ask " + me["reports_to"] + " with `send` — never the person. When someone who reports to you asks you something, answer it if you can; if you can't, ask your own boss."
+        set out to out + "\n\n# Team " + t["id"] + (when t["description"] != "" then " — " + t["description"] otherwise "") + "\nYou are " + agent + ", role: " + me["role"] + "." + (when me["reports_to"] != "" then " You report to " + me["reports_to"] + "." otherwise "") + "\nMembers:\n" + join(lines, "\n") + "\nYou can message: " + (when length(ps) == 0 then "nobody" otherwise join(ps, ", ")) + " (with `send`). Messages to anyone else are rejected.\nThe shared work lives on the board (`board`): list it, take a task before working on it (`claim`), move it as you go (doing → review → done, or blocked with a note; when you review a task in review, move it to done if it passes or back to doing with what to fix — if it is not yours to move, tell its owner), add the tasks you break work into. Never work on a task someone else owns. Check ONCE: tokens are the team's budget, and redoing a fix now and then costs less than everyone checking everything every time. Each change is checked by ONE person: whoever the team gives that job (a reviewer or QA role), or else whoever did the task, in their copy, saying so (commit + result). That IS the check. Nobody re-runs what a teammate already ran on the same commit, re-checks someone else's check, or builds a parallel smoke test; nobody tests before there is something to test. Docs are checked against the code by whoever writes them, and by no one else. Whoever integrates trusts the commits they get: merge, run the tests ONCE after merging, done. If something breaks later, fix it then. Every member has ALL of Lampson's tools (read, write, edit, bash, process, lsp, fetch, memory, todo, skill, the plugins and MCP servers of the project): your role says what you are responsible for, not what you are able to do. Give each task to whoever owns that part; if something blocks the objective and fixing it yourself is faster than explaining it, fix it and tell its owner what you changed. Each turn starts with what changed in the team since your last turn. A teammate who hasn't answered is usually still in the middle of a turn: wait for their reply instead of asking again or giving their task to someone else — reassign only if they say they are blocked. If a teammate runs out of steps mid-turn, Lampson gives them another turn in the same conversation to finish; if they get stuck anyway, a message from you gives them a fresh turn to continue. Each turn starts a FRESH conversation: you get the team news, the board, the messages that woke you and the note you left yourself — not your earlier turns (re-read a file if you need it). Your final reply in a turn is that note to yourself, and nobody else reads it: end every turn with a few lines — what you did, what you tried that didn't work, what's next. To tell someone something, `send` it; to record progress, update the board. Don't send acknowledgements or thanks (\"received\", \"ok\", \"thanks\", \"standing by\"): every message wakes its recipient for a turn. Send only what someone needs to act on. Messages are numbered (#n); one marked as written BEFORE its sender got yours crossed with it: answer only what is still open and don't redo work you already sent." + chain + (when t["worktrees"] then "\nGit: if the project uses git, your OWN working copy is your workplace: bash and the file tools start there (it is your root), on branch team/" + t["id"] + "/" + agent + ", and your commits carry your name. There you have full autonomy — install, build, test, delete, reset, branch, commit: nobody approves anything there, so never ask anyone for permission to do your work. Use relative paths: the other agents' copies are ../<agent> and the person's own copy of the project (the main checkout, on the main branch) is ../../..; you can READ anything in the project, nothing outside it." + (when agent == lead then " As the lead you can also work directly in every teammate's copy (../<agent>): fix, finish, run their tests — then tell its owner what you changed." otherwise (when length(subs) > 0 then " You can also work directly in the copies of those under you (" + join(subs, ", ") + "): fix, finish, run their tests — then tell them what you changed. The other copies are read-only for you: to build on someone else's work, merge their branch into your copy (`git merge team/" + t["id"] + "/<agent>`)." otherwise " The other copies are read-only for you: to build on or test someone's work, merge their branch into your copy (`git merge team/" + t["id"] + "/<agent>`) and work there.")) + (when agent == lead or length(subs) > 0 then " The person's copy (../../..) is where the work lands: integrating into the main branch and whatever that needs there (a conflict, the tests, a tag) is yours to do — the person approves working there ONCE per objective, and after that nothing there asks again. Do it cleanly: merge every branch into YOUR copy first, resolve conflicts and run the tests there, then bring it over with `git -C ../../.. merge --ff-only team/" + t["id"] + "/" + agent + "` so the person's copy never sees a conflict, and leave no stray files in it." otherwise " Integrating into the main branch is your boss's: commit your work and hand your branch over to " + me["reports_to"] + ".") + " Pushing " + (when agent == lead then "is yours only, and every push asks the person." otherwise "is only for the lead.") + " If a command comes back NOT RUN because of a team rule, the command itself was fine: do what the message says instead of retrying variants." otherwise "")
     give out
 
 -- ---------- registro ----------
 export task log(scope, actor, kind, ref, txt)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let id be sql_exec("INSERT INTO ledger (scope, at, actor, kind, ref, text) VALUES (?, ?, ?, ?, ?, ?)", [scope, now(), actor, kind, ref, slice(text(txt), 0, 400)])["last_id"]
@@ -261,7 +253,7 @@ export task log(scope, actor, kind, ref, txt)
 export task ledger(scope, after, limit)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     give sql("SELECT * FROM ledger WHERE scope = ? AND id > ? ORDER BY id DESC LIMIT ?", [scope, after, limit])
 
@@ -269,7 +261,7 @@ export task ledger(scope, after, limit)
 export task digest(scope, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     let cur be sql("SELECT last FROM cursors WHERE agent = ? AND scope = ?", [agent, scope])
     let after be when length(cur) == 0 then 0 otherwise cur[0]["last"]
@@ -289,14 +281,14 @@ task row_text(t)
 export task tasks(scope)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     give sql("SELECT * FROM tasks WHERE scope = ? ORDER BY id", [scope])
 
 export task task_get(scope, id)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     let r be sql("SELECT * FROM tasks WHERE scope = ? AND id = ?", [scope, id])
     give when length(r) == 0 then nothing otherwise r[0]
@@ -304,7 +296,7 @@ export task task_get(scope, id)
 export task add_task(scope, actor, title, notes, owner, depends)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     when trim(text(title)) == ""
@@ -329,7 +321,7 @@ export task objective_of_scope(scope)
 export task claim(scope, actor, id)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let t be task_get(scope, id)
@@ -355,7 +347,7 @@ export task claim(scope, actor, id)
 export task update_task(scope, team, actor, id, changes)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let t be task_get(scope, id)
@@ -389,12 +381,12 @@ export task update_task(scope, team, actor, id, changes)
 export task send(team, sender, dest, txt)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     open()
     let d be lower(trim(text(dest)))
     when member(team, d) == nothing
@@ -407,16 +399,54 @@ export task send(team, sender, dest, txt)
     when not file_exists("workspace/.lampson/agents/" + d + ".agent.json") and not file_exists("agents/" + d + ".agent.json")
         raise(d + " is in the team but has no agent file, so nobody would read it — tell the person (the team needs .lampson/agents/" + d + ".agent.json)")
     let scope be "team:" + team["id"]
-    let id be sql_exec("INSERT INTO messages (scope, sender, recipient, text, at) VALUES (?, ?, ?, ?, ?)", [scope, sender, d, text(txt), now()])["last_id"]
+    let sn be sql("SELECT MAX(id) AS m FROM messages WHERE scope = ? AND sender = ? AND recipient = ? AND state = 'delivered'", [scope, d, sender])
+    let seen be when length(sn) == 0 or sn[0]["m"] == nothing then 0 otherwise sn[0]["m"]
+    let id be sql_exec("INSERT INTO messages (scope, sender, recipient, text, at, seen) VALUES (?, ?, ?, ?, ?, ?)", [scope, sender, d, text(txt), now(), seen])["last_id"]
     log(scope, sender, "message", "→ " + d, text(txt))
     give id
+
+-- la cabeza de un mensaje al entregarlo: su número, quién lo manda y si se cruzó con uno del destinatario. Un mensaje
+-- escrito antes de que el remitente recibiera el último del destinatario se cruzó con él: el que lo lee no tiene que
+-- rehacer lo que ya mandó. (Visto en O-16: el CEO pidió «rehacé los candidatos» justo cuando el CTO mandaba los nuevos.)
+export task msg_head(team, m)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/**")
+    open()
+    when m["sender"] == "person"
+        give "[message from the person who owns this team — act on it]\n" + m["text"]
+    let who be member(team, m["sender"])
+    let seen be field(m, "seen", 0)
+    let tag be "#" + text(m["id"]) + " from " + m["sender"] + (when who != nothing then " (" + who["role"] + ")" otherwise "")
+    let cross be sql("SELECT id FROM messages WHERE scope = ? AND sender = ? AND recipient = ? AND id > ? AND id < ? ORDER BY id", [m["scope"], m["recipient"], m["sender"], when seen == nothing then 0 otherwise seen, m["id"]])
+    when length(cross) > 0
+        let ids be join(apply(cross, (x) => "#" + text(x["id"])), ", ")
+        give "[message " + tag + " — written BEFORE " + m["sender"] + " got your " + ids + ": it crossed with yours. Answer only what is still open; don't redo what you already sent]\n" + m["text"]
+    give "[message " + tag + (when seen != nothing and seen > 0 then ", after reading your #" + text(seen) otherwise "") + "]\n" + m["text"]
+
+-- ¿el mensaje es de un objetivo que ya terminó? los que se mandan al cerrar (o hasta 2 min después, mientras terminan
+-- sus turnos) no despiertan a nadie: el objetivo está entregado. (Visto en O-16: el CEO cerró sin esperar la
+-- confirmación que había pedido y el CPO se despertó para contestarle a nadie.) La persona siempre llega.
+export let CLOSED_GRACE be 120
+
+export task after_close(team_id, m)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/**")
+    open()
+    when m["sender"] == "person"
+        give false
+    let r be sql("SELECT status, created_at, updated_at FROM objectives WHERE team = ? ORDER BY id DESC LIMIT 1", [team_id])
+    when length(r) == 0 or not contains(["done", "cancelled", "failed"], r[0]["status"])
+        give false
+    give m["at"] >= r[0]["created_at"] and m["at"] <= r[0]["updated_at"] + CLOSED_GRACE
 
 -- los mensajes por entregar (los entrega lib/teamrun.syn por el buzón)
 -- cuánto hace que no pasa nada en un scope (segundos desde lo último del registro; con mensajes por entregar, 0)
 export task quiet_for(scope)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     when sql("SELECT COUNT(*) AS n FROM messages WHERE scope = ? AND state = 'pending'", [scope])[0]["n"] > 0
@@ -427,14 +457,14 @@ export task quiet_for(scope)
 export task pending()
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     give sql("SELECT * FROM messages WHERE state = 'pending' ORDER BY id", [])
 
 export task mark(id, state)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     sql_exec("UPDATE messages SET state = ? WHERE id = ?", [state, id])
     give true
@@ -447,7 +477,7 @@ task today()
 export task record_spend(agent, tokens)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     sql_exec("INSERT INTO spend (day, agent, tokens) VALUES (?, ?, ?) ON CONFLICT(day, agent) DO UPDATE SET tokens = tokens + excluded.tokens", [today(), agent, floor(tokens)])
@@ -458,7 +488,7 @@ export task record_spend(agent, tokens)
 export task archive(id)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let a be id + "~" + format_time(now(), "%Y%m%d-%H%M%S")
@@ -472,7 +502,7 @@ export task archive(id)
 export task forget_spend(agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     sql_exec("DELETE FROM spend WHERE agent = ?", [agent])
     give true
@@ -480,7 +510,7 @@ export task forget_spend(agent)
 export task spent_today(agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let r be sql("SELECT tokens FROM spend WHERE day = ? AND agent = ?", [today(), agent])
@@ -496,7 +526,7 @@ export task cap_of(team, agent)
 export task seat_tokens(agent, action, tokens)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let before be spent_today(agent)
@@ -507,7 +537,7 @@ export task seat_tokens(agent, action, tokens)
 export task over_budget(team, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     let cap be cap_of(team, agent)
     when cap <= 0 or spent_today(agent) < cap
@@ -515,7 +545,8 @@ export task over_budget(team, agent)
     -- con un objetivo abierto que todavía tiene presupuesto, manda ese presupuesto (lo aprobó la persona): el tope
     -- diario es para las rondas sueltas. (Visto 2026-10-17: el CTO llegó al tope a mitad de O-5 y el equipo quedó
     -- esperando su revisión con el objetivo «en curso» y nadie trabajando.)
-    let r be sql("SELECT id FROM objectives WHERE team = ? AND status = 'active' AND (budget_tokens <= 0 OR spent < budget_tokens) LIMIT 1", [team["id"]])
+    -- esperando a la persona también cuenta: si no, el líder que preguntó quedaba «sin turnos por hoy» (O-18)
+    let r be sql("SELECT id FROM objectives WHERE team = ? AND status IN ('active', 'waiting') AND (budget_tokens <= 0 OR spent < budget_tokens) LIMIT 1", [team["id"]])
     give length(r) == 0
 
 -- la conversación que usó cada asiento en cada objetivo: el primer turno de un asiento en un objetivo arranca una
@@ -524,7 +555,7 @@ export task over_budget(team, agent)
 export task seat_session(oid, agent, sid)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     sql_exec("INSERT OR IGNORE INTO obj_sessions (objective, agent, session) VALUES (?, ?, ?)", [oid, agent, sid])
     give true
@@ -532,7 +563,7 @@ export task seat_session(oid, agent, sid)
 export task seat_session_of(oid, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     let r be sql("SELECT session FROM obj_sessions WHERE objective = ? AND agent = ?", [oid, agent])
     give when length(r) == 0 then "" otherwise r[0]["session"]
@@ -545,7 +576,7 @@ export task seat_session_of(oid, agent)
 export task has_work(scope, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     -- sus tareas abiertas; una «por hacer» que depende de otras sin terminar todavía no es trabajo (visto 2026-10-18:
     -- el CEO tenía «merge cuando estén #49 y #50» y recibía una ronda por minuto, ~38k tokens cada una, para esperar)
@@ -573,7 +604,7 @@ export task has_work(scope, agent)
 export task assigned_since(scope, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     let cur be sql("SELECT last FROM cursors WHERE agent = ? AND scope = ?", [agent, scope])
     let after be when length(cur) == 0 then 0 otherwise cur[0]["last"]
@@ -602,7 +633,7 @@ task owner_of(scope, ref)
 export task round_due(team, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let scope be "team:" + team["id"]
@@ -626,18 +657,37 @@ export task round_due(team, agent)
 export task turn_text(team, agent, head)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     let scope be "team:" + team["id"]
     let news be digest(scope, agent)
     let mine be where(tasks(scope), (t) => t["owner"] == agent and t["status"] != "done")
     let free be where(tasks(scope), (t) => t["owner"] == "" and t["status"] == "todo")
     let out be head
+    let oid be objective_of_scope(scope)
+    when oid != 0 and lead_of(team) != agent
+        let ob be obj_get(oid)
+        when ob != nothing
+            set out to out + "\n\n[objective O-" + text(oid) + ", led by " + ob["agent"] + "] " + slice(ob["text"], 0, 500)
+    let nt be sql("SELECT note, at FROM seat_notes WHERE objective = ? AND agent = ?", [oid, agent])
+    when length(nt) > 0 and fresh_turn(scope, agent)
+        set out to out + "\n\n[your note from your previous turn, " + format_time(nt[0]["at"], "%H:%M") + "]\n" + nt[0]["note"]
     set out to out + "\n\n[team " + team["id"] + "] Since your last turn:" + (when length(news) == 0 then " nothing new." otherwise "\n" + join(apply(news, (n) => "- " + n), "\n"))
     set out to out + "\nYour open tasks:" + (when length(mine) == 0 then " none." otherwise "\n" + join(apply(mine, (t) => row_text(t)), "\n"))
     when length(free) > 0
         set out to out + "\nTasks nobody owns:\n" + join(apply(free, (t) => row_text(t)), "\n")
     give out
+
+-- ¿el próximo turno de `agent` arranca con la conversación limpia? Sí, salvo que el anterior se haya cortado a la mitad
+-- (límite de pasos): ese sigue en la misma conversación. Lo de antes está en el tablero, el registro, git y su nota.
+-- Una conversación que arrastra todos sus turnos reenvía todo en cada paso (visto en O-15: el CEO, ~80k por paso).
+export task fresh_turn(scope, agent)
+    require db(".lampson/teams.db")
+    require file(".lampson")
+    require file(".lampson/**")
+    open()
+    let r be sql("SELECT n FROM seat_cont WHERE objective = ? AND agent = ?", [objective_of_scope(scope), agent])
+    give length(r) == 0 or r[0]["n"] == 0
 
 -- ---------- un asiento al que se le cortó el turno ----------
 -- Si un turno se corta (límite de pasos o de tokens del turno) en medio de un objetivo, el asiento recibe un mensaje
@@ -649,13 +699,16 @@ export let MAX_CONT be 3
 export task seat_turn_end(team_id, agent, stopped, last)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     open()
     let scope be "team:" + team_id
     let oid be objective_of_scope(scope)
+    -- su nota para el próximo turno (que arranca con la conversación limpia): lo último que dijo
+    when trim(text(last)) != ""
+        sql_exec("INSERT INTO seat_notes (objective, agent, note, at) VALUES (?, ?, ?, ?) ON CONFLICT(objective, agent) DO UPDATE SET note = excluded.note, at = excluded.at", [oid, agent, slice(trim(text(last)), 0, 2000), now()])
     when stopped != "max_steps" and stopped != "budget"
         sql_exec("DELETE FROM seat_cont WHERE objective = ? AND agent = ?", [oid, agent])
         give false
@@ -681,7 +734,7 @@ export task seat_turn_end(team_id, agent, stopped, last)
 
 -- ---------- la respuesta final que nadie lee ----------
 -- Un asiento que contesta en su respuesta final en vez de `send` (pasa con modelos flojos): esa respuesta se le
--- reenvía a quien lo despertó (o a su jefe), para que no se pierda. (Visto 2026-10-18: el Dev contestó «voy
+-- reenvía al compañero que lo despertó, para que no se pierda (despertado por una ronda, es solo su nota). (Visto 2026-10-18: el Dev contestó «voy
 -- avanzando» a un pedido de estado, nadie lo leyó, y el CEO lo dio por perdido.) No se reenvía si en el turno ya
 -- mandó algo, si es corta (una línea de «nada que hacer»), ni si lo que lo despertó ya era un reenvío (ping-pong).
 export let FORWARD_MARK be "(Lampson forwarded this: it was my final reply and I didn't `send` it)"
@@ -689,9 +742,9 @@ export let FORWARD_MARK be "(Lampson forwarded this: it was my final reply and I
 export task forward_final(team_id, agent, from, stopped, said, t0, trigger)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     when stopped != "done" or length(trim(text(said))) < 80 or contains(text(trigger), FORWARD_MARK)
         give ""
@@ -705,8 +758,10 @@ export task forward_final(team_id, agent, from, stopped, said, t0, trigger)
     let scope be "team:" + team_id
     when sql("SELECT COUNT(*) AS n FROM ledger WHERE scope = ? AND actor = ? AND kind = 'message' AND at >= ?", [scope, agent, t0])[0]["n"] > 0
         give ""
-    let dest be when from != agent and member(tm, from) != nothing then from otherwise me["reports_to"]
-    when dest == "" or not contains(peers(tm, agent), dest)
+    when from == agent or member(tm, from) == nothing
+        give ""
+    let dest be from
+    when not contains(peers(tm, agent), dest)
         give ""
     sql_exec("INSERT INTO messages (scope, sender, recipient, text, at, state) VALUES (?, ?, ?, ?, ?, 'pending')", [scope, agent, dest, FORWARD_MARK + "\n" + slice(trim(text(said)), 0, 1500), now()])
     log(scope, agent, "message", "→ " + dest, "[forwarded final reply] " + trim(text(said)))
@@ -716,9 +771,9 @@ export task forward_final(team_id, agent, from, stopped, said, t0, trigger)
 export task person_message(team_id, agent, txt)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let tm be get(team_id)
     when tm == nothing or member(tm, agent) == nothing
@@ -733,7 +788,7 @@ export task person_message(team_id, agent, txt)
 export task person_move(scope, id, status)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     when not contains(STATUSES, status)
         give false
@@ -776,21 +831,21 @@ export let BOARD_SPEC be {
 -- reservada y builtin). Las versiones *_with reciben el mapa (los tests las usan directo).
 export task send_tool(recipient, message, team, _agent, _scope)
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     give send_with({"recipient": recipient, "message": message, "team": team, "_agent": _agent, "_scope": _scope})
 
 export task board_tool(action, id, title, notes, owner, status, depends, mine, team, _agent, _scope)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let a be {"_agent": _agent, "_scope": _scope}
     each pair in [["action", action], ["id", id], ["title", title], ["notes", notes], ["owner", owner], ["status", status], ["depends", depends], ["mine", mine], ["team", team]]
@@ -800,12 +855,12 @@ export task board_tool(action, id, title, notes, owner, status, depends, mine, t
 
 export task send_with(args)
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let me be text(field(args, "_agent", ""))
     when me == ""
@@ -815,17 +870,17 @@ export task send_with(args)
     when not rt["ok"]
         give "ERROR: " + rt["error"]
     try
-        send(rt["team"], me, field(args, "recipient", ""), field(args, "message", ""))
-        give "sent to " + lower(text(field(args, "recipient", ""))) + " — it reaches them as a new message"
+        let mid be send(rt["team"], me, field(args, "recipient", ""), field(args, "message", ""))
+        give "sent #" + text(mid) + " to " + lower(text(field(args, "recipient", ""))) + " — it reaches them as a new message"
     recover err
         give "ERROR: " + regex_replace(text(err), "^.*?:\\d+:\\d+: ", "")
 
 export task board_with(args)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let me be text(field(args, "_agent", ""))
     when me == ""
@@ -891,7 +946,7 @@ export let MAX_HOPS be 2
 -- los equipos que nombra un texto con @id (los que existen)
 export task mentions(txt)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let ids be apply(all(), (t) => t["id"])
     let out be []
     each m in regex_find_all(lower(text(txt)), "@[a-z0-9][a-z0-9-]*")
@@ -903,16 +958,16 @@ export task mentions(txt)
 export task obj_create(agent, txt, opts)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     open()
     when trim(text(txt)) == ""
         raise("an objective needs a text")
     let tid be lower(text(field(opts, "team", "")))
     let rs be floor(number(field(opts, "round_seconds", when tid != "" then 60 otherwise 20)))
-    let bt be floor(number(field(opts, "budget_tokens", 600000)))
+    let bt be floor(number(field(opts, "budget_tokens", 700000)))
     let chain be field(opts, "chain", [])
     -- a quién lo puede pasar: lo que heredó del objetivo del que viene, o los equipos que nombra el pedido
     let wanted be when field(opts, "pass_to", nothing) != nothing then opts["pass_to"] otherwise (when tid != "" then mentions(txt) otherwise [])
@@ -926,7 +981,7 @@ export task obj_create(agent, txt, opts)
 export task obj_children(id)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     give sql("SELECT id, team, status FROM objectives WHERE from_obj = ? ORDER BY id", [id])
 
@@ -934,9 +989,9 @@ export task obj_children(id)
 task pass_now(o, tid, msg)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let tm be get(tid)
     let chain be append(json_decode(field(o, "chain", "[]")), o["team"])
@@ -957,7 +1012,7 @@ export task lead_of(team)
 export task team_objective(team_id, agent)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     let r be sql("SELECT * FROM objectives WHERE team = ? AND agent = ? AND status IN ('active', 'waiting', 'paused') ORDER BY id DESC LIMIT 1", [team_id, agent])
     give when length(r) == 0 then nothing otherwise r[0]
@@ -967,7 +1022,7 @@ export task team_objective(team_id, agent)
 export task team_turn_end(team_id, agent, tokens)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     -- el turno que cruza el tope diario del asiento queda en el registro (una vez): la persona ve quién gasta de más
@@ -990,7 +1045,7 @@ export task team_turn_end(team_id, agent, tokens)
 export task obj_get(id)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     let r be sql("SELECT * FROM objectives WHERE id = ?", [id])
     give when length(r) == 0 then nothing otherwise r[0]
@@ -998,7 +1053,7 @@ export task obj_get(id)
 export task obj_list()
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     open()
     give sql("SELECT * FROM objectives ORDER BY id DESC", [])
 
@@ -1006,7 +1061,7 @@ export task obj_list()
 export task obj_set(id, changes)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     let allowed_keys be ["status", "progress", "question", "question_kind", "reply", "result", "last_start", "turns", "pass_pending"]
@@ -1019,7 +1074,7 @@ export task obj_set(id, changes)
 export task obj_turn_end(id, tokens)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     open()
     sql_exec("UPDATE objectives SET spent = spent + ?, last_end = ?, updated_at = ? WHERE id = ?", [floor(tokens), now(), now(), id])
@@ -1033,7 +1088,7 @@ export task obj_turn_end(id, tokens)
 export task obj_reply(id, txt, approved, who)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     let o be obj_get(id)
     when o == nothing
@@ -1067,7 +1122,7 @@ export task obj_reply(id, txt, approved, who)
 export task obj_cancel(id, who)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     let o be obj_get(id)
     when o == nothing
@@ -1081,7 +1136,7 @@ export task obj_cancel(id, who)
 -- lo que el líder tiene que saber para pasar el trabajo (vacío si el pedido no nombró a otro equipo)
 export task pass_text(o)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let pt be json_decode(field(o, "pass_to", "[]"))
     when length(pt) == 0
         give ""
@@ -1095,7 +1150,7 @@ export task pass_text(o)
 export task obj_head(o)
     when o["turns"] == 0 and field(o, "team", "") != ""
         let fromt be when field(o, "from_obj", 0) > 0 then " — handed over by team " + json_decode(field(o, "chain", "[]"))[length(json_decode(field(o, "chain", "[]"))) - 1] + " from O-" + text(o["from_obj"]) + "; ask the person, not that team, if something is unclear" otherwise ""
-        give "[objective O-" + text(o["id"]) + " for team " + o["team"] + fromt + "] " + o["text"] + pass_text(o) + "\n\nYou lead this objective with your team. How:\n- Break it into tasks on the team board (`board` add, with owner = who should do it, and depends when one needs another) and `send` each teammate what you need from them. They work in parallel in their own copies; follow up every turn with what changed.\n- Keep the person informed with `objective` (action report) at milestones. Before anything that leaves the workspace or can't be undone (merge into main, push, release, publish, buy, send), `objective` action request_approval and wait — Lampson also asks the person before any merge or push.\n- When everything is delivered and verified, `objective` action done with a closing report for the person, who didn't follow the work. Write it in their language, in three short labeled parts: what was achieved (and by whom), what is in the project now (files, branches, commits — exact paths), and what is left or worth doing next. If it can't be done, action fail with why."
+        give "[objective O-" + text(o["id"]) + " for team " + o["team"] + fromt + "] " + o["text"] + pass_text(o) + "\n\nYou lead this objective with your team. How:\n- Break it into tasks on the team board (`board` add, with owner = who should do it, and depends when one needs another) and `send` each teammate what you need from them. They work in parallel in their own copies; follow up every turn with what changed.\n- Keep the person informed with `objective` (action report) at milestones. Before anything that leaves the company or can't be undone (release, publish, deploy, buy, send), `objective` action request_approval and wait. Integrating into main and pushing need no request_approval: just run the merge or the push, and Lampson itself asks the person — once per objective for working in their copy (showing what goes in), and on every push. Never request_approval for a merge on top of that: the person would approve the same thing twice.\n- One check per change: if a teammate's role is to review or test (QA, a technical lead), that is the one review; otherwise the one who does a task tests it. Don't add extra review tasks on top, except for what is risky (security, money, data migrations, deleting things) or when the person asks; docs never need one. When you integrate, don't re-review what was approved: merge, run the tests once.\n- When everything is delivered, `objective` action done with a closing report for the person, who didn't follow the work. Write it in their language, in three short labeled parts: what was achieved (and by whom), what is in the project now (files, branches, commits — exact paths), and what is left or worth doing next. If it can't be done, action fail with why."
     when o["turns"] == 0
         give "[objective O-" + text(o["id"]) + "] " + o["text"] + "\n\nWork on this on your own until it is done. How:\n- First plan it: break it into tasks on your board (`board` add), then work through them (claim → doing → done).\n- Each turn, move the work forward and end the turn; you'll get the next turn automatically. Nobody reads your final reply: report with `objective` (action report) when you reach something worth telling.\n- Need a decision or information only the person has? `objective` action ask. Before anything that leaves this workspace or can't be undone (merge into main, push, deploy, buy, book, send an email), `objective` action request_approval and wait for the answer — never do it without an approval.\n- When it is done, `objective` action done with a closing report for the person, in their language, in three short labeled parts: what was achieved, what is in the project now (files, branches — exact paths) and what is left or worth doing next. If it can't be done, action fail with why."
     when o["reply"] != ""
@@ -1105,7 +1160,7 @@ export task obj_head(o)
 export task obj_turn_text(o)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     let scope be "objective:" + text(o["id"])
     let head be obj_head(o)
@@ -1130,9 +1185,9 @@ export let OBJECTIVE_SPEC be {
 export task objective_tool(action, message, _agent, _scope, team = nothing)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require time
     let sc be text(_scope)
     let o be nothing

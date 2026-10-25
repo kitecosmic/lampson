@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/teams.css">
 <link rel="stylesheet" href="/css/views.css">
+<link rel="stylesheet" href="/css/inbox.css">
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body class="home">
@@ -19,12 +20,12 @@
   <span class="brand">lampson</span>
   <nav class="navtabs" data-on="equipos"></nav>
   <span class="spacer"></span>
+  <span class="inbox-slot" data-inbox></span>
   <button class="primary" id="newTeam">+ equipo</button>
   <span class="live" id="live" title="actualizado en vivo">en vivo</span>
   <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
 </header>
 
-<section class="attention" id="attention" hidden></section>
 
 <main class="homegrid">
   <div class="vhead"><h1>Equipos</h1><p class="vlead">Agentes con roles que trabajan solos hacia un objetivo, se coordinan entre ellos y te consultan antes de lo irreversible.</p></div>
@@ -40,6 +41,7 @@
 </main>
 
 <script src="/js/navtabs.js"></script>
+<script src="/js/inbox.js"></script>
 <script src="/js/teams-home.js"></script>
 </body>
 </html>

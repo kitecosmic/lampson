@@ -30,14 +30,14 @@ export task norm_mode(v)
 -- el modo configurado (config.json / .env), esté vivo o no en este proceso
 export task mode()
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require env("LAMPSON_*")
     give norm_mode(settings.judge_setting()["mode"])
 
 -- encendido en la configuración Y con un proveedor vivo en este proceso: la compuerta de quien lo use
 export task on()
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require env("LAMPSON_*")
     when mode() == "off"
         give false
@@ -46,7 +46,7 @@ export task on()
 -- {mode, model_setting, has_key, live, provider_model, restart, from_env}: lo que ven la UI y /judge
 export task status()
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require env("LAMPSON_*")
     let js be settings.judge_setting()
     let m be norm_mode(js["mode"])
@@ -65,7 +65,7 @@ export task status()
 -- guardar el modo (y opcionalmente el modelo / la key de TypeSafe) → {ok, error}
 export task configure(m, model, key)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require env("LAMPSON_*")
     let nm be lower(trim(text(m)))
     when not contains(MODES, nm) and nm != "typesafe" and nm != "local"

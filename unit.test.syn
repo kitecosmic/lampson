@@ -6,17 +6,17 @@
 require time
 require exec
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 require file.read("skills")
-require file.read("skills/*")
+require file.read("skills/**")
 require file.read("plugins")
-require file.read("plugins/*")
+require file.read("plugins/**")
 require file("agents")
-require file("agents/*")
+require file("agents/**")
 require file("memory")
-require file("memory/*")
+require file("memory/**")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
@@ -507,7 +507,7 @@ test "plugins: descubrir, encender (humano), catálogo plugin_<plugin>_<tool>, c
     let out be plugins.call("plugin_hello_greet", {"who": "ana"})
     assert(contains(out, "hello ana via greet"), "salida del plugin: " + out)
     -- un plugin que pide MÁS de lo que su manifiesto autoriza falla contra el techo, no escala
-    write_file(ldir + "/plugin.syn", "require file.read(\"workspace/*\")\nprint(read_file(\"workspace/.lampson/plugins/hello/plugin.json\"))\n")
+    write_file(ldir + "/plugin.syn", "require file.read(\"workspace/**\")\nprint(read_file(\"workspace/.lampson/plugins/hello/plugin.json\"))\n")
     let denied be plugins.call("plugin_hello_greet", {})
     assert(contains(denied, "ERROR") and contains(lower(denied), "ceiling"), "techo: " + denied)
     -- la tool `plugin` del modelo lista y el registry/catálogo del perfil build los incluye
@@ -1715,7 +1715,7 @@ test "equipos: el grafo es una regla — a quién le puede escribir cada uno"
     assert_eq(sort(teams.peers(t, "ttcto")), ["ttceo", "ttcmo", "ttdev"])
     assert_eq(sort(teams.peers(t, "ttceo")), ["ttcmo", "ttcto"])
     assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "ttceo", "message": "hola jefe del jefe"}), "can't message ttceo"))
-    assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "ttcto", "message": "terminé el login"}), "sent to ttcto"))
+    assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "ttcto", "message": "terminé el login"}), " to ttcto — it reaches them"))
     assert(contains(teams.send_with({"_agent": "ttdev", "recipient": "nadie", "message": "x"}), "not in team"))
     assert(contains(teams.send_with({"recipient": "ttcto", "message": "x"}), "who is sending"), "sin _agent no hay send")
     assert(contains(teams.send_with({"_agent": "rt-ajeno", "recipient": "ttcto", "message": "x"}), "not in any team"))
@@ -1763,9 +1763,17 @@ test "equipos: un miembro tiene send y board, su rol en el prompt, y opts sabe q
     assert(contains(ctx["system"]["content"], "You can message: ttcto"))
     -- la cadena de mando: el dev le pregunta a su jefe, nunca a la persona; el líder es el único que le pregunta
     assert(contains(ctx["system"]["content"], "Chain of command: when you are stuck, unsure what to do, or need a decision, ask ttcto with `send` — never the person."))
-    assert(contains(runtime.boot("ttceo", {}, nothing)["system"]["content"], "You lead the team."))
+    assert(contains(runtime.boot("ttceo", {}, nothing)["system"]["content"], "You lead the team, and the person is your board of directors"))
     assert_eq(ctx["opts"]["agent_id"], "ttdev")
     write_file(runtime.PROJECT_DIR + "/rt-solo.agent.json", json_encode({"id": "rt-solo", "system": "solo", "tools": ["read"]}))
+    -- un asiento tiene todas las herramientas de Lampson aunque su archivo liste pocas (sin delegate: un subagente
+    -- trabajaría fuera de su copia); fuera de un equipo, solo las suyas
+    let lreg be keys(runtime.registry_of(runtime.get("ttceo")))
+    each n in ["read", "write", "edit", "bash", "process", "lsp", "fetch", "memory", "todo", "skill", "send", "board"]
+        assert(contains(lreg, n), n + " · " + json_encode(lreg))
+    assert(not contains(lreg, "delegate"))
+    assert(length(where(runtime.catalog_of(runtime.get("ttceo")), (s) => s["name"] == "write")) == 1)
+    assert(not contains(keys(runtime.registry_of(runtime.get("rt-solo"))), "write"), "fuera de un equipo, solo las suyas")
     assert(not contains(keys(runtime.registry_of(runtime.get("rt-solo"))), "send"), "fuera de un equipo, sin send")
     assert(not contains(keys(runtime.registry_of(runtime.get("build"))), "board"), "el de programación no coordina equipos")
     rm_file(runtime.PROJECT_DIR + "/rt-solo.agent.json")
@@ -1873,7 +1881,7 @@ test "objetivos: la tool objective — solo en su conversación, estados, y el t
 -- ---------- copias de git por agente (lib/worktree.syn) ----------
 use "./lib/worktree.syn" as worktree
 
-test "worktree: traducir rutas y bash a la copia del agente; lo que toca la historia compartida"
+test "worktree: traducir rutas y bash a la copia del agente"
     let r be ".lampson/worktrees/dev"
     assert_eq(worktree.rooted("read", {"path": "src/a.js"}, r)["path"], r + "/src/a.js")
     assert_eq(worktree.rooted("ls", {}, r)["path"], r)
@@ -1881,13 +1889,71 @@ test "worktree: traducir rutas y bash a la copia del agente; lo que toca la hist
     assert_eq(worktree.rooted("read", {"path": r + "/src/a.js"}, r)["path"], r + "/src/a.js", "ya traducida no se duplica")
     assert_eq(worktree.rooted("read", {"path": ".lampson/spill/c1.txt"}, r)["path"], ".lampson/spill/c1.txt", "los spill viven en la raíz")
     assert_eq(worktree.rooted("bash", {"command": "npm test"}, r)["command"], "cd \"" + r + "\" && npm test")
-    assert_eq(worktree.touches_shared("git commit -m x && git status"), "")
-    assert_eq(worktree.touches_shared("git merge main"), "", "traer main a su rama, adentro de su copia: libre")
-    assert(worktree.touches_shared("git push origin team/x/dev") != "")
-    assert(worktree.touches_shared("git -C ../../.. merge team/x/dev") != "")
-    assert(worktree.touches_shared("cd ../../.. && git merge team/x/dev") != "")
-    assert(worktree.touches_shared("git branch -D main") != "")
-    assert_eq(worktree.touches_shared("npm test"), "")
+
+test "equipos: la regla del asiento — autonomía en su puesto y en el de los suyos, el borde lo aprueba la persona, y cada no dice por qué"
+    let me be {"agent": "cto", "team": "startup", "lead": false, "below": [], "boss": "ceo", "main": "main", "integration_ok": false}
+    let lead be {"agent": "ceo", "team": "startup", "lead": true, "below": ["cto", "dev", "cmo"], "boss": "", "main": "main", "integration_ok": false, "home": "C:\Users\x\proyectos\demo"}
+    -- en su copia, nada pregunta: ni lo «peligroso» (es su borrador), ni leer en todo el proyecto
+    each c in ["npm test", "rm -rf build && git reset --hard HEAD~1", "git branch -d mi-tmp", "git merge main", "git merge team/startup/dev", "git log main..HEAD", "git -C ../dev diff", "git -C ../../.. status", "echo x 2>/dev/null", "curl https://example.com/a", "cat ../dev/src/a.js | head -5", "cd .. && cd dev && git log -1 2>&1 | tail -3", "git -C ../cmo log -1 --oneline 2>&1", "curl -s $B/tasks | tail -n +2 | tr '\\n' ',' | tr -d \"\\r\\n\"", "grep -n \"readJson\\|/done\\|/undone\\|405\" src/*.js | head -60"]
+        assert_eq(worktree.seat_bash(c, me)["decision"], "allow", c)
+    -- el texto no es una ruta: mensajes de commit, patrones de grep, código de python -c, heredocs (visto en O-15:
+    -- «PATCH /tasks/:id» en el mensaje frenaba el merge, y el modelo probó 9 variantes)
+    each c in ["git merge --no-ff team/startup/dev -m \"merge: PATCH /tasks/:id extendido — O-15\"", "grep -n \"PATCH /tasks/:id\" src/server.js", "python -c \"p='a.js'\n// comentario\nprint(p)\"", "cat > nota.md <<'MD'\nver /etc/hosts y ~/x\nMD\ngit add nota.md", "git commit -m 'docs: /tasks/:id'"]
+        assert_eq(worktree.seat_bash(c, me)["decision"], "allow", c)
+    -- lo que no es de su puesto no corre, y el mensaje dice que es una regla del equipo, no un error del comando
+    each c in ["cat /etc/passwd", "ls ../../../..", "cd ~ && ls", "cd ../dev && npm test", "cd .. && cd dev && npm test", "git diff > ../dev/x.patch", "git -C ../../.. merge team/startup/cto", "cd ../../.. && git merge team/startup/cto", "cd ./.. && cd ./.. && cd ./.. && git commit -m x", "git push origin team/startup/cto", "git branch -D team/startup/dev", "git branch -f main HEAD", "cd .lampson/worktrees/dev && git show 1a2b", "cd ../.. && cd ../.. && ls"]
+        let r be worktree.seat_bash(c, me)
+        assert_eq(r["decision"], "deny", c)
+        assert(starts_with(r["note"], "NOT RUN — your command is fine"), c)
+    assert(contains(worktree.seat_bash("cd ../dev && npm test", me)["note"], "git merge team/startup/dev"), "dice cómo seguir")
+    assert(contains(worktree.seat_bash("git push", me)["note"], "send` ceo"), "a quién pasarle la rama")
+    assert(contains(worktree.seat_bash("cd .lampson/worktrees/dev", me)["note"], "already inside your own copy"))
+    -- un jefe trabaja en las copias de los suyos (el CTO arregla lo del Dev); el líder, en todas
+    let jefe be {"agent": "cto", "team": "startup", "lead": false, "below": ["dev"], "boss": "ceo", "main": "main", "integration_ok": false}
+    assert_eq(worktree.seat_bash("cd ../dev && npm test && git commit -am fix", jefe)["decision"], "allow")
+    assert_eq(worktree.seat_bash("git branch -f team/startup/dev HEAD", jefe)["decision"], "allow")
+    assert_eq(worktree.seat_bash("cd ../cmo && rm notas.md", jefe)["decision"], "deny", "el CMO no depende del CTO")
+    assert_eq(worktree.seat_file("edit", {"path": "../dev/src/a.js"}, jefe)["decision"], "allow")
+    assert_eq(worktree.seat_file("edit", {"path": "../cmo/README.md"}, jefe)["decision"], "deny")
+    assert_eq(worktree.seat_bash("cd .. && cd cmo && git commit -am docs", lead)["decision"], "allow")
+    -- la copia de la persona: quien integra trabaja ahí con una aprobación por objetivo; el push, siempre
+    assert_eq(worktree.seat_bash("git -C ../../.. merge team/startup/dev", jefe)["decision"], "ask")
+    assert_eq(worktree.seat_bash("git push origin main", jefe)["decision"], "deny", "el push es solo del líder")
+    let r1 be worktree.seat_bash("cd ./.. && cd ./.. && cd ./.. && npm test", lead)
+    assert(r1["decision"] == "ask" and r1["grant"] and contains(r1["reason"], "once per objective"), json_encode(r1))
+    assert_eq(worktree.seat_bash("cd C:/Users/x/proyectos/demo && git merge team/startup/ceo", lead)["decision"], "ask", "su ruta absoluta es la copia de la persona")
+    assert_eq(worktree.seat_bash("cd /c/Users/x/proyectos/demo/.lampson/worktrees/ceo && npm test", lead)["decision"], "allow", "su ruta absoluta, en su copia")
+    assert_eq(worktree.seat_bash("cd C:/Users/x/otro && ls", lead)["decision"], "deny")
+    set lead["integration_ok"] to true
+    each c in ["cd ../../.. && git merge --no-ff team/startup/dev", "cd ../../.. && python fix.py && git add -A && git commit -m \"fix: /tasks\" && git tag v0.11.0", "git -C ../../.. merge --ff-only team/startup/ceo"]
+        assert_eq(worktree.seat_bash(c, lead)["decision"], "allow", c)
+    let r2 be worktree.seat_bash("git push origin main", lead)
+    assert(r2["decision"] == "ask" and not r2["grant"])
+    -- archivos: leer en todo el proyecto, cambiar donde puede cambiar bash
+    assert_eq(worktree.seat_file("read", {"path": "../dev/src/a.js"}, me)["decision"], "allow")
+    assert_eq(worktree.seat_file("write", {"path": "../../../README.md"}, me)["decision"], "deny")
+    assert_eq(worktree.seat_file("write", {"path": "../../../README.md"}, lead)["decision"], "allow", "ya aprobado")
+    assert_eq(worktree.seat_file("edit", {"path": "src/a.js"}, me)["decision"], "allow")
+    assert_eq(worktree.seat_file("write", {"path": "../../../../x"}, lead)["decision"], "deny")
+    -- la aprobación de integrar vive por objetivo; sin objetivo no se guarda
+    let before be nothing
+    try
+        set before to read_file(worktree.GRANTS_FILE)
+    recover err
+        set before to nothing
+    let g be {"agent": "ceo", "team": "t-grant-" + text(floor(random() * 1000000)), "objective": 987654}
+    assert(not worktree.integration_ok(g), "todavía no aprobado")
+    worktree.grant_integration(g)
+    assert(worktree.integration_ok(g), "aprobado una vez, vale para el objetivo")
+    assert(not worktree.integration_ok({"agent": "ceo", "team": g["team"], "objective": 0}), "sin objetivo no se guarda")
+    when before == nothing
+        rm_file(worktree.GRANTS_FILE)
+    otherwise
+        write_file(worktree.GRANTS_FILE, before)
+    -- fuera de los equipos, bash pregunta por lo que sube el techo, no por cualquier cosa con «.lampson»
+    assert_eq(permission.evaluate("bash", {"command": "git -C .lampson/worktrees/dev log"}, "ask")["decision"], "allow")
+    assert_eq(permission.evaluate("bash", {"command": "echo x >> .lampson/tools/precio.syn"}, "ask")["decision"], "ask")
+    assert_eq(permission.evaluate("bash", {"command": "cp a.json .lampson/agents/x.agent.json"}, "ask")["decision"], "ask")
 
 test "worktree: en un repo, cada agente tiene su copia, su rama y su autor (y .lampson/ queda excluido)"
     run("git", ["init", "-q", "-b", "main"], 30, {"cwd": "workspace"})
@@ -1922,6 +1988,23 @@ test "worktree: en un repo, cada agente tiene su copia, su rama y su autor (y .l
     let pc be worktree.preview("git -C ../../.. merge team/t/dev")
     assert(not pc["ff"] and pc["conflicts"], json_encode(pc))
     run("git", ["reset", "-q", "--hard", "HEAD~1"], 30, {"cwd": "workspace"})
+    -- al despertar, la copia al día con main: sin trabajo propio avanza sola; con trabajo propio, se le avisa
+    write_file("workspace/main2.txt", "nuevo en main\n")
+    run("git", ["add", "main2.txt"], 30, {"cwd": "workspace"})
+    run("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "-m", "main avanza"], 30, {"cwd": "workspace"})
+    run("git", ["-c", "user.name=T", "-c", "user.email=t@t", "merge", "-q", "--no-edit", "team/t/dev"], 30, {"cwd": "workspace"})
+    let s1 be worktree.sync("t", "dev")
+    assert(s1["moved"] and s1["behind"] >= 1 and contains(s1["note"], "brought your copy up to date"), json_encode(s1))
+    assert(file_exists("workspace/.lampson/worktrees/dev/main2.txt"), "la copia ya tiene lo de main")
+    assert_eq(worktree.sync("t", "dev")["behind"], 0, "al día: nada que hacer")
+    write_file("workspace/.lampson/worktrees/dev/propio.txt", "mío\n")
+    run("git", ["add", "propio.txt"], 30, {"cwd": "workspace/.lampson/worktrees/dev"})
+    run("git", ["commit", "-q", "-m", "trabajo propio"], 30, {"cwd": "workspace/.lampson/worktrees/dev"})
+    write_file("workspace/main3.txt", "otro\n")
+    run("git", ["add", "main3.txt"], 30, {"cwd": "workspace"})
+    run("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-q", "-m", "main sigue"], 30, {"cwd": "workspace"})
+    let s2 be worktree.sync("t", "dev")
+    assert(not s2["moved"] and s2["behind"] == 1 and s2["ahead"] == 1 and contains(s2["note"], "git merge main"), json_encode(s2))
     -- al borrar el equipo: la copia se va y lo que no llegó a main (incluso sin commitear) queda en una rama archive/
     write_file("workspace/.lampson/worktrees/dev/nuevo.txt", "trabajo a medias")
     let rt be worktree.retire("t", "dev")
@@ -1990,6 +2073,8 @@ test "equipos: un turno cortado sigue donde quedó, una tarea que espera a otras
     let t2 be teams.get("t-test")
     assert(teams.cap_of(t2, "ttdev") == 5000 and teams.cap_of(t2, "ttceo") == 1000)
     teams.record_spend("ttceo", 1500)
+    sql_exec("UPDATE objectives SET status = 'waiting' WHERE team = 't-test'")
+    assert(not teams.over_budget(t2, "ttceo"), "esperando a la persona, manda el presupuesto del objetivo")
     sql_exec("UPDATE objectives SET status = 'done' WHERE team = 't-test'")
     assert(teams.over_budget(t2, "ttceo") and not teams.over_budget(t2, "ttdev"))
     let g be api.seat_tokens({"agent": "ttceo", "action": "grant", "tokens": 1000})
@@ -2000,6 +2085,43 @@ test "equipos: un turno cortado sigue donde quedó, una tarea que espera a otras
     each x in ["ttceo", "ttcto", "ttdev", "ttcmo"]
         rm_file(runtime.PROJECT_DIR + "/" + x + ".agent.json")
     rm_file(teams.DIR + "/t-test.team.json")
+
+test "equipos: mensajes numerados que avisan si se cruzaron, cada turno limpio con su nota, y un objetivo cerrado no despierta a nadie"
+    let t be team_fixture()
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    sql_exec("DELETE FROM messages WHERE scope = 'team:t-test'")
+    sql_exec("DELETE FROM seat_notes WHERE agent LIKE 'tt%'")
+    sql_exec("DELETE FROM seat_cont WHERE agent LIKE 'tt%'")
+    -- el Dev le escribe al CTO; antes de recibirlo, el CTO le escribe al Dev: se cruzaron
+    let m1 be teams.send(t, "ttdev", "ttcto", "#12 listo en mi rama")
+    let m2 be teams.send(t, "ttcto", "ttdev", "¿cómo va #12?")
+    let h2 be teams.msg_head(t, sql("SELECT * FROM messages WHERE id = ?", [m2])[0])
+    assert(starts_with(h2, "[message #" + text(m2) + " from ttcto (CTO) — written BEFORE ttcto got your #" + text(m1) + ": it crossed with yours"), h2)
+    -- ya entregado el del Dev, lo próximo del CTO es una respuesta
+    teams.mark(m1, "delivered")
+    let m3 be teams.send(t, "ttcto", "ttdev", "visto, lo reviso")
+    let h3 be teams.msg_head(t, sql("SELECT * FROM messages WHERE id = ?", [m3])[0])
+    assert(starts_with(h3, "[message #" + text(m3) + " from ttcto (CTO), after reading your #" + text(m1) + "]\nvisto"), h3)
+    assert(contains(teams.send_with({"_agent": "ttdev", "_scope": "team:t-test", "recipient": "ttcto", "message": "ok"}), "sent #"))
+    -- cada turno arranca limpio con su nota; uno cortado a la mitad sigue en la misma conversación
+    let oid be teams.obj_create("ttceo", "agregá undone", {"team": "t-test", "created_by": "test"})
+    assert(teams.fresh_turn("team:t-test", "ttdev"))
+    teams.seat_turn_end("t-test", "ttdev", "done", "Hice reopen() en store; falta la ruta. Probé PATCH y no aplica.")
+    let tt be teams.turn_text(t, "ttdev", "[message #9 from ttcto (CTO)]\nhola")
+    assert(contains(tt, "[objective O-" + text(oid) + ", led by ttceo] agregá undone") and contains(tt, "[your note from your previous turn, ") and contains(tt, "falta la ruta"), tt)
+    teams.seat_turn_end("t-test", "ttdev", "max_steps", "a mitad")
+    assert(not teams.fresh_turn("team:t-test", "ttdev"), "cortado: sigue en la misma conversación")
+    assert(not contains(teams.turn_text(t, "ttdev", "x"), "[your note from"), "y sin nota: tiene su conversación")
+    -- el objetivo terminó: lo que se mandan al cerrar no despierta a nadie; lo de la persona, sí
+    teams.obj_set(oid, {"status": "done"})
+    let late be sql("SELECT * FROM messages WHERE id = ?", [teams.send(t, "ttcto", "ttdev", "¿confirmás?")])[0]
+    assert(teams.after_close("t-test", late))
+    assert(not teams.after_close("t-test", {"sender": "person", "at": now()}))
+    assert(not teams.after_close("t-test", {"sender": "ttcto", "at": now() + teams.CLOSED_GRACE + 60}), "mucho después es otra conversación")
+    sql_exec("DELETE FROM objectives WHERE team = 't-test'")
+    sql_exec("DELETE FROM messages WHERE scope = 'team:t-test'")
+    sql_exec("DELETE FROM seat_notes WHERE agent LIKE 'tt%'")
+    sql_exec("DELETE FROM seat_cont WHERE agent LIKE 'tt%'")
 
 test "equipos: la respuesta final que nadie lee se reenvía, y «Revisar qué pasa» ve lo trabado"
     let t be team_fixture()
@@ -2015,7 +2137,7 @@ test "equipos: la respuesta final que nadie lee se reenvía, y «Revisar qué pa
     assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "done", long, 0, "x " + teams.FORWARD_MARK), "")
     assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "done", "nada que hacer", 0, ""), "")
     assert_eq(teams.forward_final("t-test", "ttdev", "ttcto", "max_steps", long, 0, ""), "")
-    assert_eq(teams.forward_final("t-test", "ttdev", "lampson", "done", long, now() + 100, ""), "ttcto", "lo despertó Lampson: a su jefe")
+    assert_eq(teams.forward_final("t-test", "ttdev", "lampson", "done", long, now() + 100, ""), "", "lo despertó Lampson: es su nota para el próximo turno, no se reenvía")
     assert_eq(teams.forward_final("t-test", "ttceo", "lampson", "done", long, now() + 100, ""), "", "el líder no tiene a quién")
     -- la persona le escribe a un asiento y mueve una tarea
     assert(teams.person_message("t-test", "ttdev", "Seguí con #48: tenés presupuesto."))

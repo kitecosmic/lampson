@@ -414,8 +414,29 @@ repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anunci
       entrada en el registro por día
 - [x] Aprobaciones: las del buzón de siempre (cola de aprobación → UI / celular), con el permiso del archivo del agente
 - [x] Cadena de mando: cada asiento le pregunta a su jefe (`send`), nunca a la persona; el jefe resuelve o sube al suyo y solo
-      el líder pregunta o pide aprobación a la persona. El loop lo hace cumplir: lo que pediría aprobación en un asiento que
-      no es el líder no abre la cola, vuelve «pedíselo a tu jefe» (`opts.escalate_to`, lib/runtime.syn → lib/loop.syn)
+      el líder le pregunta a la persona. Las aprobaciones NO suben por la cadena (desde 0.5.3; antes `opts.escalate_to`
+      devolvía «pedíselo a tu jefe» y cada salto costaba un turno sin que ningún agente pudiera aprobar): lo que de verdad
+      necesita aprobación va directo a la cola de la persona, con el nombre del agente
+- [x] Todas las herramientas: un asiento tiene las de `build` (write, edit, process, lsp, fetch, memory, todo, skill, mcp,
+      plugin, schedule, computer_use si está encendida) más los plugins, MCP y tools de la app (`*`), diga lo que diga su
+      archivo (`runtime.SEAT_TOOLS`). Sin `delegate`: un subagente trabaja fuera de la copia del asiento. Su rol dice de qué
+      responde, no qué puede hacer (visto en O-15: el CEO con `read` resolvía conflictos a fuerza de `python -c`)
+- [x] Cada despertar (0.5.3, medido en O-15/O-16): conversación limpia en la misma sesión (`teams.fresh_turn`; un
+      turno cortado por pasos sigue en la suya) con el objetivo, las novedades, el tablero, lo que lo despertó y su
+      nota del turno anterior (su respuesta final, `seat_notes`); la copia al día con main (`worktree.sync`: sin trabajo
+      propio avanza sola, si no se le avisa cuánto quedó atrás); mensajes numerados que dicen si se cruzaron
+      (`messages.seen`, `teams.msg_head`); a un asiento libre se le espera QUIET_SECONDS por si llega otro (una ráfaga,
+      un turno); lo que se mandan al cerrar un objetivo no despierta a nadie (`teams.after_close`)
+- [x] La regla del asiento (0.5.3, `lib/worktree.syn` seat_bash/seat_file, aplicada en lib/loop.syn a bash, process y
+      las tools de archivos): un equipo es una organización y la persona el directorio. Autonomía total en SU copia y en
+      las de quienes dependen de él (el jefe arregla lo de los suyos; el líder, lo de todos); leer, en todo el proyecto.
+      Lo prohibido sigue prohibido, `strict` sigue sin hacer lo peligroso, `approve: ask` sigue preguntando. Borde: la
+      copia de la persona (integrar, resolver, probar, taggear) es de quien integra (el líder o un jefe), con UNA
+      aprobación por objetivo (`.lampson/team-integrations.json`); el push, solo el líder y cada vez. El comando se lee
+      como lo leería el shell: sin heredocs ni texto entre comillas con espacios (un `-m "PATCH /tasks/:id"` no es una
+      ruta), `2>&1` no escribe, cada `cd` se sigue (`cd ./.. && cd ./..` sube dos) y la ruta absoluta del proyecto se
+      traduce. No corre, con un mensaje que dice que es una regla del equipo y qué hacer: fuera del proyecto, cambiar la
+      copia de alguien que no depende de él, ramas ajenas, `.lampson/worktrees/…` desde adentro de una copia
 
 #### 6b — Objetivos
 - [x] Objetivo = {id, texto, agente, estado, informe, pregunta, resultado, turnos, gasto, presupuesto} en la tabla
@@ -439,9 +460,9 @@ repo (CEO reparte, CPO define, dev implementa, CTO revisa, CMO escribe el anunci
 - [x] `.lampson/teams/<id>.team.json`: agentes, roles, quién reporta a quién, `talks`, `round_minutes`,
       `budget_daily_tokens`, `worktrees`; la personalidad es el archivo de cada agente
 - [x] Ramas por agente: `lib/worktree.syn` crea `.lampson/worktrees/<agente>` en `team/<equipo>/<agente>` con su autor
-      (config por worktree; `.lampson/` en `.git/info/exclude`); el loop traduce rutas y bash a esa copia; un merge,
-      rebase, reset o push que sale de su copia pide aprobación SIEMPRE (cola de aprobaciones, 30 min, con el nombre
-      del agente) — la pide el líder; un asiento que no lo es le pasa su rama a su jefe (cadena de mando). Los merges a main quedan con el autor de la copia principal (la persona que aprobó)
+      (config por worktree; `.lampson/` en `.git/info/exclude`); el loop traduce rutas y bash a esa copia; integrar a
+      la principal y el push piden aprobación SIEMPRE, en cualquier modo (cola de aprobaciones, 30 min, con el nombre
+      del agente): la regla del asiento, arriba. Los merges a main quedan con el autor de la copia principal (la persona que aprobó)
 - [x] Pestaña **Equipos**: grafo en vivo + editor (crear equipo, agregar/quitar agentes, rol, a quién reporta, con
       quién más habla, personalidad, herramientas, permiso; guarda el equipo y los archivos de agentes). Objetivos
       para un equipo desde el mismo formulario. Las aprobaciones de la cola también en la franja
@@ -483,6 +504,20 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 ## Bitácora
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
+
+- **2026-10-25** — 0.5.3. Caché de prompt revisado contra opencode, hermes y deepseek-harness (actualizados ese día):
+  el último paso de un turno (tope de pasos o presupuesto al 95 %) mandaba el catálogo vacío para que el modelo no
+  llamara tools, y como los tools van primero en el prefijo eso tiraba el caché entero justo con el contexto más
+  grande. Ahora va el MISMO catálogo y el aviso del harness; si igual pide tools, no corren (`lib/loop.syn`). No se
+  usa `tool_choice: none` como opencode: en Anthropic conserva el caché de tools y system pero tira el de mensajes,
+  que es lo grande; deepseek-harness repite el prefijo idéntico, como acá. El segundo marcador en los mensajes
+  (hermes usa dos) no hace falta: cada request de Lampson suma 2-3 posiciones y una tanda de tool_use/tool_result en
+  paralelo cuenta como UNA, así que el marcador anterior siempre queda dentro de la ventana de 20.
+  Synsema 0.6.46 (con `"synsema": "^0.6.44"` le llegaba a cualquier instalación nueva) rompió dos cosas: los globs
+  de rutas van por segmento (`dir/*` es un nivel; todo el árbol es `dir/**`: 703 `require` cambiados, y el techo
+  `dir/*` de un plugin viejo se lee como `dir/**`), y `require net` sin alcance solo llega a direcciones públicas
+  (los programas de entrada suman `net("0.0.0.0/0")` y `net("::/0")`: LLMs locales, MCP, el hub, fetch a
+  localhost/LAN). Dependencia subida a `^0.6.46`.
 
 - **2026-10-16** — 6c (Equipos) andando con la empresa completa sobre empresa-demo (ver 6c). Decisiones: cada agente
   en su `git worktree` y el loop traduce sus rutas (el agente ve su copia como raíz) en lugar de tocar cada tool; la

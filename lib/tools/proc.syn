@@ -53,9 +53,9 @@ agent Sup
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let key be "proc:" + name
     let p be nothing
     try
@@ -108,9 +108,9 @@ export task start(name, command)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     when not valid_name(name)
         raise("invalid process name '" + text(name) + "' (use letters, digits, - or _)")
     when alive(name)
@@ -146,7 +146,7 @@ export task start(name, command)
 
 export task logs(name, tail)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let n be when tail == nothing then 60 otherwise floor(tail)
     try
         give tail_lines(read_file(path(name, "log")), n)
@@ -182,7 +182,7 @@ export task halt_all()
 -- procesos que ESTA sesión arrancó en cualquier corrida (para la nota de resume: qué se murió con el restart)
 export task list_for_session(sid)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let out be []
     try
         each e in list_dir(DIR)
@@ -201,7 +201,7 @@ export task list_for_session(sid)
 
 export task resume_note(sid)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let items be list_for_session(sid)
     when length(items) == 0
         give ""
@@ -233,7 +233,7 @@ task owned_here(name)
 -- información, es ruido (2026-08-28: la UI mostraba servers de hace días como "apagados").
 export task list()
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let out be []
     try
         each e in list_dir(DIR)
@@ -272,7 +272,7 @@ export task listeners()
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let out be []
     let seen be {}
     each l in port_owners()
@@ -313,7 +313,7 @@ export task kill_pid(pid)
 -- La salida del proceso ("[process exited with code N]") llega como línea nueva: es el aviso.
 export task report()
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let parts be []
     each p in list()
         let log be read_file(path(p["name"], "log"))

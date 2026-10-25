@@ -48,7 +48,7 @@ agent TermSup
     require env("LAMPSON_*")
     require env("OS")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let key be "term:" + id
     let p be nothing
     try
@@ -138,7 +138,7 @@ export task start(cols, rows)
     require env("LAMPSON_*")
     require env("OS")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     when count() >= MAX_TERMS
         give nothing
     let sh be shell()

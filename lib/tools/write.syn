@@ -3,7 +3,7 @@ use "./common.syn" as c
 
 export task tool(path, content)
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let real be c.ws(path)
     -- sobrescribir un archivo existente exige haberlo leído (y que no haya cambiado): igual que edit
     let before be ""

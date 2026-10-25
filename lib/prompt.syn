@@ -12,7 +12,7 @@ let CONTEXT_FILES be ["AGENTS.md", "LAMPSON.md"]
 
 task read_context_files()
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let out be ""
     each f in CONTEXT_FILES
         try
@@ -26,13 +26,13 @@ export task build(env_info, addendum)
     require exec
     require time
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("memory")
-    require file.read("memory/*")
+    require file.read("memory/**")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require env("LAMPSON_*")
     require env("OS")
     -- computer_use solo se menciona cuando está en el catálogo (encendida + driver): vacío si no

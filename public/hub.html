@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="/css/chat.css">
 <link rel="stylesheet" href="/css/panel.css">
 <link rel="stylesheet" href="/css/hub.css">
+<link rel="stylesheet" href="/css/inbox.css">
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body class="hub">
@@ -24,6 +25,7 @@
     <span class="brand">lampson</span>
     <nav class="navtabs" data-on="proyectos"></nav>
     <span class="spacer"></span>
+    <span class="inbox-slot" data-inbox></span>
     <span class="pill" id="devicesBtn" role="button" tabindex="0">dispositivos</span>
     <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
   </div>
@@ -48,6 +50,7 @@
 </main>
 <script src="/js/panel.js"></script>
 <script src="/js/navtabs.js"></script>
+<script src="/js/inbox.js"></script>
 <script src="/js/hub.js"></script>
 <script src="/js/workspaces.js"></script>
 <script src="/vendor/qrcode.js"></script>

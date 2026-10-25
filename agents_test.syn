@@ -4,19 +4,22 @@
 --   LAMPSON_PROVIDER=openai LAMPSON_WIRE=openai LAMPSON_BASE_URL=http://127.0.0.1:8765/v1 LAMPSON_API_KEY=x
 -- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
 require net
+-- Synsema 0.6.46+: `require net` solo llega a direcciones públicas; LLMs locales, MCP, el hub y fetch a localhost/LAN
+require net("0.0.0.0/0")
+require net("::/0")
 require time
 require exec
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 require file.read("skills")
-require file.read("skills/*")
+require file.read("skills/**")
 require file("memory")
-require file("memory/*")
+require file("memory/**")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 use "./lib/agents.syn" as agents
 use "./lib/loop.syn" as loop
 use "./lib/provider.syn" as provider
@@ -122,6 +125,12 @@ while not pending and tries < 60
 check(pending, "el hijo background terminó sin entregar todavía")
 let r3 be loop.run_turn(cfg, r2["messages"] + [{"role": "user", "content": "otra cosa"}], opts, nothing)
 check(contains(r3["text"], "final notice"), "el buzón inyectó el aviso antes del siguiente paso del padre: " + slice(r3["text"], 0, 120))
+
+print("último paso (tope de pasos): el catálogo viaja igual — cambiarlo tiraría el caché de prompt entero")
+let last_opts be loop.default_opts(REG, agents.catalog_for("build"), nothing)
+set last_opts["max_steps"] to 1
+let r4 be loop.run_turn(cfg, [system, {"role": "user", "content": "otra cosa"}], last_opts, nothing)
+check(r4["stopped"] == "max_steps" and contains(r4["text"], "final (no tools offered)") and not contains(r4["text"], "tools=0"), "último paso con el mismo catálogo: " + text(r4["stopped"]) + " · " + slice(r4["text"], 0, 120))
 
 proc_close(mock)
 check(agents.prune(0, 0) >= 3, "prune(0,0) borra los hijos del test")

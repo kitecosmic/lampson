@@ -18,12 +18,15 @@ require time
 require net("127.0.0.1")
 -- lampson --pair comprueba que la dirección pública (túnel o dominio) responda antes de dibujar un QR inútil
 require net
+-- Synsema 0.6.46+: `require net` solo llega a direcciones públicas; LLMs locales, MCP, el hub y fetch a localhost/LAN
+require net("0.0.0.0/0")
+require net("::/0")
 require env("LAMPSON_*")
 require env("OS")
 require env("HOME")
 require env("USERPROFILE")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 require file.read("web.syn")
 require file.read(".env")
 require file.read("chat.syn")

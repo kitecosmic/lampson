@@ -37,7 +37,7 @@ export task run_capture(exe, argv, t)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let p be proc_spawn(exe, argv, {"cwd": c.ROOT, "stderr": "merge", "on_full": "drop_oldest"})
     proc_close_stdin(p)
     let deadline be now() + t
@@ -77,7 +77,7 @@ export task tool(command, timeout)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when looks_like_server(command)
         give "REFUSED: this looks like a server/watcher (`" + command + "`). bash kills its process tree at the timeout, and a dev server left half-killed keeps its port busy. Use the process tool instead: process(action=\"start\", name=\"dev\", command=\"...\"), then process(action=\"logs\") or just keep working — its new output is appended to every bash result. If it is really a one-shot command, wrap it with `timeout 30 ...` and explain why."
     let sc be shell_config()

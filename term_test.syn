@@ -7,7 +7,7 @@ require random
 require env("LAMPSON_*")
 require env("OS")
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 
 use "./lib/term.syn" as term
 

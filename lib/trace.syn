@@ -54,7 +54,7 @@ task delta(sid)
 export task write(sid, kind, line)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when sid == nothing or sid == ""
         give false
     append_file(path(sid), stamp() + " " + delta(sid) + "s  " + kind + "  " + line + "\n")
@@ -65,7 +65,7 @@ export task write(sid, kind, line)
 export task event(sid, kind, data, tag)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let t be when tag == nothing or tag == "" then "" otherwise "[" + text(tag) + "] "
     when kind == "usage"
         let cached be when contains(data["usage"], "cached") then data["usage"]["cached"] otherwise 0
@@ -92,18 +92,18 @@ export task event(sid, kind, data, tag)
 export task user(sid, content, agent, mode, model)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     give write(sid, "USER", "[" + agent + " · " + mode + " · " + model + "] " + one_line(content, MAX_LINE))
 
 export task turn_end(sid, result)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     give write(sid, "END ", text(result["steps"]) + " pasos · " + text(result["usage"]["input"] + result["usage"]["output"]) + " tokens · " + result["stopped"])
 
 export task tail(sid, n)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     try
         let lines be split(replace(read_file(path(sid)), "\r", ""), "\n")
         when length(lines) > n

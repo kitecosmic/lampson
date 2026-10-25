@@ -117,7 +117,7 @@ task load_one(d, file)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let name be slice(file, 0, length(file) - 4)
     let e be {"name": name, "file": file, "description": "", "params": [], "requires": [], "ctx": false, "spend": false, "error": nothing}
     when not matches(name, "[a-z][a-z0-9_]{0,39}")
@@ -180,7 +180,7 @@ task approved_map()
 -- herramienta puede `use "./sub/h.syn"` o `use "./otra.syn"`) y el README.md de arriba, que va al prompt; rutas
 -- relativas a la carpeta. links: links a carpetas (junction, symlink): `use "./ext/o.syn"` los atraviesa (el chequeo
 -- del motor es por el texto de la ruta) y list_dir no entra, así que lo de adentro nunca se aprobaría. list_dir los da
--- como archivo; file_info sigue el link y dice carpeta (Synsema 0.6.44 no tiene is_link). over: pasó el tope de
+-- como archivo y file_info sigue el link y dice carpeta (Synsema 0.6.44); 0.6.46 los marca con is_link. over: pasó el tope de
 -- entradas o de .syn — se corta ahí, sin recorrer un node_modules entero en cada escaneo.
 task walk(d)
     let acc be walk_into(d, "", {"files": [], "links": [], "sizes": {}, "seen": 0, "over": false})
@@ -198,6 +198,9 @@ task walk_into(d, rel, acc)
                 let p be when rel == "" then e["name"] otherwise rel + "/" + e["name"]
                 when acc["seen"] > MAX_ENTRIES or length(acc["files"]) > MAX_FILES
                     set acc["over"] to true
+                -- desde Synsema 0.6.46 list_dir dice is_link, y una junction llega como carpeta
+                otherwise when contains(e, "is_link") and e["is_link"] == true
+                    set acc["links"] to append(acc["links"], p)
                 otherwise when e["is_dir"]
                     set acc to walk_into(d, p, acc)
                 otherwise
@@ -227,9 +230,9 @@ export task approval()
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let d be dir()
     let w be walk(d)
@@ -270,9 +273,9 @@ task compute_approval(d, w, ok)
 -- aprobar lo que está ahora en la carpeta: un archivo (`estado_pedido` o `_comun.syn`) o, con "", todos → los que cambió
 export task approve(name)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let d be dir()
     let ok be approved_map()
@@ -328,9 +331,9 @@ export task scan()
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     try
         let st be approval()
@@ -352,9 +355,9 @@ export task scan_files()
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let d be dir()
     let files be []
@@ -391,9 +394,9 @@ export task summary()
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let d be dir()
     let st be {}
@@ -413,9 +416,9 @@ export task summary()
 -- el texto de un archivo de la carpeta, para revisarlo antes de aprobar (solo los que la aprobación mira)
 export task source(f)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let d be dir()
     when not contains(watched(d), f)
@@ -432,9 +435,9 @@ export task names()
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     give apply((e) => e["name"], where(scan(), (e) => e["error"] == nothing))
 
@@ -442,9 +445,9 @@ export task get(name)
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let f be where(scan(), (e) => e["name"] == name)
     give when length(f) == 0 then nothing otherwise f[0]
@@ -476,9 +479,9 @@ export task catalog(allowed_names)
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let out be []
     each e in scan()
@@ -491,9 +494,9 @@ export task instructions(tool_names)
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let mine be where(names(), (n) => contains(tool_names, n))
     when length(mine) == 0
@@ -516,9 +519,9 @@ export task call(name, args, ctx)
     require exec
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require env("LAMPSON_*")
     let e be get(name)
     when e == nothing

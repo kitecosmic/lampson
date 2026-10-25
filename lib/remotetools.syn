@@ -33,11 +33,13 @@ export task catalog(remote, allowed_names)
 
 export task call(name, args, ctx, remote)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require random
     require sign("LAMPSON_TOOLS")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when remote == nothing
         give "ERROR: no app tools in this request"
     let f be where(remote["tools"], (t) => t["name"] == name)

@@ -22,6 +22,8 @@ intent: "lampson channel plugin: Telegram bot ↔ Lampson agent"
 
 require env("PLUGIN_*")
 require net
+require net("0.0.0.0/0")
+require net("::/0")
 require time
 
 let action be env("PLUGIN_TOOL", "")

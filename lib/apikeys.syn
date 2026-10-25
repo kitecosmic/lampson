@@ -25,7 +25,7 @@ task hash_of(key)
 
 task load()
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     try
         let d be json_decode(read_file(FILE))
         when contains(d, "keys")
@@ -36,7 +36,7 @@ task load()
 
 task store(keys_list)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     write_file(FILE, json_encode({"keys": keys_list}))
 
 task public(k)
@@ -46,14 +46,14 @@ export task create(name, agents)
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     give create_with(name, agents, {})
 
 export task create_with(name, agents, opts)
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let ag be when agents == nothing or length(agents) == 0 then ["*"] otherwise agents
     let rate be when contains(opts, "rate") and opts["rate"] != nothing then floor(number(opts["rate"])) otherwise DEFAULT_RATE
     let cbs be when contains(opts, "callbacks") and opts["callbacks"] != nothing then opts["callbacks"] otherwise []
@@ -96,18 +96,18 @@ export task callback_allowed(rec, url)
 
 export task signing_secret(id)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let f be where(load(), (k) => k["id"] == id)
     give when length(f) > 0 and contains(f[0], "secret") then text(f[0]["secret"]) otherwise ""
 
 export task list()
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     give apply((k) => public(k), load())
 
 export task remove(id)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let all be load()
     let rest be where(all, (k) => k["id"] != id)
     when length(rest) == length(all)
@@ -119,7 +119,7 @@ export task remove(id)
 export task check(key)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when key == nothing
         give nothing
     let k be text(key)

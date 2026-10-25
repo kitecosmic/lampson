@@ -119,9 +119,10 @@ function paintHome() {
   const attn = $('#wsAttn'), box = $('#wsGroups');
   if (!wsData) { attn.innerHTML = ''; $('#wsTiles').innerHTML = ''; box.innerHTML = '<p class="none">el hub no responde</p>'; return; }
   const all = (wsData.workspaces || []).slice().sort((a, b) => (b.last_used || 0) - (a.last_used || 0));
-  // lo que te espera, de todos los proyectos (la búsqueda no lo esconde); el total va también en la pestaña equipos
+  // lo que te espera, de todos los proyectos (la búsqueda no lo esconde): una línea por proyecto que abre la bandeja
+  // (js/inbox.js), así no crece con cada aviso
   const waiting = all.map(w => ({ w, n: waitingIn(w) })).filter(x => x.n);
-  attn.innerHTML = waiting.length ? `<p class="ghead warn">Necesita tu atención</p>` + waiting.map(({ w, n }) => `<a class="attn" href="/equipos"><span class="ic">⚑</span><span class="tx"><b>${esc(w.name)}</b> · ${n === 1 ? 'una cosa te espera' : n + ' cosas te esperan'}</span><span class="go">responder →</span></a>`).join('') : '';
+  attn.innerHTML = waiting.length ? `<p class="ghead warn">Necesita tu atención</p>` + waiting.map(({ w, n }) => `<a class="attn" href="#inbox"><span class="ic">⚑</span><span class="tx"><b>${esc(w.name)}</b> · ${n === 1 ? 'una cosa te espera' : n + ' cosas te esperan'}</span><span class="go">responder →</span></a>`).join('') : '';
   const q = ($('#wsSearch').value || '').trim().toLowerCase();
   paintTiles(q);
   const list = q ? all.filter(w => (w.name + ' ' + w.path).toLowerCase().includes(q)) : all;

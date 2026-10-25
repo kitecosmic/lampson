@@ -156,7 +156,7 @@ task job_path(id)
 
 export task job(id)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     when not matches(id, "m[0-9a-zA-Z_-]{4,40}")
         give nothing
     try
@@ -166,16 +166,18 @@ export task job(id)
 
 export task save_job(j)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     write_file(job_path(j["job"]), json_encode(j))
 
 -- firma: con el secreto de la key que pidió la callback (apikeys, desde 2026-10-18) y si no tiene, el global de
 -- antes. X-Lampson-Key dice cuál: la app verifica con el secreto de esa key (Lampson.verifySignature del SDK)
 task post_callback(url, payload, key_id)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     let body be json_encode(payload)
     let headers be {"Content-Type": "application/json", "User-Agent": "lampson"}
     let sec be when key_id != "" then apikeys.signing_secret(key_id) otherwise ""
@@ -203,9 +205,11 @@ export task approve_queue(name, args, why)
     require time
     require random
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     -- tocar la historia compartida (merge a main desde la copia de un agente): la persona tiene 30 min, no 3
     let tmo be when contains(text(why), "shared history") then 1800 otherwise APPROVAL_TIMEOUT
     let id be approvals.open("api", permission.describe_call(name, args), why, tmo)
@@ -230,21 +234,23 @@ task user_msg(it)
 task run_batch(k, spec, items)
     require db(".lampson/teams.db")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require exec
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     require file.read("memory")
-    require file.read("memory/*")
+    require file.read("memory/**")
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
@@ -372,21 +378,23 @@ task run_batch(k, spec, items)
 export task work(spec_json)
     require db(".lampson/teams.db")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require exec
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     require file.read("memory")
-    require file.read("memory/*")
+    require file.read("memory/**")
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
@@ -408,22 +416,24 @@ export task work(spec_json)
 agent MailboxWorker
     require db(".lampson/teams.db")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require sign("LAMPSON_TOOLS")
     require exec
     require time
     require random
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require env("LAMPSON_*")
     require env("OS")
     require secret("LAMPSON_*")
@@ -437,9 +447,9 @@ export task submit(sobre, opts)
     require time
     require random
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let id be when contains(opts, "id") then opts["id"] otherwise new_id()
     let k be key_of(sobre, id)
     let sent be nothing

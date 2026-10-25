@@ -7,9 +7,9 @@ require time
 require env("LAMPSON_*")
 require env("OS")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 
 use "./lib/computer.syn" as computer
 

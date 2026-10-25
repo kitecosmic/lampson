@@ -20,6 +20,8 @@ task run_git(args, secs)
 export task check()
     require exec("git")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     let current be run_git(["rev-parse", "--short", "HEAD"], 5)
     let none be {"available": false, "behind": 0, "current": when current == nothing then "" otherwise current, "latest": "", "notes": [], "command": COMMAND}
     when current == nothing
@@ -38,6 +40,8 @@ export task check()
 export task line()
     require exec("git")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     let u be check()
     when not u["available"]
         give ""
@@ -47,6 +51,8 @@ export task line()
 export task apply()
     require exec("git")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     try
         let r be run("git", ["pull", "--ff-only", "origin", "main"], 60)
         when r["exit_code"] != 0

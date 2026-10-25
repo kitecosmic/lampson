@@ -31,13 +31,15 @@ let PROMPT_NOTE be "\n\n# Scheduled run\n- This is an UNATTENDED scheduled run (
 -- viaja por el blackboard (un tick corre las tareas en secuencia; el loop llama ask_fn con args nombrados).
 export task ask_remote(name, args, why)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require random
     require env("LAMPSON_*")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     observe "lampson:sched:current" as t
     let timeout be when t == nothing then 7200 otherwise t["approval_timeout"]
     let label be when t == nothing then "" otherwise "[" + t["name"] + "] "
@@ -48,7 +50,7 @@ export task ask_remote(name, args, why)
 task trace_only(kind, data, tag)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     observe "lampson:sched:session" as s
     when s != nothing
         trace.event(s, kind, data, tag)
@@ -57,6 +59,8 @@ task trace_only(kind, data, tag)
 -- corre la tarea; ask_fn = nothing → aprobaciones remotas (approvals.syn); on_event = nothing → solo traza
 export task run(t, ask_fn, on_event)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require random
@@ -64,15 +68,15 @@ export task run(t, ask_fn, on_event)
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let started be now()
     schedule.mark_started(t)
     when t["action"]["type"] != "prompt"
@@ -125,6 +129,8 @@ export task run(t, ask_fn, on_event)
 -- un tick del daemon: corre lo vencido (secuencial; el cron nunca solapa dos ticks)
 export task tick()
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require random
@@ -132,15 +138,15 @@ export task tick()
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     schedule.heartbeat()
     -- la junction ./workspace apunta a OTRO proyecto (el usuario abrió lampson en otra carpeta): no correr nada acá
     when not schedule.mount_ok()

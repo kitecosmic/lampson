@@ -84,6 +84,7 @@ function seatView(o, s) {
     if (tr) { const name = tr.raw ? tr.raw.split(' ')[0] : ''; return { cls: 'busy', icon: tr.cls.includes('say') ? 'say' : name ? actOf(name, salvageArgs(tr.raw.slice(name.length + 1))) : 'think', html: tr.html }; }
     return { cls: 'busy', icon: 'think', html: 'pensando…' };
   }
+  if (o.status === 'waiting' && a === o.agent) return { cls: 'asks', icon: 'say', html: '⚑ espera tu respuesta' };
   if (mine.length && mine.every((t) => t.status === 'done')) return { cls: 'done', icon: 'done', html: 'terminó lo suyo' };
   if (mine.some((t) => t.status === 'blocked')) return { cls: 'blocked', icon: 'block', html: 'trabado: espera que se destrabe algo' };
   if (mine.some((t) => t.status !== 'done')) return { cls: 'wait', icon: 'wait', html: 'esperando su próximo turno' };
@@ -100,6 +101,7 @@ function tickerLine(r, roleOf) {
   if (r.kind === 'over cap') return `${who} pasó su tope diario: ${esc(overText(r))}`;
   if (r.kind === 'continued') return `${esc(roleOf(String(r.text).split(':')[0]))} llegó al límite de pasos de un turno: sigue donde quedó`;
   if (r.kind === 'stuck') return `${esc(roleOf(String(r.text).split(':')[0]))} se cortó varias veces seguidas: le avisamos a su jefe`;
+  if (r.kind === 'error') return `${who} <span class="err">se cortó: ${esc(errHint(r.text))}</span>`;
   if (r.kind === 'tokens') return `le diste más tokens por hoy a ${esc(roleOf(String(r.text).split(':')[0]))}`;
   if (r.kind === 'handed off') return `${who} le pasó el trabajo a <b>${esc(teamName(String(r.text).split(':')[0].trim()))}</b> (${esc(r.ref)})`;
   return `${who} ${esc(KIND[r.kind] || r.kind)} ${esc(r.ref || '')}${x ? ': «' + x + '»' : ''}`;
@@ -210,7 +212,7 @@ function paintSeats(o) {
     const s = seats.find((x) => x.agent === m.agent) || { agent: m.agent, role: m.role, lead: m.agent === o.agent };
     const v = seatView(o, s), was = LIVE.view[m.agent] || {};
     el.style.setProperty('--seat', colorOf(m.agent));
-    if (was.cls !== v.cls) ['busy', 'done', 'blocked', 'wait', 'idle'].forEach((c) => el.classList.toggle(c, c === v.cls));
+    if (was.cls !== v.cls) ['busy', 'asks', 'done', 'blocked', 'wait', 'idle'].forEach((c) => el.classList.toggle(c, c === v.cls));
     const box = el.querySelector('.lvact');
     if (box && was.icon !== v.icon) { const ic = box.querySelector('.ico'); if (ic) ic.outerHTML = ICONS[v.icon]; else box.insertAdjacentHTML('afterbegin', ICONS[v.icon]); }
     if (box && was.html !== v.html) { const tx = box.querySelector('.tx'); tx.innerHTML = v.html; if (was.html !== undefined) { tx.classList.remove('enter'); void tx.offsetWidth; tx.classList.add('enter'); } }
@@ -340,7 +342,9 @@ async function renderLive(o) {
   const members = team ? team.members : seats.map((s) => ({ agent: s.agent, role: s.role, reports_to: '' }));
   LIVE.members = [...members].sort((a, b) => (b.agent === o.agent) - (a.agent === o.agent));
   $('#lvAsk').innerHTML = `<p class="${state.askOpen ? '' : 'clamp'}"><b>Qué se pidió:</b> ${esc(unescapeU(o.text))}</p>${o.text.length > 160 ? `<button class="lnk" data-ask>${state.askOpen ? 'ver menos' : 'ver todo'}</button>` : ''}
-    ${o.status === 'waiting' ? `<div class="box q"><h5>${o.pass_pending ? 'quiere pasarle el trabajo a otro equipo' : o.question_kind === 'approval' ? 'te pide aprobación' : 'te pregunta'}</h5><p>${questionHtml(o)}</p><p class="ds">Respondé arriba, en la franja de lo que te espera.</p></div>` : ''}`;
+    ${o.status === 'waiting' ? '<div class="ob-ask" id="lvWait"></div>' : ''}`;
+  // lo que te espera, en una línea: el texto completo y la respuesta, en la bandeja ⚑
+  if ($('#lvWait') && window.Inbox) Inbox.strip($('#lvWait'), decodeURIComponent(BASE.slice(3)), o.id);
   // el equipo se dibuja solo si cambió quién está o cómo se une; lo demás se pinta encima
   const edges = members.filter((m) => m.reports_to && members.some((x) => x.agent === m.reports_to)).map((m) => ({ kind: 'reports', from: m.reports_to, to: m.agent }))
     .concat(((team && team.talks) || []).map(([x, y]) => ({ kind: 'talk', from: x, to: y })));
@@ -348,7 +352,11 @@ async function renderLive(o) {
   if (LIVE.flowSig !== sig) {
     LIVE.flowSig = sig; LIVE.view = {};
     const nodes = members.map((m) => ({ id: m.agent, title: m.role || m.agent, avatar: avatarOf(m.role || m.agent), lead: m.agent === o.agent, cls: 'lv', html: '<button type="button" class="lvover" hidden></button><div class="lvact"><span class="tx"></span></div><div class="lvtasks"></div>' }));
-    LIVE.flow.render({ nodes, edges, editable: false, storeKey: 'lampson.flow:' + BASE + ':' + (o.team || 'solo-' + o.agent), onSelect: (a) => { if (a) openDrawer('seat', a); } });
+    LIVE.flow.render({ nodes, edges, editable: false, storeKey: 'lampson.flow:' + BASE + ':' + (o.team || 'solo-' + o.agent), onSelect: (a) => {
+      // quien espera tu respuesta: tocarlo abre su pregunta en la bandeja
+      const ask = a && LIVE.o.status === 'waiting' && a === LIVE.o.agent && document.querySelector('#lvWait .ob-strip');
+      if (ask) ask.click(); else if (a) openDrawer('seat', a);
+    } });
   }
   paintSeats(o);
   paintHead(o);

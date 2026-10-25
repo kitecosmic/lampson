@@ -45,7 +45,7 @@ export task bearer_of(h)
 export task authorize(h)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let rec be apikeys.check(bearer_of(h))
     when rec == nothing
         give {"ok": false, "key": nothing, "status": 401, "error": "missing or invalid API key (Authorization: Bearer lk_…; create one with `lampson key add`)", "retry_after": 0}
@@ -69,9 +69,9 @@ export task refuse(a)
 -- los agentes que esta key puede usar: [{id, description}]
 export task agents_for(rec)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let out be []
     each id in runtime.names()
         when apikeys.allows(rec, id)
@@ -92,9 +92,9 @@ task field(m, k, fallback)
 export task parse(body, rec)
     require env("LAMPSON_*")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     when body == nothing or type_of(body) != "map"
         give {"ok": false, "status": 400, "error": "body must be a JSON object"}
     let msg be text(field(body, "text", ""))
@@ -173,9 +173,9 @@ export task mode_for(spec)
 -- opts del buzón (lib/mailbox.syn) para un sobre ya validado
 export task mailbox_opts(sobre)
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let spec be runtime.get(sobre["to"])
     give {"mode": mode_for(spec), "buffer": mailbox.buffer_of(spec, mailbox.DEFAULT_BUFFER)}
 
@@ -183,12 +183,12 @@ export task mailbox_opts(sobre)
 export task create_job(id, rec, sobre, callback)
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     mailbox.save_job({"job": id, "status": "queued", "key": rec["id"], "agent": sobre["to"], "thread": get(sobre, "shown_thread", sobre["thread"]), "callback": callback, "created": format_time(now()), "result": nothing, "delivered": false, "merged_into": nothing})
 
 export task job(id)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     give mailbox.job(id)
 
 -- MCP por HTTP (lib/mcp_server.syn): un `ask` pasa por el buzón de su conversación. Entre agentes no hay espera de
@@ -197,9 +197,9 @@ export task mcp_deliver(sobre, mode)
     require time
     require random
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let spec be runtime.get(sobre["to"])
     let s be mailbox.submit(sobre, {"mode": mode, "buffer": mailbox.buffer_of(spec, false)})
     give mailbox.wait(s["id"])
@@ -210,9 +210,9 @@ export task mcp_deliver(sobre, mode)
 export task objective_view(o)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let scope be teams.obj_scope(o)
     let team_obj be field(o, "team", "") != ""
     -- el tablero y el registro de un equipo son de todos sus objetivos: acá, solo lo de este (sus tareas; el registro
@@ -244,11 +244,11 @@ export task create_objective(body, rec)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let agent be lower(text(field(body, "agent", "")))
     let tid be lower(text(field(body, "team", "")))
     when tid != ""
@@ -267,7 +267,7 @@ export task create_objective(body, rec)
         give {"ok": false, "status": 403, "error": "this API key can't use agent '" + agent + "'"}
     when trim(text(field(body, "text", ""))) == ""
         give {"ok": false, "status": 400, "error": "text is required"}
-    let opts be {"budget_tokens": field(body, "budget_tokens", 600000), "created_by": "api:" + rec["name"], "team": tid, "pass_ask": field(body, "pass_ask", false) == true}
+    let opts be {"budget_tokens": field(body, "budget_tokens", 700000), "created_by": "api:" + rec["name"], "team": tid, "pass_ask": field(body, "pass_ask", false) == true}
     when field(body, "round_seconds", nothing) != nothing
         set opts["round_seconds"] to body["round_seconds"]
     let id be teams.obj_create(agent, field(body, "text", ""), opts)
@@ -277,7 +277,7 @@ export task create_objective(body, rec)
 export task objective_for(id, rec)
     require db(".lampson/teams.db")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let o be teams.obj_get(floor(number(id)))
     when o == nothing or not apikeys.allows(rec, o["agent"])
         give nothing
@@ -289,11 +289,11 @@ export task teams_view()
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let sc be teams.scan()
     let out be []
     each t in sc["teams"]
@@ -318,7 +318,7 @@ export task approvals_view(list)
     require exec
     require time
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let out be []
     each a in list
         let x be a
@@ -335,9 +335,9 @@ export task seat_tokens(body)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let agent be lower(text(field(body, "agent", "")))
     let ts be teams.teams_of(agent)
     when length(ts) == 0
@@ -357,9 +357,9 @@ export task obj_facts(o)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     when field(o, "team", "") == ""
         give []
     give diagnose.facts(o)
@@ -367,13 +367,15 @@ export task obj_facts(o)
 export task obj_analyze(o)
     require db(".lampson/teams.db")
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require env("LAMPSON_*")
     require secret("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     when field(o, "team", "") == ""
         give {"ok": false, "error": "only team objectives"}
     let r be diagnose.analysis(o)
@@ -385,9 +387,9 @@ export task obj_act(o, body)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     when field(o, "team", "") == ""
         give {"ok": false, "error": "only team objectives"}
     let kind be text(field(body, "kind", ""))
@@ -409,9 +411,9 @@ export task delete_team(body)
     require exec
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let id be lower(text(field(body, "id", "")))
     let team be teams.get(id)
     when team == nothing
@@ -457,11 +459,11 @@ export task save_team(body)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     let t be field(body, "team", nothing)
     when t == nothing
         give {"ok": false, "error": "team is required"}

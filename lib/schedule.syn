@@ -52,7 +52,7 @@ export task tz_offset()
     require env("LAMPSON_*")
     require env("OS")
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     observe "lampson:tz" as cached
     when cached != nothing
         give cached
@@ -298,7 +298,7 @@ task save_doc(doc)
 export task all()
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let mine be memo.slug()
     let doc be load_doc()
     let out be []
@@ -350,7 +350,7 @@ task norm_path(p)
 export task get(id)
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     each t in all()
         when t["id"] == id
             give t
@@ -395,7 +395,7 @@ task check_action(action)
             give {"ok": false, "error": "action objective needs the id of a team of this project (got '" + tid + "')"}
         when not contains(action, "text") or trim(text(action["text"])) == ""
             give {"ok": false, "error": "action objective needs the text of the objective"}
-        give {"ok": true, "action": {"type": "objective", "team": tid, "text": trim(text(action["text"])), "budget_tokens": floor(number(when contains(action, "budget_tokens") and action["budget_tokens"] != nothing then action["budget_tokens"] otherwise 600000)), "round_seconds": floor(number(when contains(action, "round_seconds") and action["round_seconds"] != nothing then action["round_seconds"] otherwise 60)), "pass_ask": when contains(action, "pass_ask") then action["pass_ask"] == true otherwise false}}
+        give {"ok": true, "action": {"type": "objective", "team": tid, "text": trim(text(action["text"])), "budget_tokens": floor(number(when contains(action, "budget_tokens") and action["budget_tokens"] != nothing then action["budget_tokens"] otherwise 700000)), "round_seconds": floor(number(when contains(action, "round_seconds") and action["round_seconds"] != nothing then action["round_seconds"] otherwise 60)), "pass_ask": when contains(action, "pass_ask") then action["pass_ask"] == true otherwise false}}
     when kind == "plugin"
         let pname be plugin_of(action)
         when pname == "" or not contains(action, "tool")
@@ -429,11 +429,11 @@ export task add(spec)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     when spec == nothing or not contains(spec, "when")
         raise("a schedule needs `when` (every 6h | daily 09:00 | mon,wed 08:30)")
     let pw be parse_when(spec["when"])
@@ -491,7 +491,7 @@ task default_name(action)
 export task remove(id)
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when get(id) == nothing
         raise("no scheduled task '" + text(id) + "' in this workspace")
     let doc be load_doc()
@@ -508,7 +508,7 @@ export task set_enabled(id, on)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let t be get(id)
     when t == nothing
         raise("no scheduled task '" + text(id) + "'")
@@ -524,7 +524,7 @@ export task set_enabled(id, on)
 export task set_session(id, sid)
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let t be get(id)
     when t == nothing
         give false
@@ -536,7 +536,7 @@ export task set_session(id, sid)
 export task request_run(id)
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let t be get(id)
     when t == nothing
         raise("no scheduled task '" + text(id) + "'")
@@ -548,7 +548,7 @@ export task request_run(id)
 export task daemon_age()
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     try
         let ts be number(trim(read_file(HEARTBEAT)))
         give now() - ts
@@ -558,7 +558,7 @@ export task daemon_age()
 export task heartbeat()
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     write_file(HEARTBEAT, text(now()))
     give true
 
@@ -569,11 +569,11 @@ export task run_simple(t)
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     let a be t["action"]
     when a["type"] == "objective"
         give run_routine(t)
@@ -589,7 +589,7 @@ export task run_simple(t)
 -- marca de inicio (para que la UI muestre «corriendo» y dos ticks no la repitan)
 export task mark_started(t)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require time
     set t["running"] to true
     set t["run_now"] to false
@@ -601,12 +601,14 @@ export task mark_started(t)
 -- cierre de una corrida: historial (json + log), próxima corrida, webhook de resultado
 export task record(t, started, status, output, extra)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require exec
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let fresh be get(t["id"])
     when fresh == nothing
         set fresh to t
@@ -653,12 +655,12 @@ task one_line(s, max)
 export task due(ts)
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     give where(all(), (t) => t["enabled"] and not t["running"] and (t["run_now"] or (t["next_run"] != nothing and t["next_run"] <= ts)))
 
 export task log_tail(id, n)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when not matches(text(id), "[a-z0-9-]{1,40}")
         give ""
     try
@@ -675,9 +677,9 @@ export task run_routine(t)
     require db(".lampson/teams.db")
     require time
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     require file.read("workspace")
-    require file.read("workspace/*")
+    require file.read("workspace/**")
     let a be t["action"]
     let tm be teams.get(a["team"])
     when tm == nothing
@@ -706,7 +708,7 @@ export task summary()
     require env("LAMPSON_*")
     require env("OS")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let out be []
     each t in all()
         set out to append(out, {"id": t["id"], "name": t["name"], "when": t["when"], "plan": describe_plan(t["plan"]), "action": t["action"], "action_text": describe_action(t["action"]), "permission": t["permission"], "approval_timeout": t["approval_timeout"], "notify": t["notify"], "enabled": t["enabled"], "running": t["running"], "run_now": t["run_now"], "session": when contains(t, "session") then t["session"] otherwise nothing, "last_run": t["last_run"], "last_status": t["last_status"], "last_summary": t["last_summary"], "next_run": t["next_run"], "next_local": fmt_local(when t["enabled"] then t["next_run"] otherwise nothing), "last_local": fmt_local(t["last_run"]), "history": t["history"]})

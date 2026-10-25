@@ -395,6 +395,8 @@ export task cut_output(body, max_chars, path)
 -- SSRF por hook): un 302 hacia 127.0.0.1 o la metadata de la nube NO se sigue.
 task get_following(url, headers, t)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     let cur be url
     let hops be 0
     let done be false
@@ -454,7 +456,7 @@ task ttl()
 
 task read_cache(paths)
     require file.read(".lampson")
-    require file.read(".lampson/*")
+    require file.read(".lampson/**")
     require time
     let meta be nothing
     try
@@ -479,7 +481,7 @@ task read_cache(paths)
 
 task write_cache(paths, meta, body)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     try
         write_file(paths["body"], body)
         write_file(paths["meta"], json_encode(meta))
@@ -501,10 +503,12 @@ task clamp(v, dflt, lo, hi)
 
 export task tool(url, format, max_chars, timeout)
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require time
     require env("LAMPSON_*")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let fmt be when format == nothing then "markdown" otherwise lower(trim(text(format)))
     when fmt != "markdown" and fmt != "text" and fmt != "html"
         set fmt to "markdown"

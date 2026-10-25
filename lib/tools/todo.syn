@@ -31,7 +31,7 @@ task path(sid)
 -- lista de una sesión (sid == nothing → la actual)
 export task load(sid)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let id be when sid == nothing then current() otherwise sid
     try
         give json_decode(read_file(path(id)))
@@ -57,7 +57,7 @@ export task format(items)
 -- texto para re-inyectar tras una compaction: solo lo activo; "" si no hay nada activo
 export task active_text()
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     let active be where(load(nothing), (it) => it["status"] == "pending" or it["status"] == "in_progress")
     when length(active) == 0
         give ""
@@ -65,7 +65,7 @@ export task active_text()
 
 export task tool(items)
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     when items == nothing
         let cur be load(nothing)
         give when length(cur) == 0 then "(empty task list)" otherwise format(cur)

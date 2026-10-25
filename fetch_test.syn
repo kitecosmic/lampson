@@ -2,21 +2,24 @@
 -- Corre con `synsema run` (arranca el mock con proc_spawn). Lo lanza tests/run.ps1 / run.sh.
 -- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
 require net
+-- Synsema 0.6.46+: `require net` solo llega a direcciones públicas; LLMs locales, MCP, el hub y fetch a localhost/LAN
+require net("0.0.0.0/0")
+require net("::/0")
 require time
 require exec
 require env("LAMPSON_*")
 require env("OS")
 require secret("LAMPSON_*")
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 require file.read("skills")
-require file.read("skills/*")
+require file.read("skills/**")
 require file.read("plugins")
-require file.read("plugins/*")
+require file.read("plugins/**")
 require file("memory")
-require file("memory/*")
+require file("memory/**")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 use "./lib/tools.syn" as tools
 use "./lib/tools/url.syn" as url
 use "./lib/tools/fetch.syn" as fetch

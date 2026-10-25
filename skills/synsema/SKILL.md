@@ -39,7 +39,7 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   top-level `require` or `serve` — the ENTRY file grants capabilities.
 
 ## Capabilities (deny-by-default)
-- Declare at the top: `require net("host")`, `require file("dir")` + `require file("dir/*")`,
+- Declare at the top: `require net("host")`, `require file("dir")` + `require file("dir/**")` (scopes are globs by segment since 0.6.46: `dir/*` is one level, `dir/**` the whole tree),
   `require exec`, `require env("X_*")`, `require secret("KEY")`, `require serve(8080)`, `require time`.
 - A task's own top-of-body `require` lines are what `call_tool(task, args_map)` intersects
   (least-privilege). Plain calls run with the program's ambient capabilities.
@@ -73,7 +73,7 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   editor is `lib/line.syn`; drive a terminal UI in tests via `proc_spawn(…, {pty: true})` (`tty_test.syn`).
 - **File watch (v0.6.9+)**: `let w be watch("src", {"interval": 0.2, "ignore": ["*.tmp"]})` → events
   `{type: "create"|"modify"|"delete", path, is_dir}` via `watch_recv(w, secs)` or `select`; polling with a
-  snapshot (latency = interval), `watch_close(w)`. Gate: `file("src")` + `file("src/*")`.
+  snapshot (latency = interval), `watch_close(w)`. Gate: `file("src")` + `file("src/**")`.
 
 ## Traps verified on this machine (do not fight them)
 - Agents: an `agent` body sees ONLY its `spawn X with a = …` parameters, the builtins and the TOP-LEVEL
@@ -82,7 +82,7 @@ description: Writing, checking, running and testing Synsema (.syn) code — synt
   `stop` only inside loops. `synsema run`/`test` join agents at the end: a `while true` supervisor must be
   told to stop (bus/signal). (≤ 0.6.9 `test` had no swarm; v0.6.10+ runs agents for real in `test`.)
 - `;` between statements is a lexer error (one statement per line).
-- `file("./*")` behaves like `"*"` (whole disk). Use a named dir scope: `file("workspace/*")`.
+- `file("./*")` behaves like `"*"` (whole disk). Use a named dir scope: `file("workspace/**")`.
 - `http_post(url, MAP)` sends `text(map)`, not JSON → `http_post(url, json_encode(body), {"Content-Type": "application/json"})`.
 - Responses have `status, ok, body, headers` — no `json` key → `json_decode(body of r)`; on network error: `status 0` + `error`.
 - `localhost` resolves to IPv6; use `127.0.0.1`.

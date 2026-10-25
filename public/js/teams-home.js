@@ -21,41 +21,11 @@ function setTheme(t) { document.documentElement.setAttribute('data-theme', t); t
 setTheme(document.documentElement.getAttribute('data-theme') || 'dark');
 $('#theme').onclick = () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
 
-// ---------- lo que te espera, de todos los proyectos ----------
-function renderAttention() {
-  const box = $('#attention');
-  const keep = {}; box.querySelectorAll('input[data-k]').forEach((i) => (keep[i.dataset.k] = i.value));
-  let html = '';
-  for (const w of data) {
-    for (const o of w.objectives.filter((o) => o.status === 'waiting')) {
-      const ap = o.question_kind === 'approval'; const k = w.slug + ':' + o.id;
-      html += `<div class="ask ${ap ? 'approval' : ''}"><span class="who">${esc(short(w.slug))} · ${esc(o.agent)} ${ap ? 'pide aprobación' : 'pregunta'}</span>
-        <div class="q"><a class="ref" href="${objUrl(w, o)}">${esc(o.ref)}</a> ${esc(o.question)}</div>
-        <div class="acts">${ap ? `<input data-k="${esc(k)}" placeholder="nota (opcional)"><button class="ok" data-ok="${esc(k)}">Aprobar</button><button class="no" data-no="${esc(k)}">Denegar</button>`
-          : `<input data-k="${esc(k)}" placeholder="tu respuesta"><button class="primary" data-ans="${esc(k)}">Responder</button>`}</div></div>`;
-    }
-    for (const a of w.approvals) {
-      const who = (String(a.why || '').match(/agent (\S+)/) || [])[1] || 'un agente';
-      html += `<div class="ask approval"><span class="who">${esc(short(w.slug))} · ${esc(who)} pide aprobación</span><div class="q"><code>${esc(a.message)}</code><br><span class="ref">${esc(String(a.why || '').replace(/ · agent \S+$/, ''))}</span></div>
-        <div class="acts"><button class="ok" data-qok="${esc(w.slug)}|${esc(a.id)}">Aprobar</button><button class="no" data-qno="${esc(w.slug)}|${esc(a.id)}">Denegar</button></div></div>`;
-    }
-  }
-  box.hidden = html === '';
-  box.innerHTML = html;
-  box.querySelectorAll('input[data-k]').forEach((i) => { if (keep[i.dataset.k]) i.value = keep[i.dataset.k]; });
-  const note = (k) => (box.querySelector(`input[data-k="${k}"]`) || {}).value || '';
-  const reply = async (k, text, approved) => { const [slug, id] = k.split(':'); await post(`/w/${slug}/api/objectives/${id}/reply`, { text, approved }); refresh(); };
-  box.querySelectorAll('[data-ok]').forEach((b) => (b.onclick = () => reply(b.dataset.ok, note(b.dataset.ok), true)));
-  box.querySelectorAll('[data-no]').forEach((b) => (b.onclick = () => reply(b.dataset.no, note(b.dataset.no), false)));
-  box.querySelectorAll('[data-ans]').forEach((b) => (b.onclick = () => { const t = note(b.dataset.ans); if (t.trim()) reply(b.dataset.ans, t, false); }));
-  const q = async (v, decision) => { const [slug, id] = v.split('|'); await post(`/w/${slug}/api/approve`, { id, decision }); refresh(); };
-  box.querySelectorAll('[data-qok]').forEach((b) => (b.onclick = () => q(b.dataset.qok, true)));
-  box.querySelectorAll('[data-qno]').forEach((b) => (b.onclick = () => q(b.dataset.qno, false)));
-}
+// lo que te espera, de todos los proyectos: la bandeja ⚑ de la cabecera (js/inbox.js)
 
 // ---------- una tarjeta por equipo: quiénes son, qué están haciendo ahora y qué podés hacer vos ----------
 // Revelación progresiva: el objetivo en curso en una oración (el texto completo está en la pantalla del equipo), los
-// terminados plegados. Lo que espera una respuesta ya está arriba, en «lo que te espera».
+// terminados plegados. Lo que espera una respuesta está en la bandeja ⚑ (js/inbox.js).
 const OPEN = ['waiting', 'active', 'paused'];
 const doneOpen = new Set();
 function firstSentence(t) {
@@ -133,7 +103,7 @@ async function refresh() {
     const r = await fetch('/api/teams-home');
     if (r.status === 401) { location.href = '/login'; return; }
     data = (await r.json()).workspaces || [];
-    renderAttention(); renderProjects();
+    renderProjects();
     $('#live').classList.remove('off');
   } catch (e) { $('#live').classList.add('off'); }
 }

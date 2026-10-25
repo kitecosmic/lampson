@@ -79,10 +79,11 @@ serve on 8765
         let q be lower(last_user(msgs))
         let tools_seen be count_role(msgs, "tool")
         let n_tools_offered be when contains(b, "tools") then length(b["tools"]) otherwise 0
-        when n_tools_offered == 0
+        -- el último paso del loop manda el mismo catálogo y pide no llamar tools (lib/loop.syn): el mock obedece
+        when n_tools_offered == 0 or contains(q, "do not call tools now")
             when starts_with(q, "loop")
                 give reply_text("Hice N listados.\n]<]minimax[>[<tool_call><invoke name=\"ls\"></invoke></tool_call>")
-            give reply_text("final (no tools offered) · msgs=" + text(length(msgs)))
+            give reply_text("final (no tools offered) · msgs=" + text(length(msgs)) + " · tools=" + text(n_tools_offered))
         -- "lento": el modelo tarda 3 s y pide un bash que tarda 2 s (indicador de espera de la terminal)
         when starts_with(q, "lento")
             sleep(3)
@@ -119,10 +120,10 @@ serve on 8765
             when tools_seen == 0
                 give reply_tools([tool_call("send", {"recipient": "rt-team-b", "message": "hola B, ¿tomás el login?", "_agent": "rt-team-c"})])
             give reply_text("final avisa · tool said: " + slice(msgs[length(msgs) - 1]["content"], 0, 60))
-        when starts_with(q, "[message from rt-team-a")
+        when starts_with(q, "[message #") and contains(q, "from rt-team-a")
             when tools_seen == 0
                 give reply_tools([tool_call("board", {"action": "add", "title": "login de B", "owner": "rt-team-b"})])
-            -- en su copia de git (lib/worktree.syn): su rama; y un push, que no es suyo: no es el líder (sube a su jefe)
+            -- en su copia de git (lib/worktree.syn): su rama; y un push, que no es suyo: no es el líder (regla del asiento)
             when tools_seen == 1
                 give reply_tools([tool_call("bash", {"command": "git rev-parse --abbrev-ref HEAD"})])
             when tools_seen == 2

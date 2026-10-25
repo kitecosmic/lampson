@@ -11,7 +11,7 @@ intent: "lampson plugin: take orders against a catalog — quote, place, custome
 require env("PLUGIN_*")
 require time
 require file("workspace/.lampson/orders")
-require file("workspace/.lampson/orders/*")
+require file("workspace/.lampson/orders/**")
 
 let DIR be "workspace/.lampson/orders"
 let CATALOG be DIR + "/catalog.json"

@@ -3,19 +3,22 @@
 -- Lo lanza tests/run.ps1 / run.sh con el provider apuntando al mock (igual que agents_test / run_test).
 -- Vive en la raíz porque un módulo no puede importar ../. Sale con error si algo falla.
 require net
+-- Synsema 0.6.46+: `require net` solo llega a direcciones públicas; LLMs locales, MCP, el hub y fetch a localhost/LAN
+require net("0.0.0.0/0")
+require net("::/0")
 require time
 require exec
 require random
 require env("LAMPSON_*")
 require env("OS")
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 require file.read("plugins")
-require file.read("plugins/*")
+require file.read("plugins/**")
 require file("agents")
-require file("agents/*")
+require file("agents/**")
 require db(".lampson/teams.db")
 use "./lib/apikeys.syn" as apikeys
 use "./lib/teams.syn" as teams
@@ -385,7 +388,7 @@ while li < 180
     set longtxt to longtxt + "Línea " + text(li) + " de una respuesta muy larga que Telegram no deja mandar entera.\n"
     set li to li + 1
 let before_long be length(tg_calls("sendMessage"))
-let lp be proc_spawn("synsema", ["run", "--cap-set", "stdout,time,env=PLUGIN_*,env=LAMP_*,net", "plugins/telegram/plugin.syn"], {"env": {"PLUGIN_TOOL": "send", "PLUGIN_ARGS": json_encode({"thread": "558", "text": longtxt, "meta": {"chat_id": 558}}), "PLUGIN_TELEGRAM_TOKEN": "T1", "PLUGIN_TELEGRAM_API": "http://127.0.0.1:8767"}, "stderr": "merge", "line_mode": true})
+let lp be proc_spawn("synsema", ["run", "--cap-set", "stdout,time,env=PLUGIN_*,env=LAMP_*,net,net=0.0.0.0/0,net=::/0", "plugins/telegram/plugin.syn"], {"env": {"PLUGIN_TOOL": "send", "PLUGIN_ARGS": json_encode({"thread": "558", "text": longtxt, "meta": {"chat_id": 558}}), "PLUGIN_TELEGRAM_TOKEN": "T1", "PLUGIN_TELEGRAM_API": "http://127.0.0.1:8767"}, "stderr": "merge", "line_mode": true})
 proc_close_stdin(lp)
 let lout be ""
 let lcode be nothing
@@ -616,12 +619,12 @@ write_file(ADIR + "/rt-team-a.agent.json", json_encode({"id": "rt-team-a", "syst
 write_file(ADIR + "/rt-team-b.agent.json", json_encode({"id": "rt-team-b", "system": "Dev.", "tools": ["bash"], "permission": "strict", "buffer": false}))
 write_file(teams.DIR + "/rt-team.team.json", json_encode({"id": "rt-team", "members": [{"agent": "rt-team-a", "role": "Líder"}, {"agent": "rt-team-b", "role": "Dev", "reports_to": "rt-team-a"}, {"agent": "rt-team-c", "role": "Otro"}]}))
 let ta be post("/messages", {"to": "rt-team-a", "thread": "api:equipo", "text": "avisa-equipo"}, kb)
-check(ta["status"] == 200 and contains(ta["json"]["text"], "sent to rt-team-b"), "A usó send: " + ta["raw"])
+check(ta["status"] == 200 and contains(ta["json"]["text"], " to rt-team-b"), "A usó send: " + ta["raw"])
 -- B quiere hacer push desde su copia de git: no es el líder, así que no le abre una aprobación a la persona (cadena
 -- de mando, lib/loop.syn): el push no corre y B tiene que pedírselo a su jefe
 let bdoc_t be nothing
 let waited be 0
-while bdoc_t == nothing and waited < 30
+while bdoc_t == nothing and waited < 50
     sleep(1)
     set waited to waited + 1
     let bs be runtime.thread_session("rt-team-b", "team:rt-team")
@@ -632,10 +635,10 @@ while bdoc_t == nothing and waited < 30
 check(bdoc_t != nothing, "B tuvo su turno en la conversación team:rt-team (" + text(waited) + " s)")
 when bdoc_t != nothing
     let first_user be where(bdoc_t["messages"], (m) => m["role"] == "user")[0]["content"]
-    check(starts_with(first_user, "[message from rt-team-a (Líder)]\nhola B, ¿tomás el login?") and contains(first_user, "[team rt-team] Since your last turn:"), "con el mensaje, quién lo manda y las novedades del equipo: " + slice(first_user, 0, 120))
+    check(starts_with(first_user, "[message #") and contains(first_user, " from rt-team-a (Líder)]\nhola B, ¿tomás el login?") and contains(first_user, "[team rt-team] Since your last turn:"), "con el mensaje, quién lo manda y las novedades del equipo: " + slice(first_user, 0, 120))
     check(contains(text(bdoc_t["messages"][0]["content"]), "# Team rt-team") and contains(text(bdoc_t["messages"][0]["content"]), "You report to rt-team-a"), "su rol en el prompt")
     let fin be where(bdoc_t["messages"], (m) => m["role"] == "assistant" and contains(text(m["content"]), "final equipo-b"))[0]["content"]
-    check(contains(fin, "branch: team/rt-team/rt-team-b") and contains(fin, "push: NOT RUN: this needs approval"), "bash corre en su copia (su rama) y el push no corrió: sube a su jefe, no a la persona: " + fin)
+    check(contains(fin, "branch: team/rt-team/rt-team-b") and contains(fin, "push: NOT RUN — your command is fine"), "bash corre en su copia (su rama) y el push no corrió: es del líder, y el mensaje dice que es una regla del equipo: " + fin)
     let aq be json_decode(text(http_get("http://127.0.0.1:47990/w/test/api/approvals", {}, nothing, 10)["body"]))
     check(length(where(aq["approvals"], (ap) => contains(text(ap["why"]), "agent rt-team-b"))) == 0, "y la cola de la persona no tiene ninguna aprobación de B")
     set created to append(created, runtime.thread_session("rt-team-b", "team:rt-team"))

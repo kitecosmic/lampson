@@ -17,6 +17,9 @@
 intent: "Headless Lampson: deliver one message to an agent and print its answer (or the event stream as JSONL)"
 
 require net
+-- Synsema 0.6.46+: `require net` solo llega a direcciones públicas; LLMs locales, MCP, el hub y fetch a localhost/LAN
+require net("0.0.0.0/0")
+require net("::/0")
 require time
 require stdin
 require exec
@@ -27,17 +30,17 @@ require secret("LAMPSON_*")
 require db(".lampson/teams.db")
 require judge
 require file("workspace")
-require file("workspace/*")
+require file("workspace/**")
 require file.read("skills")
-require file.read("skills/*")
+require file.read("skills/**")
 require file.read("plugins")
-require file.read("plugins/*")
+require file.read("plugins/**")
 require file.read("agents")
-require file.read("agents/*")
+require file.read("agents/**")
 require file("memory")
-require file("memory/*")
+require file("memory/**")
 require file(".lampson")
-require file(".lampson/*")
+require file(".lampson/**")
 
 use "./lib/teams.syn" as teams
 use "./lib/runtime.syn" as runtime
@@ -365,6 +368,8 @@ agent StdioReader
 
 agent StdioJob
     require net
+    require net("0.0.0.0/0")
+    require net("::/0")
     require exec
     require time
     require random
@@ -372,17 +377,17 @@ agent StdioJob
     require env("OS")
     require secret("LAMPSON_*")
     require file("workspace")
-    require file("workspace/*")
+    require file("workspace/**")
     require file.read("skills")
-    require file.read("skills/*")
+    require file.read("skills/**")
     require file.read("plugins")
-    require file.read("plugins/*")
+    require file.read("plugins/**")
     require file.read("agents")
-    require file.read("agents/*")
+    require file.read("agents/**")
     require file("memory")
-    require file("memory/*")
+    require file("memory/**")
     require file(".lampson")
-    require file(".lampson/*")
+    require file(".lampson/**")
     lampson_stdio_job(spec_json)
 
 -- un pedido ask ya leído → {ok, job, error}: el spec del trabajo (o por qué no)

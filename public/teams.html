@@ -11,19 +11,19 @@
      tokens.css = fuentes, paleta y botones de Lampson; teams.css = esta pantalla; js/teams.js = todo el comportamiento -->
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/teams.css">
+<link rel="stylesheet" href="/css/inbox.css">
 <script>(function(){try{var t=localStorage.getItem('lampson.theme');if(t!=='light'&&t!=='dark'){t='dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body>
 <header class="tbar">
   <nav class="crumbs" id="crumbs" aria-label="dónde estás"></nav>
   <span class="spacer"></span>
+  <span class="inbox-slot" data-inbox></span>
   <a class="alllink" href="/equipos" title="equipos y objetivos de todos tus proyectos">todos los equipos</a>
   <span class="live" id="live" title="actualizado en vivo">en vivo</span>
   <button class="theme-toggle" id="theme" type="button" title="cambiar tema"></button>
 </header>
 
-<!-- lo que espera a la persona: aprobaciones y preguntas de los objetivos (siempre visible) -->
-<section class="attention" id="attention" hidden></section>
 
 <!-- una página por nivel, cada una con su URL (js/teams.js lee la ruta):
      /w/<p>/equipos                         los equipos del proyecto (y los objetivos de un agente solo)
@@ -56,6 +56,7 @@
 </main>
 
 <script src="/js/flow.js"></script>
+<script src="/js/inbox.js"></script>
 <script src="/js/teams.js"></script>
 <script src="/js/objlive.js"></script>
 <script src="/js/objdiag.js"></script>
