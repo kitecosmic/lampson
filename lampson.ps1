@@ -79,12 +79,14 @@ while ($i -lt $args.Count) {
     $i++
 }
 
-# motor mínimo: `trust proxy` en el hub y los workspaces (0.6.42+), y las herramientas de la app usan --cap-set,
-# --no-env-file y http_sign (probados en 0.6.44). Con uno viejo el
-# hub ni arranca: mejor decirlo acá que dejar un 502
-$MinEngine = [version]"0.6.44"
+# motor: el rango validado vive en synsema.json ("synsema", único lugar). Mínimo por el motor mismo; techo acá:
+# un motor más nuevo puede cambiar reglas (junctions, module paths) y romper el hub o los workspaces. Se sube
+# solo con la suite completa en verde (ver synsema.json).
+$Fixed = [version]((Get-Content (Join-Path $here "synsema.json") -Raw | ConvertFrom-Json)."synsema")
 $engine = ((& synsema --version 2>$null) -replace '^\D*', '').Trim()
-if (-not ($engine -as [version]) -or [version]$engine -lt $MinEngine) { Write-Error "lampson necesita synsema $MinEngine o más nuevo (tenés '$engine'): synsema update"; exit 1 }
+if (-not ($engine -as [version])) { Write-Error "no pude leer la versión de synsema (tenés '$engine'): sin synsema en el PATH lampson no arranca"; exit 1 }
+if ([version]$engine -lt $Fixed) { Write-Error "lampson necesita synsema $Fixed o más nuevo (tenés '$engine'): synsema update"; exit 1 }
+if ([version]$engine -gt $Fixed) { Write-Error "tenés synsema $engine y lampson está validado hasta $Fixed: npm i -g synsema@$Fixed (o actualizá lampson al release que la valida)"; exit 1 }
 
 # skills externas globales (npx skills add -g → ~/.agents/skills; Claude Code → ~/.claude/skills), montadas bajo .lampson\
 # (una capability no puede apuntar a HOME); los workspaces las ven por su junction .lampson\global

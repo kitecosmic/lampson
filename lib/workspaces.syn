@@ -177,9 +177,6 @@ task unlink(where_)
         run("rm", ["-f", where_], 10)
     give true
 
-task is_link_dir(p)
-    give file_exists(p)
-
 -- crea una carpeta de la instalación (ruta absoluta: fuera del alcance de write_file, así que por exec)
 task ensure_dir(p)
     when is_win()
@@ -191,17 +188,18 @@ task ensure_dir(p)
     give true
 
 -- un link a la instalación (lib, public, skills, plugins, memory): se crea si falta y se REHACE si quedó colgante.
--- file_exists da false tanto si no hay nada como si el link apunta a un destino que no existe (npm no trae
+-- current_target da "" tanto si no hay nada como si el link apunta a un destino que no existe (npm no trae
 -- memory/ ni plugins/; un `ln -s` a una carpeta inexistente nace roto y después memory(write) muere con
--- "No such file or directory" — visto en un VPS el 2026-09-02). Por eso: destino primero, link después, y si
--- sigue sin resolverse es un error del workspace, no un silencio.
+-- "No such file or directory" — visto en un VPS el 2026-09-02). Y con el mirror de rutas de synsema 0.6.45+
+-- (2026-11-18) un file_exists del link se juzga por su destino real — fuera de toda grant del hub — así que la
+-- existencia y el destino se preguntan por exec, nunca por file.
 export task ensure_link(where_, target)
-    when file_exists(where_)
+    when current_target(where_) != ""
         give true
     unlink(where_)
     ensure_dir(target)
     link(where_, target)
-    when not file_exists(where_)
+    when current_target(where_) == ""
         raise("could not link " + where_ + " → " + target + " (the workspace needs it: memory, plugins and the code live there)")
     give true
 
@@ -223,13 +221,15 @@ export task prepare(w)
     write_file(d + "/.lampson/.keep", "")
     when fresh
         migrate(w, d)
-    -- el proyecto (si la junction apunta a otro lado — carpeta movida — se rehace)
+    -- el proyecto (si la junction apunta a otro lado — carpeta movida — se rehace). Por exec con current_target:
+    -- el mirror de rutas de synsema 0.6.45+ (2026-11-18) juzga un file_exists del link por su destino real,
+    -- que el hub no tiene concedido. "" = no existe o quedó colgante → se crea.
     let ws_link be d + "/workspace"
-    when file_exists(ws_link)
-        let target be current_target(ws_link)
-        when target != "" and norm(target) != norm(w["path"])
-            unlink(ws_link)
-    when not file_exists(ws_link)
+    let target be current_target(ws_link)
+    when target != "" and norm(target) != norm(w["path"])
+        unlink(ws_link)
+        set target to ""
+    when target == ""
         when not link(ws_link, w["path"])
             raise("could not link " + ws_link + " → " + w["path"])
     each n in LINKS
@@ -291,6 +291,22 @@ task current_target(p)
         give trim(text(r["stdout"]))
     recover err
         give ""
+
+-- el mirror de rutas de synsema 0.6.45+ (2026-11-18) refusa leer a través de las junctions del ws (el destino
+-- real no está concedido al hub), así que el contenido del proyecto y de la instalación se mira por exec:
+-- listado y texto sin capabilities de archivo sobre el destino (el patrón de browse()).
+task sh_list(p)
+    let r be sh("cd '" + replace(p, "'", "") + "' 2>/dev/null && ls -1 2>/dev/null", 10)
+    give where(split(replace(text(r["stdout"]), "\r", ""), "\n"), (x) => trim(x) != "")
+
+task sh_read(p)
+    try
+        let r be sh("cat '" + replace(p, "'", "") + "' 2>/dev/null", 10)
+        when trim(text(r["stdout"])) == ""
+            give nothing
+        give text(r["stdout"])
+    recover err
+        give nothing
 
 -- registra (si hace falta) y prepara el workspace de una carpeta → la entrada del registro
 export task ensure(path)
@@ -802,11 +818,9 @@ export task channels_on_disk(w)
                 let found be false
                 each f in [dir_of(w["slug"]) + "/plugins/" + name + "/plugin.json", dir_of(w["slug"]) + "/workspace/.lampson/plugins/" + name + "/plugin.json"]
                     when not found
-                        try
-                            when contains(read_file(f), "\"channel\"")
-                                set found to true
-                        recover err
-                            set found to found
+                        let raw be sh_read(f)
+                        when raw != nothing and contains(raw, "\"channel\"")
+                            set found to true
                 when found
                     set n to n + 1
     recover err
@@ -843,7 +857,10 @@ export task tasks_summary(w)
 -- un plugin.json → lo que muestra /plugins (sin código ni techo: eso se revisa al encenderlo, dentro del proyecto)
 task plugin_card(dir, name, scope)
     try
-        let m be json_decode(read_file(dir + "/" + name + "/plugin.json"))
+        let raw be sh_read(dir + "/" + name + "/plugin.json")
+        when raw == nothing
+            give nothing
+        let m be json_decode(raw)
         let tools be field(m, "tools")
         give {"name": name, "scope": scope, "description": text(field_or(m, "description", "")), "kind": text(field_or(m, "kind", "")), "channel": field(m, "channel") != nothing, "tools": when tools == nothing then [] otherwise apply(tools, (t) => t["name"]), "config": field_or(m, "config", []), "example": field(m, "example") == true}
     recover err
@@ -852,11 +869,10 @@ task plugin_card(dir, name, scope)
 task plugin_scan(dir, scope)
     let out be []
     try
-        each e in list_dir(dir)
-            when e["is_dir"]
-                let card be plugin_card(dir, e["name"], scope)
-                when card != nothing
-                    set out to append(out, card)
+        each name in sh_list(dir)
+            let card be plugin_card(dir, name, scope)
+            when card != nothing
+                set out to append(out, card)
     recover err
         give out
     give out
@@ -890,18 +906,16 @@ export task resolve_slug(name)
 -- equipos con rondas en el proyecto (leídos por el link workspace/ del ws: el hub no tiene permiso sobre el proyecto)
 export task teams_on_disk(w)
     let n be 0
-    try
-        let d be dir_of(w["slug"]) + "/workspace/.lampson/teams"
-        each e in list_dir(d)
-            when ends_with(e["name"], ".team.json")
-                try
-                    let t be json_decode(read_file(d + "/" + e["name"]))
-                    when contains(t, "round_minutes") and t["round_minutes"] != nothing and number(t["round_minutes"]) > 0
-                        set n to n + 1
-                recover err
-                    set n to n
-    recover err
-        give 0
+    let d be dir_of(w["slug"]) + "/workspace/.lampson/teams"
+    each name in sh_list(d)
+        when ends_with(name, ".team.json")
+            let doc be nothing
+            try
+                set doc to json_decode(sh_read(d + "/" + name))
+            recover err
+                set doc to nothing
+            when doc != nothing and contains(doc, "round_minutes") and doc["round_minutes"] != nothing and number(doc["round_minutes"]) > 0
+                set n to n + 1
     give n
 
 task api_keys_on_disk(w)

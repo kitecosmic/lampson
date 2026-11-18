@@ -505,6 +505,23 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
 
+- **2026-11-18** — 0.5.4. Synsema 0.6.45+ juzga las rutas por donde TERMINAN (`file`, `use`, `grep`): una junction
+  debajo de una grant que lleva afuera se rechaza. Lampson vive de junctions (`.lampson/ws/<slug>/workspace` → el
+  proyecto; `lib|public|skills|plugins|memory` → la instalación; grants `.lampson/**`) y el hub venía corriendo con
+  un motor ≤0.6.44 (demostrado con npx: el mismo `ensure` pasa con 0.6.44 y muere con 0.6.46 y 0.6.64); el
+  2026-11-18 el hub se rearrancó con 0.6.64 del PATH y el flujo de workspaces murió (ensure, encender desde la web
+  y el `hub_tick` en loop, con TODOS los workspaces). No es regresión del motor sino su fix de seguridad (que el
+  código aprobado por hash sea el que corre). Adaptación: `prepare()`/`ensure_link()` no hacen `file_exists` sobre
+  junctions (existencia y destino por exec, `current_target`); los sondeos que leían el proyecto a través del link
+  (`channels_on_disk`, `plugin_card`/`plugin_scan`, `teams_on_disk` — sin esto el hub apagaba por inactividad un
+  workspace con rondas) van por exec (`sh_list`/`sh_read`); `is_link_dir` borrada (sin usos). `synsema.json` nuevo
+  con `"synsema": "0.6.64"`: piso del motor y también project root — los entries copiados al ws importan
+  `./lib/…` por la junction y el motor solo lo permite si el destino queda dentro del root (probado: sin el
+  synsema.json del padre, `module path escapes the importing directory through a link`). El gate de los launchers
+  (`lampson.ps1`/`lampson.sh`) saca el número de synsema.json: piso Y TECHO (un motor más nuevo se rechaza con el
+  comando para volver — se sube solo con la suite en verde). Dependencia npm anclada exacta (`"0.6.64"`, sin
+  caret: `^0.6.46` fue lo que trajo 0.6.64 a instalaciones nuevas). Suite completa en verde con 0.6.64.
+
 - **2026-10-25** — 0.5.3. Caché de prompt revisado contra opencode, hermes y deepseek-harness (actualizados ese día):
   el último paso de un turno (tope de pasos o presupuesto al 95 %) mandaba el catálogo vacío para que el modelo no
   llamara tools, y como los tools van primero en el prefijo eso tiraba el caché entero justo con el contexto más

@@ -71,11 +71,22 @@ while [ $# -gt 0 ]; do
     shift
 done
 export LAMPSON_HOME="$here"
-# motor mínimo: `trust proxy` (0.6.42+) y, para las herramientas de la app, --cap-set, --no-env-file y http_sign (0.6.44)
-min_engine="0.6.44"
+# motor: el rango validado vive en synsema.json ("synsema", único lugar). Mínimo por el motor mismo; techo acá:
+# un motor más nuevo puede cambiar reglas (junctions, module paths) y romper el hub o los workspaces. Se sube
+# solo con la suite completa en verde (ver synsema.json).
+fixed="$(sed -n 's/.*"synsema"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' "$here/synsema.json" 2>/dev/null | head -n1)"
 engine="$(synsema --version 2>/dev/null | sed 's/^[^0-9]*//')"
-if [ -z "$engine" ] || [ "$(printf '%s\n%s\n' "$min_engine" "$engine" | sort -V | head -n1)" != "$min_engine" ]; then
-    echo "lampson necesita synsema $min_engine o más nuevo (tenés '${engine:-ninguno}'): synsema update" >&2; exit 1
+if [ -z "$fixed" ]; then
+    echo "no pude leer el campo \"synsema\" de $here/synsema.json" >&2; exit 1
+fi
+if [ -z "$engine" ]; then
+    echo "lampson necesita synsema $fixed (no hay synsema en el PATH)" >&2; exit 1
+fi
+if [ "$(printf '%s\n%s\n' "$fixed" "$engine" | sort -V | head -n1)" != "$fixed" ]; then
+    echo "lampson necesita synsema $fixed o más nuevo (tenés '$engine'): synsema update" >&2; exit 1
+fi
+if [ "$(printf '%s\n%s\n' "$fixed" "$engine" | sort -V | tail -n1)" != "$fixed" ]; then
+    echo "tenés synsema $engine y lampson está validado hasta $fixed: npm i -g synsema@$fixed (o actualizá lampson al release que la valida)" >&2; exit 1
 fi
 # skills externas globales, montadas bajo .lampson/ (los workspaces las ven por .lampson/global)
 mkdir -p "$here/.lampson"
