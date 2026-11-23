@@ -505,6 +505,11 @@ sabemos que existe. **Documentación pública al final**, con todo probado; mien
 
 Decisiones y cambios de rumbo, lo más nuevo arriba.
 
+- **2026-11-23** — 0.5.5. v0.5.4 salió rota: en el techo del motor de lampson.ps1, `$Fixed:` dentro de un string se
+  interpola como variable con calificador de scope (como `$env:PATH`) y el `:` seguido de espacio rompe el PARSEO del
+  archivo entero (PowerShell valida la sintaxis antes de ejecutar: lampson no arrancaba con NINGÚN motor, ni siquiera
+  con el fijado). Fix: `${Fixed}:`. Se sube el pin a synsema 0.6.67: suite completa en verde y el flujo ensure/junctions
+  (que la suite NO cubre, lección de 0.5.4) verificado por fuera con `LAMPSON_CMD=ensure synsema run cli.syn`.
 - **2026-11-18** — 0.5.4. Synsema 0.6.45+ juzga las rutas por donde TERMINAN (`file`, `use`, `grep`): una junction
   debajo de una grant que lleva afuera se rechaza. Lampson vive de junctions (`.lampson/ws/<slug>/workspace` → el
   proyecto; `lib|public|skills|plugins|memory` → la instalación; grants `.lampson/**`) y el hub venía corriendo con

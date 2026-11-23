@@ -86,7 +86,7 @@ $Fixed = [version]((Get-Content (Join-Path $here "synsema.json") -Raw | ConvertF
 $engine = ((& synsema --version 2>$null) -replace '^\D*', '').Trim()
 if (-not ($engine -as [version])) { Write-Error "no pude leer la versión de synsema (tenés '$engine'): sin synsema en el PATH lampson no arranca"; exit 1 }
 if ([version]$engine -lt $Fixed) { Write-Error "lampson necesita synsema $Fixed o más nuevo (tenés '$engine'): synsema update"; exit 1 }
-if ([version]$engine -gt $Fixed) { Write-Error "tenés synsema $engine y lampson está validado hasta $Fixed: npm i -g synsema@$Fixed (o actualizá lampson al release que la valida)"; exit 1 }
+if ([version]$engine -gt $Fixed) { Write-Error "tenés synsema $engine y lampson está validado hasta ${Fixed}: npm i -g synsema@$Fixed (o actualizá lampson al release que la valida)"; exit 1 }
 
 # skills externas globales (npx skills add -g → ~/.agents/skills; Claude Code → ~/.claude/skills), montadas bajo .lampson\
 # (una capability no puede apuntar a HOME); los workspaces las ven por su junction .lampson\global
